@@ -561,6 +561,29 @@ enum mtk_ddp_io_cmd {
 	DSI_GET_CMD_MODE_LINE_TIME,
 	DSI_DUMP_LCM_INFO,
 	DSI_SET_TARGET_LINE,
+	#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+	PANEL_FAKE_FRAME,
+	GET_EXT_PARAMS_BY_MODE,
+	SET_AUTO_MODE,
+	SET_MINFPS,
+	SET_MULTITE,
+	/* add for mux switch control */
+	LCM_VSYNC_SWITCH,
+	#endif /* OPLUS_FEATURE_DISPLAY_ADFR */
+#ifdef OPLUS_FEATURE_DISPLAY_TEMP_COMPENSATION
+	OPLUS_TEMP_COMPENSATION_SET,
+#endif /* OPLUS_FEATURE_DISPLAY_TEMP_COMPENSATION */
+#ifdef OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
+	DSI_SET_DOZE,
+	LCM_HBM,
+#endif /* OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT */
+	#ifdef OPLUS_FEATURE_DISPLAY
+	DSI_READ,
+	LCM_CABC,
+	LCM_SEED,
+	PANEL_SN_SET,
+	DC_POST_ENTER,
+	#endif  /* OPLUS_FEATURE_DISPLAY */
 	DSI_READ_PANELID,
 	ODDMR_BL_CHG,
 	ODDMR_TIMING_CHG,
@@ -574,6 +597,14 @@ enum mtk_ddp_io_cmd {
 	DSI_PLL_SWITCH_REFERENCE_CNT_CTL,
 	DSI_PLL_SWITCH_REFERENCE_CNT_GET,
 	DSI_PLL_SWITCH_ON_OFF,
+#ifdef OPLUS_FEATURE_DISPLAY
+	DSI_GET_AOD_STATE,
+	DSI_SET_HPWM,
+	DSI_SET_HPWM_ELVSS,
+	DSI_SET_HPWM_FPS,
+	DSI_SET_HPWM_PLUSS_BL,
+	CONNECTOR_PANEL_SHUTDOWN,
+#endif
 };
 
 enum mtk_ddp_comp_apsrc_crtc_id {
@@ -954,6 +985,8 @@ void mt6855_mtk_sodi_config(struct drm_device *drm, enum mtk_ddp_comp_id id,
 void mt6985_mtk_sodi_apsrc_config(struct drm_crtc *crtc,
 	struct cmdq_pkt *_cmdq_handle, bool reset, bool condition_check,
 	unsigned int crtc_id, bool enable);
+
+void mtk_sodi_ddren(struct drm_crtc *crtc, struct cmdq_pkt *_cmdq_handle, bool enable);
 
 int mtk_ddp_comp_helper_get_opt(struct mtk_ddp_comp *comp,
 				enum MTK_DRM_HELPER_OPT option);

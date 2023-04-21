@@ -23,6 +23,7 @@
 #include "mtk_vcodec_util.h"
 #include "vcodec_ipi_msg.h"
 #include "mtk_vcodec_pm.h"
+#include "mtk_vcodec_dec_pm_plat.h"
 #include "vcodec_dvfs.h"
 #include "vcodec_bw.h"
 #include "mtk_dma_contig.h"
@@ -48,6 +49,8 @@
 #define V4L2_BUF_FLAG_OUTPUT_NOT_GENERATED 0x02000000
 #define MTK_INVALID_TIMESTAMP   ((u64)-1)
 #define MTK_VDEC_ALWAYS_ON_OP_RATE 135
+#define MTK_VCODEC_IPI_THREAD_PRIORITY 1
+#define MTK_VCODEC_MAX_MQ_NODE_CNT  4
 
 #define MAX_CODEC_FREQ_STEP	10
 #define MTK_VDEC_PORT_NUM	64
@@ -93,6 +96,7 @@ enum mtk_mmdvfs_type {
  * @MTK_STATE_HEADER - vdec had sps/pps header parsed or venc
  *                      had sps/pps header encoded
  * @MTK_STATE_FLUSH - vdec is flushing. Only used by decoder
+ * @MTK_STATE_STOP - vcodec instance need stop to avoid job ready
  * @MTK_STATE_ABORT - vcodec should be aborted
  */
 enum mtk_instance_state {
@@ -100,7 +104,8 @@ enum mtk_instance_state {
 	MTK_STATE_INIT = 1,
 	MTK_STATE_HEADER = 2,
 	MTK_STATE_FLUSH = 3,
-	MTK_STATE_ABORT = 4,
+	MTK_STATE_STOP = 4,
+	MTK_STATE_ABORT = 5,
 };
 
 enum mtk_codec_type {
@@ -525,6 +530,7 @@ struct vdec_set_frame_work_struct {
 struct vdec_check_alive_work_struct {
 	struct work_struct work;
 	struct mtk_vcodec_ctx *ctx;
+	struct mtk_vcodec_dev *dev;
 };
 
 /**
@@ -744,6 +750,8 @@ struct mtk_vcodec_dev {
 	spinlock_t dec_power_lock[MTK_VDEC_HW_NUM];
 	spinlock_t enc_power_lock[MTK_VENC_HW_NUM];
 	int dec_m4u_ports[NUM_MAX_VDEC_M4U_PORT];
+	atomic_t dec_clk_ref_cnt[MTK_VDEC_HW_NUM];
+	atomic_t dec_larb_ref_cnt;
 
 	unsigned long id_counter;
 
@@ -767,6 +775,9 @@ struct mtk_vcodec_dev {
 	struct semaphore dec_sem[MTK_VDEC_HW_NUM];
 	struct semaphore enc_sem[MTK_VENC_HW_NUM];
 	unsigned int dec_always_on[MTK_VDEC_HW_NUM]; // ref count
+	bool dec_is_suspend_off;
+	struct mutex dec_always_on_mutex;
+	atomic_t dec_hw_active[MTK_VDEC_HW_NUM];
 
 	struct mutex dec_dvfs_mutex;
 	struct mutex enc_dvfs_mutex;
@@ -774,6 +785,7 @@ struct mtk_vcodec_dev {
 	struct mtk_vcodec_pm pm;
 	struct notifier_block pm_notifier;
 	bool is_codec_suspending;
+	bool codec_stop_done;
 
 	int dec_cnt;
 	int enc_cnt;

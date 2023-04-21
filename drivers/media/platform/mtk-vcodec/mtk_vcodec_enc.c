@@ -48,6 +48,15 @@ inline unsigned int log2_enc(__u32 value)
 	return x;
 }
 
+void mtk_venc_do_gettimeofday(struct timespec64 *tv)
+{
+	struct timespec64 now;
+
+	ktime_get_real_ts64(&now);
+	tv->tv_sec = now.tv_sec;
+	tv->tv_nsec = now.tv_nsec; // micro sec = ((long)(now.tv_nsec)/1000);
+}
+
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
 static void set_venc_vcp_data(struct mtk_vcodec_ctx *ctx, enum vcp_reserve_mem_id_t id)
 {
@@ -2426,7 +2435,8 @@ static int mtk_venc_encode_header(void *priv)
 	dst_buf_info = container_of(dst_vb2_v4l2, struct mtk_video_enc_buf, vb);
 
 	bs_buf = &dst_buf_info->bs_buf;
-	bs_buf->va = vb2_plane_vaddr(dst_buf, 0);
+	if (mtk_v4l2_dbg_level > 0)
+		bs_buf->va = vb2_plane_vaddr(dst_buf, 0);
 	bs_buf->dma_addr = vb2_dma_contig_plane_dma_addr(dst_buf, 0);
 	bs_buf->size = (size_t)dst_buf->planes[0].length;
 	bs_buf->dmabuf = dst_buf->planes[0].dbuf;
@@ -2859,7 +2869,8 @@ static void mtk_venc_worker(struct work_struct *work)
 	pbs_buf = &dst_buf_info->bs_buf;
 	pfrm_buf = &src_buf_info->frm_buf;
 
-	pbs_buf->va = vb2_plane_vaddr(dst_buf, 0);
+	if (mtk_v4l2_dbg_level > 0)
+		pbs_buf->va = vb2_plane_vaddr(dst_buf, 0);
 	pbs_buf->dma_addr = vb2_dma_contig_plane_dma_addr(dst_buf, 0);
 	pbs_buf->size = (size_t)dst_buf->planes[0].length;
 	pbs_buf->dmabuf = dst_buf->planes[0].dbuf;
@@ -2962,7 +2973,8 @@ static void mtk_venc_worker(struct work_struct *work)
 	}
 
 	for (i = 0; i < src_buf->num_planes ; i++) {
-		pfrm_buf->fb_addr[i].va = vb2_plane_vaddr(src_buf, i) +
+		if (mtk_v4l2_dbg_level > 0)
+			pfrm_buf->fb_addr[i].va = vb2_plane_vaddr(src_buf, i) +
 			(size_t)src_buf->planes[i].data_offset;
 		pfrm_buf->fb_addr[i].dma_addr =
 			vb2_dma_contig_plane_dma_addr(src_buf, i) +
@@ -3015,11 +3027,11 @@ static void mtk_venc_worker(struct work_struct *work)
 	} else if (!ctx->async_mode)
 		mtk_enc_put_buf(ctx);
 
-	v4l2_m2m_job_finish(ctx->dev->m2m_dev_enc, ctx->m2m_ctx);
-
 	mtk_v4l2_debug(1, "<=== src_buf[%d] dst_buf[%d] venc_if_encode ret=%d Size=%u===>",
 			src_buf->index, dst_buf->index, ret,
 			enc_result.bs_size);
+
+	v4l2_m2m_job_finish(ctx->dev->m2m_dev_enc, ctx->m2m_ctx);
 
 	mutex_unlock(&ctx->worker_lock);
 }
@@ -3090,7 +3102,7 @@ void mtk_vcodec_enc_set_default_params(struct mtk_vcodec_ctx *ctx)
 	get_supported_framesizes(ctx);
 
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
-	if (mtk_vcodec_vcp & (1 << MTK_INST_ENCODER)) {
+	if (mtk_vcodec_is_vcp(MTK_INST_ENCODER)) {
 		set_venc_vcp_data(ctx, VENC_VCP_LOG_INFO_ID);
 		set_venc_vcp_data(ctx, VENC_SET_PROP_MEM_ID);
 	}

@@ -6,6 +6,14 @@
 #ifndef _MTK_CAM_RAW_DEBUG_H
 #define _MTK_CAM_RAW_DEBUG_H
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+void reset_dma_fbc(struct device *dev,
+			  void __iomem *base, void __iomem *yuvbase);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 void debug_dma_fbc(struct device *dev,
 			  void __iomem *base, void __iomem *yuvbase);
 

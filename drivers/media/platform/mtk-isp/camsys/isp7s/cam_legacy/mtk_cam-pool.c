@@ -747,12 +747,18 @@ int mtk_cam_get_internl_buf_num(int user_reserved_exp_num,
 
 	/* check exposure number */
 	exp_no = mtk_cam_scen_get_max_exp_num(scen);
-	if (user_reserved_exp_num > 1 || mtk_cam_scen_is_switchable_hdr(scen))
-		// dcif may have to double for during skip frame
-		buf_require = max(buf_require, exp_no);
+	if (user_reserved_exp_num > 1 || mtk_cam_scen_is_switchable_hdr(scen)) {
+		if (hw_mode == HW_MODE_ON_THE_FLY || hw_mode == HW_MODE_DEFAULT)
+			buf_require = 1;
+		else
+			// dcif may have to double for during skip frame
+			buf_require = max(buf_require, exp_no);
+	}
 
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	if (mtk_cam_scen_is_ext_isp(scen))
 		buf_require = max(buf_require, 2);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 	if (mtk_cam_scen_is_time_shared(scen))
 		buf_require = max(buf_require, CAM_IMG_BUF_NUM);

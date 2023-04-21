@@ -18,6 +18,12 @@
 #include "md_sys1_platform.h"
 #include "modem_secure_base.h"
 
+//#ifdef OPLUS_FEATURE_MODEM_MINIDUMP
+#include "criticallog_class.h"
+//#endif /*OPLUS_FEATURE_MODEM_MINIDUMP*/
+
+
+
 #ifdef FEATURE_SCP_CCCI_SUPPORT
 #include "scp_ipi.h"
 
@@ -552,6 +558,10 @@ static int __init ccci_scp_init(void)
 		return ret;
 	}
 	CCCI_NORMAL_LOG(-1, FSM, "ccci scp driver init end\n");
+	//#ifdef OPLUS_FEATURE_MODEM_MINIDUMP
+	criticallog_class_init();
+	oplus_criticallog_init();
+	//#endif /*OPLUS_FEATURE_MODEM_MINIDUMP*/
 	return 0;
 }
 

@@ -61,6 +61,10 @@ static int pt_strict; /* always be zero in C standard */
 static int pt_is_low(int pt_low_vol, int pt_low_bat, int pt_over_cur);
 #endif
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 /******************************************************************************
  * Flashlight operations
  *****************************************************************************/
@@ -607,6 +611,7 @@ static int pt_trigger(void)
 	return 0;
 }
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 static void pt_low_vol_callback(enum LOW_BATTERY_LEVEL_TAG level)
 {
 	if (level == LOW_BATTERY_LEVEL_0) {
@@ -633,6 +638,7 @@ static void pt_low_bat_callback(enum BATTERY_PERCENT_LEVEL_TAG level)
 		/* unlimited cpu and gpu*/
 	}
 }
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 static void pt_oc_callback(enum BATTERY_OC_LEVEL_TAG level)
 {
@@ -699,12 +705,14 @@ static long _flashlight_ioctl(
 
 	case FLASH_IOC_IS_LOW_POWER:
 		fl_arg.arg = 0;
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 #ifdef CONFIG_MTK_FLASHLIGHT_PT
 		fl_arg.arg = pt_is_low(pt_low_vol, pt_low_bat, pt_over_cur);
 		if (fl_arg.arg)
 			pr_debug("Pt status: (%d,%d,%d)\n",
 					pt_low_vol, pt_low_bat, pt_over_cur);
 #endif
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		if (copy_to_user((void __user *)arg, (void *)&fl_arg,
 					sizeof(struct flashlight_user_arg))) {
 			pr_info("Failed to copy power status to user\n");
@@ -1084,8 +1092,10 @@ static ssize_t flashlight_pt_store(struct device *dev,
 
 	/* call callback function */
 	pt_strict = strict;
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	pt_low_vol_callback(low_vol);
 	pt_low_bat_callback(low_bat);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	pt_oc_callback(over_cur);
 #endif
 
@@ -1922,10 +1932,12 @@ static int __init flashlight_init(void)
 	}
 
 #ifdef CONFIG_MTK_FLASHLIGHT_PT
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	register_low_battery_notify(
 			&pt_low_vol_callback, LOW_BATTERY_PRIO_FLASHLIGHT);
 	register_bp_thl_notify(
 			&pt_low_bat_callback, BATTERY_PERCENT_PRIO_FLASHLIGHT);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	register_battery_oc_notify(
 			&pt_oc_callback, BATTERY_OC_PRIO_FLASHLIGHT);
 #endif

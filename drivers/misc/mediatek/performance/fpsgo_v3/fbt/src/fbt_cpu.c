@@ -1158,6 +1158,8 @@ static void dep_a_except_b(
 		}
 
 		if (fl_b->pid == fl_a->pid) {
+			if (fl_b->action)
+				fl_a->action = fl_b->action;
 			if (copy_intersection_to_b)
 				*fl_b = *fl_a;
 			incr_i = incr_j = 1;
@@ -1670,8 +1672,10 @@ static void fbt_cal_min_max_cap(struct render_info *thr,
 	} else {
 		if (jerk == FPSGO_JERK_SECOND)
 			bhr_opp_local = rescue_second_copp;
-		else
+		else {
+			rescue_opp_c = clamp(rescue_opp_c, 0, nr_freq_cpu - 1);
 			bhr_opp_local = rescue_opp_c;
+		}
 		bhr_local = 0;
 	}
 
@@ -1940,6 +1944,8 @@ static void fbt_set_min_cap_locked(struct render_info *thr, int min_cap,
 			separate_aa_final) {
 			fpsgo_systrace_c_fbt_debug(fl->pid, thr->buffer_id,
 				fl->loading, "dep-loading");
+			fpsgo_systrace_c_fbt_debug(fl->pid, thr->buffer_id,
+				fl->action, "dep-action");
 		}
 
 		light_thread = fbt_is_light_loading(fl->loading, loading_th_final);
@@ -2014,7 +2020,7 @@ static void fbt_set_min_cap_locked(struct render_info *thr, int min_cap,
 									FPSGO_PREFER_M, 1);
 				else
 					fbt_set_task_policy(fl, FPSGO_TPOLICY_AFFINITY,
-									FPSGO_PREFER_M, 0);
+									FPSGO_PREFER_M, fl->action);
 				break;
 			default:
 				if (boost_LR_final && thr->hwui == RENDER_INFO_HWUI_NONE
@@ -2710,6 +2716,7 @@ static void fbt_do_sjerk(struct work_struct *work)
 	if (!pld)
 		goto EXIT;
 
+	rescue_opp_f = clamp(rescue_opp_f, 0, nr_freq_cpu - 1);
 	blc_wt = fbt_get_new_base_blc(pld, thr->boost_info.last_blc,
 		rescue_second_enhance_f, rescue_opp_f, rescue_second_copp);
 	if (separate_aa_final) {
@@ -2805,6 +2812,8 @@ static void fbt_do_jerk_locked(struct render_info *thr, struct fbt_jerk *jerk, i
 		}
 	}
 
+	rescue_opp_f = clamp(rescue_opp_f, 0, nr_freq_cpu - 1);
+	rescue_opp_c = clamp(rescue_opp_c, 0, nr_freq_cpu - 1);
 	blc_wt = fbt_get_new_base_blc(pld, blc_wt, rescue_enhance_f, rescue_opp_f, rescue_opp_c);
 	if (separate_aa_final) {
 		blc_wt_b = fbt_get_new_base_blc(pld, blc_wt_b,
@@ -3255,6 +3264,7 @@ static void fbt_do_boost(unsigned int blc_wt, int pid,
 	int cluster, i = 0;
 	int min_ceiling = 0;
 
+	bhr_opp = clamp(bhr_opp, 0, nr_freq_cpu - 1);
 	pld =
 		kcalloc(cluster_num, sizeof(struct cpu_ctrl_data),
 				GFP_KERNEL);
@@ -3652,6 +3662,8 @@ static int update_quota(struct fbt_boost_info *boost_info, int target_fps,
 	if (!gcc_fps_margin_final && target_fps == 144)
 		target_time = max(target_time, (long long)vsync_duration_us_144);
 
+	gcc_window_size = clamp(gcc_window_size, 0, 100);
+
 	s32_target_time = target_time;
 	window_cnt = target_fps * gcc_window_size;
 	do_div(window_cnt, 100);
@@ -3714,6 +3726,7 @@ static int update_quota(struct fbt_boost_info *boost_info, int target_fps,
 		boost_info->quota_cnt += 1;
 	}
 	boost_info->quota_cur_idx = new_idx;
+	boost_info->quota_cnt = clamp(boost_info->quota_cnt, 0, QUOTA_MAX_SIZE);
 
 	/* remove outlier */
 	avg = boost_info->quota / boost_info->quota_cnt;
@@ -4089,6 +4102,12 @@ static int fbt_boost_policy(
 	if (separate_aa_final) {
 		blc_wt_b = clamp(blc_wt_b, 1U, 100U);
 		blc_wt_m = clamp(blc_wt_m, 1U, 100U);
+
+        // if perf idx of middle core < big core, align back
+        if (blc_wt_b < blc_wt_m) {
+            blc_wt_b = blc_wt_m;
+            aa_b = aa_m;
+        }
 	}
 
 	if (variance_control_enable) {
@@ -4960,7 +4979,7 @@ static void fbt_frame_start(struct render_info *thr, unsigned long long ts)
 EXIT:
 	fpsgo_fbt2fstb_update_cpu_frame_info(thr->pid, thr->buffer_id,
 		thr->tgid, thr->frame_type,
-		thr->Q2Q_time, runtime,
+		thr->Q2Q_time, runtime, targettime,
 		blc_wt, limited_cap, thr->enqueue_length, thr->dequeue_length);
 }
 
@@ -5355,12 +5374,14 @@ void fpsgo_sbe2fbt_rescue(struct render_info *thr, int start, int enhance,
 		if (!floor)
 			goto leave;
 
+		rescue_opp_c = clamp(rescue_opp_c, 0, nr_freq_cpu - 1);
 		headroom = rescue_opp_c;
 		new_enhance = enhance < 0 ?  rescue_enhance_f : sbe_enhance_f;
 
 		if (thr->boost_info.cur_stage == FPSGO_JERK_SECOND)
 			headroom = rescue_second_copp;
 
+		rescue_opp_f = clamp(rescue_opp_f, 0, nr_freq_cpu - 1);
 		blc_wt = fbt_get_new_base_blc(pld, floor, new_enhance, rescue_opp_f, headroom);
 		if (separate_aa_final) {
 			blc_wt_b = fbt_get_new_base_blc(pld, floor, new_enhance,
@@ -5436,6 +5457,7 @@ void fpsgo_sbe2fbt_rescue(struct render_info *thr, int start, int enhance,
 		/* find max perf index */
 		fbt_find_max_blc(&temp_blc, &temp_blc_pid, &temp_blc_buffer_id,
 				&temp_blc_dep_num, temp_blc_dep);
+		rescue_opp_f = clamp(rescue_opp_f, 0, nr_freq_cpu - 1);
 		fbt_get_new_base_blc(pld, temp_blc, 0, rescue_opp_f, bhr_opp);
 		fbt_set_ceiling(pld, thr->pid, thr->buffer_id);
 		if (boost_ta) {

@@ -333,8 +333,12 @@ static inline bool pd_process_unexpected_alert(
 {
 #if CONFIG_USB_PD_REV30_ALERT_REMOTE
 	struct tcpc_device __maybe_unused *tcpc = pd_port->tcpc;
-
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for pd KE */
+	if (pd_event->event_type == PD_EVT_DATA_MSG &&
+#else
 	if (pd_event->event_type == PD_EVT_DATA_MSG ||
+#endif
 		pd_event->msg == PD_DATA_ALERT) {
 		PE_INFO("unexpected_alert\n");
 

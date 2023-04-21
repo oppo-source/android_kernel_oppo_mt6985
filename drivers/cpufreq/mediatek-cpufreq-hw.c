@@ -14,6 +14,9 @@
 #include <linux/of_platform.h>
 #include <linux/pm_qos.h>
 #include <linux/slab.h>
+#if IS_ENABLED(CONFIG_OPLUS_OMRG)
+#include <linux/oplus_omrg.h>
+#endif
 #include <linux/sched/clock.h>
 
 #define LUT_MAX_ENTRIES			32U
@@ -145,6 +148,10 @@ static unsigned int mtk_cpufreq_hw_fast_switch(struct cpufreq_policy *policy,
 	} else
 		writel_relaxed(index, c->reg_bases[REG_FREQ_PERF_STATE]);
 
+#if IS_ENABLED(CONFIG_OPLUS_OMRG)
+	omrg_cpufreq_check_limit(policy, policy->freq_table[index].frequency);
+#endif
+
 #if IS_ENABLED(CONFIG_MTK_IRQ_MONITOR_DEBUG)
 	ts[1] = sched_clock();
 
@@ -229,6 +236,10 @@ static int mtk_cpufreq_hw_cpu_init(struct cpufreq_policy *policy)
 static int mtk_cpufreq_hw_cpu_exit(struct cpufreq_policy *policy)
 {
 	struct cpufreq_mtk *c;
+
+#if IS_ENABLED(CONFIG_OPLUS_OMRG)
+	omrg_cpufreq_unregister(policy);
+#endif
 
 	c = mtk_freq_domain_map[policy->cpu];
 	if (!c) {

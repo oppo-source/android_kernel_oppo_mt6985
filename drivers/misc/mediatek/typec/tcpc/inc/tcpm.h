@@ -140,8 +140,16 @@ enum {
 	TCP_NOTIFY_CABLE_TYPE,
 	TCP_NOTIFY_TYPEC_OTP,
 	TCP_NOTIFY_PLUG_OUT,
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for uvlo */
 	TCP_NOTIFY_WD0_STATE,
 	TCP_NOTIFY_MISC_END = TCP_NOTIFY_WD0_STATE,
+#else
+	TCP_NOTIFY_WD0_STATE,
+	TCP_NOTIFY_CHRDET_STATE,
+	TCP_NOTIFY_BC12_COMPLETE_STATE,
+	TCP_NOTIFY_MISC_END = TCP_NOTIFY_BC12_COMPLETE_STATE,
+#endif
 };
 
 struct tcp_ny_pd_state {
@@ -322,6 +330,17 @@ struct tcp_ny_wd0_state {
 	bool wd0;
 };
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for uvlo */
+struct tcp_ny_chrdet_state {
+	bool chrdet;
+};
+
+struct tcp_ny_bc12_complete_state {
+	bool bc12_complete;
+};
+#endif
+
 struct tcp_notify {
 	union {
 		struct tcp_ny_enable_state en_state;
@@ -343,6 +362,11 @@ struct tcp_notify {
 		struct tcp_ny_cable_type cable_type;
 		struct tcp_ny_typec_otp typec_otp;
 		struct tcp_ny_wd0_state wd0_state;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for uvlo */
+		struct tcp_ny_chrdet_state chrdet_state;
+		struct tcp_ny_bc12_complete_state bc12_complete_state;
+#endif
 	};
 };
 

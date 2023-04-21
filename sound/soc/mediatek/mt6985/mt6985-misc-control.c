@@ -125,6 +125,12 @@ static int mt6985_sgen_set(struct snd_kcontrol *kcontrol,
 				   INNER_LOOP_BACK_MODE_MASK_SFT,
 				   mode_idx << INNER_LOOP_BACK_MODE_SFT);
 		regmap_write(afe->regmap, AFE_SINEGEN_CON0, 0x04ac2ac1);
+
+		regmap_update_bits(afe->regmap, ETDM_0_3_COWORK_CON3, 
+								ETDM_OUT1_USE_SGEN_MASK_SFT|ETDM_OUT0_USE_SGEN_MASK_SFT, 
+								1 << ETDM_OUT1_USE_SGEN_SFT | 1 << ETDM_OUT0_USE_SGEN_SFT);
+
+		
 	} else {
 		/* disable sgen */
 		regmap_update_bits(afe->regmap, AFE_SINEGEN_CON0,
@@ -134,6 +140,7 @@ static int mt6985_sgen_set(struct snd_kcontrol *kcontrol,
 				   INNER_LOOP_BACK_MODE_MASK_SFT,
 				   0x3f << INNER_LOOP_BACK_MODE_SFT);
 	}
+
 
 	afe_priv->sgen_mode = mode;
 	return 0;

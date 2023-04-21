@@ -285,15 +285,21 @@ static int mtk_extcon_tcpc_notifier(struct notifier_block *nb,
 	struct mtk_extcon_info *extcon =
 			container_of(nb, struct mtk_extcon_info, tcpc_nb);
 	struct device *dev = extcon->dev;
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for DX-2 charge */
 	bool vbus_on;
+#endif
 
 	switch (event) {
+#ifndef OPLUS_FEATURE_CHG_BASIC
+	/* oplus add for DX-2 charge */
 	case TCP_NOTIFY_SOURCE_VBUS:
 		dev_info(dev, "source vbus = %dmv\n",
 				 noti->vbus_state.mv);
 		vbus_on = (noti->vbus_state.mv) ? true : false;
 		mtk_usb_extcon_set_vbus(extcon, vbus_on);
 		break;
+#endif
 	case TCP_NOTIFY_TYPEC_STATE:
 		dev_info(dev, "old_state=%d, new_state=%d\n",
 				noti->typec_state.old_state,

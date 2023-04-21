@@ -153,6 +153,9 @@ enum scp_reserve_mem_id_t {
 	SENS_CUSTOM_W_MEM_ID,
 	SENS_CUSTOM_R_MEM_ID,
 	SCP_AOV_MEM_ID,
+//#ifdef OPLUS_FEATURE_SENSOR
+        SENS_FB_MEM_ID,
+//#endif
 	NUMS_MEM_ID,
 };
 
@@ -173,6 +176,12 @@ enum feature_id {
 	VOW_DUAL_MIC_BARGE_IN_FEATURE_ID = 12,
 	ULTRA_FEATURE_ID = 13,
 	NUM_FEATURE_ID = 14,
+};
+
+enum SCP_THERMAL_TYPE {
+	SCP_THERMAL_TYPE_HOT = 0,
+	SCP_THERMAL_TYPE_COLD = 1,
+	NUM_SCP_THERMAL_TYPE,
 };
 
 extern struct mtk_mbox_device scp_mboxdev;
@@ -224,6 +233,7 @@ extern void scp_wdt_reset(int cpu_id);
 
 /* APIs for get status of scp dram_region_manage */
 extern int get_scp_dram_region_manage(void);
+extern void scp_send_thermal_wq(enum SCP_THERMAL_TYPE type);
 
 #endif
 

@@ -31,8 +31,10 @@
 /* scp dvfs return status flag */
 #define SET_PLL_FAIL		(1)
 #define SET_PMIC_VOLT_FAIL	(2)
-#define SCPCTL_DEBUG_LOGIN	(0x2)
+
+/* scp wdt_reset key*/
 #define SCP_DEBUG_MAGIC_PATTERN (0x05515521)
+
 #define mt_reg_sync_writel(v, a) \
 	do {    \
 		__raw_writel((v), (void __force __iomem *)((a)));   \
@@ -173,6 +175,8 @@ struct scp_region_info_st {
 	uint32_t regdump_start;
 	uint32_t regdump_size;
 	uint32_t ap_params_start;
+	uint32_t scp_dram_region;
+	uint32_t sensor_data_addr;
 };
 
 struct scp_reg_dump_st {

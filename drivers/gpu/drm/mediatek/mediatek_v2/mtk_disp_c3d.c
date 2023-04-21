@@ -699,7 +699,7 @@ int mtk_drm_ioctl_c3d_set_lut(struct drm_device *dev, void *data,
 
 	ret = mtk_crtc_user_cmd(crtc, comp, SET_C3DLUT, data);
 
-	mtk_crtc_check_trigger(comp->mtk_crtc, true, false);
+	mtk_crtc_check_trigger(comp->mtk_crtc, true, true);
 
 	if (gSkipUpdateSram)
 		ret = -EFAULT;

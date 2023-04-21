@@ -52,6 +52,11 @@ module_param(debug_cam_ctrl, int, 0644);
 #define SENSOR_DELAY_GUARD_TIME_60FPS 16
 #define SENSOR_SET_STAGGER_DEADLINE_MS  20
 #define SENSOR_SET_STAGGER_RESERVED_MS  7
+
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 #define SENSOR_SET_EXTISP_DEADLINE_MS  18
 #define SENSOR_SET_EXTISP_RESERVED_MS  7
 
@@ -119,6 +124,18 @@ void mtk_cam_event_error(struct mtk_raw_pipeline *pipeline, char *msg)
 		memcpy(event.u.data, msg, 63);
 		event.u.data[63] = '\0';
 	}
+
+	if (pipeline)
+		v4l2_event_queue(pipeline->subdev.devnode, &event);
+	else
+		pr_info("%s: get raw_pipeline failed", __func__);
+}
+
+void mtk_cam_event_extisp_camsys_ready(struct mtk_raw_pipeline *pipeline)
+{
+	struct v4l2_event event = {
+		.type = V4L2_EVENT_EXTISP_CAMSYS_READY,
+	};
 
 	if (pipeline)
 		v4l2_event_queue(pipeline->subdev.devnode, &event);
@@ -444,7 +461,7 @@ static void mtk_cam_stream_on(struct mtk_raw_device *raw_dev,
 		for (i = 0; i < ctx->used_mraw_num; i++)
 			mtk_cam_mraw_dev_stream_on(ctx,
 				get_mraw_dev(ctx->cam, ctx->mraw_pipe[i]), 1);
-		stream_on(raw_dev, 1);
+		stream_on(ctx, raw_dev, 1);
 	}
 	spin_unlock(&ctx->streaming_lock);
 }
@@ -1665,7 +1682,8 @@ static void mtk_cam_try_set_sensor(struct mtk_cam_ctx *ctx)
 	if (ctx->used_raw_num) {
 		if (MTK_CAM_INITIAL_REQ_SYNC == 0 && sensor_seq_no_next <= 2 &&
 		    (mtk_cam_scen_is_sensor_normal(&ctx->pipe->scen_active) ||
-			 mtk_cam_scen_is_sensor_stagger(&ctx->pipe->scen_active))) {
+			 mtk_cam_scen_is_sensor_stagger(&ctx->pipe->scen_active) ||
+			 mtk_cam_scen_is_ext_isp(&ctx->pipe->scen_active))) {
 			return;
 		}
 	} else {
@@ -2053,25 +2071,17 @@ mtk_cam_read_hdr_timestamp(struct mtk_cam_ctx *ctx,
 		return;
 	}
 
-	if (mtk_cam_ctx_has_raw(ctx)) {
-		ctx->pipe->hdr_timestamp.le =
-			stream_data->hdr_timestamp_cache.le;
-		ctx->pipe->hdr_timestamp.le_mono =
-			stream_data->hdr_timestamp_cache.le_mono;
-		ctx->pipe->hdr_timestamp.ne =
-			stream_data->hdr_timestamp_cache.ne;
-		ctx->pipe->hdr_timestamp.ne_mono =
-			stream_data->hdr_timestamp_cache.ne_mono;
-		ctx->pipe->hdr_timestamp.se =
-			stream_data->hdr_timestamp_cache.se;
-		ctx->pipe->hdr_timestamp.se_mono =
-			stream_data->hdr_timestamp_cache.se_mono;
-		dev_dbg(ctx->cam->dev,
+	if (mtk_cam_ctx_has_raw(ctx) &&
+		(mtk_cam_scen_is_hdr(stream_data->feature.scen) &&
+		 !mtk_cam_scen_is_m2m(stream_data->feature.scen))) {
+		dev_info(ctx->cam->dev,
 			"[hdr timestamp to subdev pipe] req:%d le/ne/se:%lld/%lld/%lld\n",
 			stream_data->frame_seq_no,
 			stream_data->hdr_timestamp_cache.le,
 			stream_data->hdr_timestamp_cache.ne,
 			stream_data->hdr_timestamp_cache.se);
+		mtk_cam_push_hdr_tsfifo(
+			ctx->pipe, &stream_data->hdr_timestamp_cache);
 	}
 }
 
@@ -2926,10 +2936,10 @@ void mtk_cam_m2m_try_apply_cq(struct mtk_cam_ctx *ctx)
 
 		/* all (raw/sv/mraw) buffer entry should be transited */
 		/* from composed to processing */
-		if (mtk_cam_sv_apply_all_buffers(ctx) == 0)
+		if (mtk_cam_sv_apply_all_buffers(ctx, 0) == 0)
 			dev_info(raw_dev->dev, "sv apply all buffers failed");
 
-		if (mtk_cam_mraw_apply_all_buffers(ctx) == 0)
+		if (mtk_cam_mraw_apply_all_buffers(ctx, 0) == 0)
 			dev_info(raw_dev->dev, "mraw apply all buffers failed");
 
 		s_data->timestamp = ktime_get_boottime_ns();
@@ -2987,7 +2997,14 @@ static void mtk_cam_handle_m2m_frame_done(struct mtk_cam_ctx *ctx,
 	}
 
 	/* assign at SOF */
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	raw_dev->last_sof_time_ns = ktime_get_boottime_ns();
+	raw_dev->sof_count = dequeued_frame_seq_no + 1;
 	ctx->dequeued_frame_seq_no = dequeued_frame_seq_no;
+	mtk_ctx_m2m_watchdog_kick(ctx);
+#else/*OPLUS_FEATURE_CAMERA_COMMON*/
+	ctx->dequeued_frame_seq_no = dequeued_frame_seq_no;
+#endif/*OPLUS_FEATURE_CAMERA_COMMON*/
 
 	/* List state-queue status*/
 	spin_lock(&sensor_ctrl->camsys_state_lock);
@@ -3043,9 +3060,13 @@ static void mtk_cam_handle_m2m_frame_done(struct mtk_cam_ctx *ctx,
 	}
 
 	/* apply next composed buffer */
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	mtk_cam_m2m_try_apply_cq(ctx);
+#else/*OPLUS_FEATURE_CAMERA_COMMON*/
 	if (req_stream_data &&
 	    mtk_cam_scen_is_m2m(req_stream_data->feature.scen))
 		mtk_cam_m2m_try_apply_cq(ctx);
+#endif/*OPLUS_FEATURE_CAMERA_COMMON*/
 
 	if (dequeue_cnt) {
 		mutex_lock(&ctx->cam->queue_lock);
@@ -3260,12 +3281,12 @@ static void mtk_camsys_raw_frame_start(struct mtk_raw_device *raw_dev,
 	}
 
 	if (is_apply) {
-		if (mtk_cam_sv_apply_all_buffers(ctx) == 0)
+		if (mtk_cam_sv_apply_all_buffers(ctx, 0) == 0)
 			dev_info(raw_dev->dev, "sv apply all buffers failed");
 	}
 
 	if (ctx->used_mraw_num && is_apply) {
-		if (mtk_cam_mraw_apply_all_buffers(ctx) == 0)
+		if (mtk_cam_mraw_apply_all_buffers(ctx, 0) == 0)
 			dev_info(raw_dev->dev, "mraw apply all buffers failed");
 	}
 }
@@ -3354,11 +3375,11 @@ void mtk_camsys_composed_delay_enque(struct mtk_raw_device *raw_dev,
 	}
 
 	if (is_apply) {
-		if (mtk_cam_sv_apply_all_buffers(ctx) == 0)
+		if (mtk_cam_sv_apply_all_buffers(ctx, 0) == 0)
 			dev_info(raw_dev->dev, "sv apply all buffers failed");
 	}
 	if (ctx->used_mraw_num && is_apply) {
-		if (mtk_cam_mraw_apply_all_buffers(ctx) == 0)
+		if (mtk_cam_mraw_apply_all_buffers(ctx, 0) == 0)
 			dev_info(raw_dev->dev, "mraw apply all buffers failed");
 	}
 }
@@ -3559,11 +3580,11 @@ int hdr_apply_cq_at_last_sof(struct mtk_raw_device *raw_dev,
 	}
 
 	if (is_apply) {
-		if (mtk_cam_sv_apply_all_buffers(ctx) == 0)
+		if (mtk_cam_sv_apply_all_buffers(ctx, 0) == 0)
 			dev_info(raw_dev->dev, "sv apply all buffers failed");
 	}
 	if (ctx->used_mraw_num && is_apply) {
-		if (mtk_cam_mraw_apply_all_buffers(ctx) == 0)
+		if (mtk_cam_mraw_apply_all_buffers(ctx, 0) == 0)
 			dev_info(raw_dev->dev, "mraw apply all buffers failed");
 	}
 
@@ -3690,12 +3711,26 @@ int mtk_cam_hdr_last_frame_start(struct mtk_raw_device *raw_dev,
 	hdr_apply_cq_at_last_sof(raw_dev, ctx,
 		state_sensor, irq_info);
 
+	if ((irq_info->ts_ns / 1000000 - sensor_ctrl->sof_time) >
+		sensor_ctrl->timer_req_event) {
+		dev_dbg(ctx->cam->dev, "last sof over drain (SE:%llu, NE:%llu)\n",
+			irq_info->ts_ns / 1000000, sensor_ctrl->sof_time);
+		mtk_cam_submit_kwork_in_sensorctrl(
+			sensor_ctrl->sensorsetting_wq, sensor_ctrl);
+	}
+
 	return 0;
 }
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 static void mtk_cam_seamless_switch_work(struct work_struct *work)
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+static void mtk_cam_seamless_switch_work(struct kthread_work *work)
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 {
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	struct mtk_cam_req_work *req_work = (struct mtk_cam_req_work *)work;
+#endif
 	struct mtk_cam_request *req;
 	struct mtk_cam_request_stream_data *s_data;
 	struct mtk_cam_ctx *ctx;
@@ -3705,10 +3740,18 @@ static void mtk_cam_seamless_switch_work(struct work_struct *work)
 	unsigned int time_after_sof = 0;
 	int ret = 0;
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	s_data = mtk_cam_req_work_get_s_data(req_work);
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+	s_data = mtk_cam_sensor_work_to_s_data(work);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	if (!s_data) {
 		pr_info("%s mtk_cam_req_work(%p), req_stream_data(%p), dropped\n",
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 			__func__, req_work, s_data);
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+			__func__, work, s_data);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		return;
 	}
 	req = mtk_cam_s_data_get_req(s_data);
@@ -3799,14 +3842,23 @@ static void mtk_cam_seamless_switch_work(struct work_struct *work)
 static bool mtk_cam_handle_seamless_switch(struct mtk_cam_request_stream_data *s_data)
 {
 	struct mtk_cam_ctx *ctx = mtk_cam_s_data_get_ctx(s_data);
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	struct mtk_cam_device *cam = ctx->cam;
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	bool ret = false;
 
 	if (s_data->flags & MTK_CAM_REQ_S_DATA_FLAG_SENSOR_MODE_UPDATE_T1) {
 		ret = mtk_cam_hw_mode_is_dc(ctx->pipe->hw_mode) ? true : false;
 		state_transition(&s_data->state, E_STATE_OUTER, E_STATE_CAMMUX_OUTER_CFG);
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		INIT_WORK(&s_data->seninf_s_fmt_work.work, mtk_cam_seamless_switch_work);
+		atomic_set(&s_data->seninf_s_fmt_work.is_queued, 1);
 		queue_work(cam->link_change_wq, &s_data->seninf_s_fmt_work.work);
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		mtk_cam_submit_kwork(ctx->sensor_ctrl.sensorsetting_wq,
+			    &s_data->sensor_work,
+			    mtk_cam_seamless_switch_work);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	}
 
 	return ret;
@@ -3893,7 +3945,7 @@ static void mtk_camsys_raw_m2m_cq_done(struct mtk_raw_device *raw_dev,
 	struct mtk_cam_request_stream_data *req_stream_data;
 
 	if (frame_seq_no_outer == 1)
-		stream_on(raw_dev, 1);
+		stream_on(ctx, raw_dev, 1);
 
 	dev_dbg(raw_dev->dev,
 		"[M2M CQD] frame_seq_no_outer:%d composed_buffer_list.cnt:%d\n",
@@ -3983,7 +4035,7 @@ static void mtk_camsys_raw_cq_done(struct mtk_raw_device *raw_dev,
 				atomic_read(&sensor_ctrl->isp_request_seq_no)) {
 				state_transition(state_entry, E_STATE_EXTISP_CQ,
 						E_STATE_EXTISP_OUTER);
-				dev_info(raw_dev->dev, "[CQD-EXT-ISP] ctx:%d req:%d, state:0x%x\n",
+				dev_dbg(raw_dev->dev, "[CQD-EXT-ISP] ctx:%d req:%d, state:0x%x\n",
 					ctx->stream_id,
 					req_stream_data->frame_seq_no, state_entry->estate);
 			}
@@ -4118,7 +4170,7 @@ static void mtk_camsys_raw_cq_done(struct mtk_raw_device *raw_dev,
 			if (mtk_cam_scen_is_ext_isp(req_stream_data->feature.scen)) {
 				spin_lock(&ctx->streaming_lock);
 				if (ctx->streaming)
-					stream_on(raw_dev, 1);
+					stream_on(ctx, raw_dev, 1);
 				spin_unlock(&ctx->streaming_lock);
 			} else
 				mtk_cam_stream_on(raw_dev, ctx);
@@ -4445,10 +4497,10 @@ mtk_camsys_raw_change_pipeline(struct mtk_cam_ctx *ctx,
 		 buf_entry->sub_cq_desc_offset);
 	ts_ns = ktime_get_boottime_ns();
 
-	if (mtk_cam_sv_apply_all_buffers(ctx) == 0)
+	if (mtk_cam_sv_apply_all_buffers(ctx, 1) == 0)
 		dev_info(raw_dev->dev, "sv apply all buffers failed");
 
-	if (mtk_cam_mraw_apply_all_buffers(ctx) == 0)
+	if (mtk_cam_mraw_apply_all_buffers(ctx, 1) == 0)
 		dev_info(raw_dev->dev, "mraw apply all buffers failed");
 
 	mutex_unlock(&ctx->sensor_switch_op_lock);
@@ -4758,7 +4810,8 @@ void mtk_camsys_frame_done(struct mtk_cam_ctx *ctx,
 		return;
 	}
 
-	if (!(req_stream_data->flags & MTK_CAM_REQ_S_DATA_FLAG_META1_INDEPENDENT))
+	if (is_raw_subdev(pipe_id) &&
+		!(req_stream_data->flags & MTK_CAM_REQ_S_DATA_FLAG_META1_INDEPENDENT))
 		mtk_cam_read_hdr_timestamp(ctx, req_stream_data);
 
 	atomic_set(&req_stream_data->seninf_dump_state, MTK_CAM_REQ_DBGWORK_S_FINISHED);
@@ -4998,22 +5051,31 @@ static void mtk_camsys_mraw_check_frame_done(struct mtk_cam_ctx *ctx,
 #define CHECK_STATE_DEPTH 3
 	struct mtk_camsys_sensor_ctrl *sensor_ctrl = &ctx->sensor_ctrl;
 	struct mtk_camsys_ctrl_state *state_temp;
-	struct mtk_cam_request_stream_data *req_stream_data;
+	struct mtk_cam_request_stream_data *stream_data_ctx, *stream_data_pipe;
 	unsigned long flags;
 	unsigned int seqList[CHECK_STATE_DEPTH];
 	unsigned int cnt = 0;
 	int i;
+	u64 time_boot = ktime_get_boottime_ns();
+	u64 time_mono = ktime_get_ns();
 
 	if (ctx->sensor) {
 		spin_lock_irqsave(&sensor_ctrl->camsys_state_lock, flags);
 		list_for_each_entry(state_temp, &sensor_ctrl->camsys_state_list,
 						state_element) {
-			req_stream_data = mtk_cam_ctrl_state_to_req_s_data(state_temp);
-			if (req_stream_data->frame_seq_no < dequeued_frame_seq_no)
-				seqList[cnt++] = req_stream_data->frame_seq_no;
+			stream_data_ctx = mtk_cam_ctrl_state_to_req_s_data(state_temp);
+			stream_data_pipe = mtk_cam_req_get_s_data(stream_data_ctx->req,
+				mraw_dev->pipeline->id, stream_data_ctx->index);
+			/* update timestamp */
+			if (stream_data_pipe &&
+				stream_data_ctx->frame_seq_no == dequeued_frame_seq_no)
+				mtk_cam_set_timestamp(stream_data_pipe, time_boot, time_mono);
+
+			if (stream_data_ctx->frame_seq_no < dequeued_frame_seq_no)
+				seqList[cnt++] = stream_data_ctx->frame_seq_no;
 			else if (mtk_cam_mraw_is_zero_fbc_cnt(ctx, mraw_dev) &&
-				(req_stream_data->frame_seq_no == dequeued_frame_seq_no))
-				seqList[cnt++] = req_stream_data->frame_seq_no;
+				(stream_data_ctx->frame_seq_no == dequeued_frame_seq_no))
+				seqList[cnt++] = stream_data_ctx->frame_seq_no;
 
 			if (cnt == CHECK_STATE_DEPTH)
 				break;
@@ -5030,22 +5092,31 @@ static void mtk_camsys_camsv_check_frame_done(struct mtk_cam_ctx *ctx,
 #define CHECK_STATE_DEPTH 3
 	struct mtk_camsys_sensor_ctrl *sensor_ctrl = &ctx->sensor_ctrl;
 	struct mtk_camsys_ctrl_state *state_temp;
-	struct mtk_cam_request_stream_data *req_stream_data;
+	struct mtk_cam_request_stream_data *stream_data_ctx, *stream_data_pipe;
 	unsigned long flags;
 	unsigned int seqList[CHECK_STATE_DEPTH];
 	unsigned int cnt = 0, tag_idx = mtk_cam_get_sv_tag_index(ctx, pipe_id);
 	int i;
+	u64 time_boot = ktime_get_boottime_ns();
+	u64 time_mono = ktime_get_ns();
 
 	if (ctx->sensor) {
 		spin_lock_irqsave(&sensor_ctrl->camsys_state_lock, flags);
 		list_for_each_entry(state_temp, &sensor_ctrl->camsys_state_list,
 						state_element) {
-			req_stream_data = mtk_cam_ctrl_state_to_req_s_data(state_temp);
-			if (req_stream_data->frame_seq_no < dequeued_frame_seq_no)
-				seqList[cnt++] = req_stream_data->frame_seq_no;
+			stream_data_ctx = mtk_cam_ctrl_state_to_req_s_data(state_temp);
+			stream_data_pipe = mtk_cam_req_get_s_data(stream_data_ctx->req,
+				pipe_id, stream_data_ctx->index);
+			/* update timestamp */
+			if (stream_data_pipe &&
+				stream_data_ctx->frame_seq_no == dequeued_frame_seq_no)
+				mtk_cam_set_timestamp(stream_data_pipe, time_boot, time_mono);
+
+			if (stream_data_ctx->frame_seq_no < dequeued_frame_seq_no)
+				seqList[cnt++] = stream_data_ctx->frame_seq_no;
 			else if (mtk_cam_sv_is_zero_fbc_cnt(ctx, tag_idx) &&
-				(req_stream_data->frame_seq_no == dequeued_frame_seq_no))
-				seqList[cnt++] = req_stream_data->frame_seq_no;
+				(stream_data_ctx->frame_seq_no == dequeued_frame_seq_no))
+				seqList[cnt++] = stream_data_ctx->frame_seq_no;
 
 			if (cnt == CHECK_STATE_DEPTH)
 				break;
@@ -5099,7 +5170,7 @@ static void mtk_camsys_camsv_frame_start(struct mtk_camsv_device *camsv_dev,
 	/* apply next buffer */
 	if (ctx->stream_id >= MTKCAM_SUBDEV_CAMSV_START &&
 		ctx->stream_id < MTKCAM_SUBDEV_CAMSV_END) {
-		if (mtk_cam_sv_apply_all_buffers(ctx)) {
+		if (mtk_cam_sv_apply_all_buffers(ctx, 0)) {
 			/* transit state from sensor -> outer */
 			if (ctx->sensor)
 				state_transition(current_state, E_STATE_SENSOR, E_STATE_OUTER);
@@ -5167,8 +5238,9 @@ static bool mtk_camsys_is_all_cq_done(struct mtk_cam_ctx *ctx,
 		ret = true;
 	}
 	spin_unlock(&ctx->first_cq_lock);
-	dev_info(ctx->cam->dev, "[1st-CQD] all done:%d, pipe_id:%d (using raw/mraw/sv:%d/%d/%d) sv_tag_cnt:%d\n",
-		ctx->is_first_cq_done, pipe_id, ctx->used_raw_num, ctx->used_mraw_num,
+	dev_info(ctx->cam->dev, "[1st-CQD] all done:%d, pipe_id:%d, done status:0x%x, need_done:0x%x (using raw/mraw/sv:%d/%d/%d) sv_tag_cnt:%d\n",
+		ctx->is_first_cq_done, pipe_id, ctx->cq_done_status, all_subdevs,
+		ctx->used_raw_num, ctx->used_mraw_num,
 		(ctx->sv_dev) ? ctx->sv_dev->id + MTKCAM_SUBDEV_CAMSV_START : 0,
 		(ctx->sv_dev) ? ctx->sv_dev->used_tag_cnt : 0);
 EXIT:
@@ -5196,12 +5268,21 @@ static int mtk_camsys_event_handle_raw(struct mtk_cam_device *cam,
 
 	is_rgbw = mtk_cam_scen_is_rgbw_enabled(&raw_dev->pipeline->scen_active);
 
-	if (mtk_cam_scen_is_ext_isp(&ctx->pipe->scen_active)) {
+	if (mtk_cam_scen_is_ext_isp(&ctx->pipe->scen_active) &&
+		(irq_info->irq_type & (1 << CAMSYS_IRQ_FRAME_START))) {
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		dev_info(raw_dev->dev, "ts=%lu irq_type %d, req:%d/%d, cnt:%d/%d\n",
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		dev_info(raw_dev->dev, "ts=%lu irq_type %d, req:%d/%d, cnt:%d %d/%d\n",
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		irq_info->ts_ns / 1000,
 		irq_info->irq_type,
 		irq_info->frame_idx_inner,
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		irq_info->frame_idx,
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		irq_info->frame_idx, irq_info->tg_cnt,
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		raw_dev->tg_count, raw_dev->sof_count);
 	}
 
@@ -5408,8 +5489,25 @@ static int mtk_camsys_event_handle_mraw(struct mtk_cam_device *cam,
 		mtk_camsys_frame_done(ctx, seq, stream_id);
 	}
 	/* mraw's SOF */
-	if (irq_info->irq_type & (1 << CAMSYS_IRQ_FRAME_START))
+	if (irq_info->irq_type & (1 << CAMSYS_IRQ_FRAME_START)) {
+		/* extisp - sof source from PD mraw case */
+		/*update sof time for sensor*/
+		if (mtk_cam_scen_is_ext_isp(&ctx->pipe->scen_active) &&
+			ctx->sensor_ctrl.extisp_sof_source == EXTISP_SOF_SOURCE_PD_MRAW) {
+			mtk_cam_event_frame_sync(ctx->pipe, irq_info->frame_idx_inner);
+			ctx->sensor_ctrl.sof_time = irq_info->ts_ns / 1000000;
+			/* Trigger high resolution timer to try sensor setting */
+			if (ctx->sensor)
+				mtk_cam_sof_timer_setup(ctx);
+			else
+				mtk_cam_state_add_wo_sensor(ctx);
+			dev_info(mraw_dev->dev,
+				"[EXT-ISP PD sof] ts:%lu, (in/out:%d/%d)\n",
+				irq_info->ts_ns / 1000,
+				irq_info->frame_idx_inner, irq_info->frame_idx);
+		}
 		mtk_camsys_mraw_frame_start(mraw_dev, ctx, irq_info);
+	}
 	/* mraw's CQ done */
 	if (irq_info->irq_type & (1 << CAMSYS_IRQ_SETTING_DONE)) {
 		if (mtk_camsys_is_all_cq_done(ctx, stream_id)) {
@@ -5423,6 +5521,7 @@ static int mtk_camsys_event_handle_mraw(struct mtk_cam_device *cam,
 						mtk_cam_mraw_dev_stream_on(ctx,
 							get_mraw_dev(ctx->cam,
 								ctx->mraw_pipe[i]), 1);
+					mtk_cam_event_extisp_camsys_ready(ctx->pipe);
 				} else {
 					raw_dev = get_master_raw_dev(ctx->cam, ctx->pipe);
 					mtk_camsys_raw_cq_done(raw_dev, ctx, irq_info->frame_idx);
@@ -5455,12 +5554,21 @@ static int mtk_camsys_event_handle_camsv(struct mtk_cam_device *cam,
 		return -1;
 	}
 	ctx = &cam->ctxs[camsv_dev->ctx_stream_id];
-	if (ctx->pipe && (mtk_cam_scen_is_ext_isp(&ctx->pipe->scen_active))) {
+	if (ctx->pipe && (mtk_cam_scen_is_ext_isp(&ctx->pipe->scen_active)) &&
+		(irq_info->irq_type & (1 << CAMSYS_IRQ_FRAME_START))) {
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		dev_info(camsv_dev->dev, "ts=%lu irq_type %d, req:%d/%d, cnt:%d/%d, done_group:0x%x\n",
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		dev_info(camsv_dev->dev, "ts=%lu irq_type %d, req:%d/%d, cnt:%d %d/%d, done_group:0x%x\n",
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		irq_info->ts_ns / 1000,
 		irq_info->irq_type,
 		irq_info->frame_idx_inner,
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		irq_info->frame_idx,
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		irq_info->frame_idx, irq_info->tg_cnt,
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		camsv_dev->tg_cnt, camsv_dev->sof_count,
 		irq_info->done_groups);
 	}
@@ -5530,6 +5638,7 @@ static int mtk_camsys_event_handle_camsv(struct mtk_cam_device *cam,
 						mtk_cam_mraw_dev_stream_on(ctx,
 							get_mraw_dev(ctx->cam,
 								ctx->mraw_pipe[i]), 1);
+					mtk_cam_event_extisp_camsys_ready(ctx->pipe);
 				} else {
 					raw_dev = get_master_raw_dev(ctx->cam, ctx->pipe);
 					mtk_camsys_raw_cq_done(raw_dev, ctx,
@@ -5628,6 +5737,11 @@ int mtk_camsv_special_hw_scenario_handler(struct mtk_cam_device *cam,
 
 				s_data = mtk_cam_get_req_s_data(ctx, ctx->stream_id,
 					ctx->component_dequeued_frame_seq_no);
+
+				#ifdef OPLUS_FEATURE_CAMERA_COMMON
+				req = mtk_cam_s_data_get_req(s_data);
+				#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 				if (!s_data) {
 					dev_info(ctx->cam->dev, "ctx(%d): extisp:s_data(%d) is NULL\n",
 					ctx->stream_id, ctx->component_dequeued_frame_seq_no);
@@ -5665,7 +5779,8 @@ int mtk_camsv_special_hw_scenario_handler(struct mtk_cam_device *cam,
 			mtk_camsys_camsv_frame_start(camsv_dev, ctx,
 				irq_info->frame_idx_inner, tag_idx);
 #endif
-		if (!bDcif && (camsv_dev->first_tag == (1 << tag_idx)))
+		if (!bDcif && (camsv_dev->first_tag == (1 << tag_idx)) &&
+			(ctx->pure_raw_sv_tag_idx != tag_idx))
 			mtk_camsys_raw_frame_start(raw_dev, ctx, irq_info);
 	}
 	if (irq_info->irq_type & (1 << CAMSYS_IRQ_FRAME_DONE)) {
@@ -6202,6 +6317,16 @@ int mtk_camsys_ctrl_start(struct mtk_cam_ctx *ctx)
 			SENSOR_SET_EXTISP_DEADLINE_MS;
 		camsys_sensor_ctrl->timer_req_sensor =
 			SENSOR_SET_EXTISP_RESERVED_MS;
+		if (is_fsync_listening_on_pd(ctx->seninf)) {
+			camsys_sensor_ctrl->extisp_sof_source =
+				EXTISP_SOF_SOURCE_PD_MRAW;
+		} else {
+			camsys_sensor_ctrl->extisp_sof_source =
+				EXTISP_SOF_SOURCE_META;
+		}
+		dev_info(ctx->cam->dev, "[%s:extisp] ctx:%d/raw_dev:0x%x extisp_sof_source:%d\n",
+		__func__, ctx->stream_id, ctx->used_raw_dev,
+		camsys_sensor_ctrl->extisp_sof_source);
 	}
 	INIT_LIST_HEAD(&camsys_sensor_ctrl->camsys_state_list);
 	spin_lock_init(&camsys_sensor_ctrl->camsys_state_lock);
@@ -6285,6 +6410,32 @@ void mtk_cam_m2m_enter_cq_state(struct mtk_camsys_ctrl_state *ctrl_state)
 	state_transition(ctrl_state, E_STATE_SENSOR, E_STATE_CQ);
 }
 
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+static bool mtk_cam_extisp_all_sof_coming(struct mtk_cam_ctx *ctx)
+{
+	struct mtk_raw_device *raw_dev = NULL;
+	struct mtk_camsv_device *sv_dev = NULL;
+	bool res = false;
+
+	if (ctx->sv_dev)
+		sv_dev = ctx->sv_dev;
+
+	if (ctx->pipe)
+		raw_dev = get_master_raw_dev(ctx->cam, ctx->pipe);
+
+	if (raw_dev && sv_dev) {
+		if (sv_dev->tg_cnt >= raw_dev->tg_count &&
+			sv_dev->tg_cnt < raw_dev->tg_count + 5)
+			res = true;
+		else
+			dev_info(ctx->cam->dev, "[%s] tgcnt: sv/raw:%d/%d\n",
+				__func__, sv_dev->tg_cnt, raw_dev->tg_count);
+	}
+
+	return res;
+}
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 void mtk_cam_extisp_sv_frame_start(struct mtk_cam_ctx *ctx,
 				       struct mtk_camsys_irq_info *irq_info)
 {
@@ -6299,20 +6450,29 @@ void mtk_cam_extisp_sv_frame_start(struct mtk_cam_ctx *ctx,
 	unsigned int dequeued_frame_seq_no = irq_info->frame_idx_inner;
 	u64 time_boot = irq_info->ts_ns;
 	u64 time_mono = ktime_get_ns();
+	u64 time_threadedirq_delay = 0;
+	#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	int inner_key = -1;
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 	raw_dev = get_master_raw_dev(ctx->cam, ctx->pipe);
-
-	mtk_cam_event_frame_sync(ctx->pipe, dequeued_frame_seq_no);
 	/* touch watchdog */
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	mtk_ctx_watchdog_kick(ctx, raw_dev->id + MTKCAM_SUBDEV_RAW_START);
+	#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+	if (mtk_cam_extisp_all_sof_coming(ctx))
+		mtk_ctx_watchdog_kick(ctx, raw_dev->id + MTKCAM_SUBDEV_RAW_START);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	/*update sof time for sensor*/
-	sensor_ctrl->sof_time = irq_info->ts_ns / 1000000;
-	/* Trigger high resolution timer to try sensor setting */
-	if (ctx->sensor)
-		mtk_cam_sof_timer_setup(ctx);
-	else
-		mtk_cam_state_add_wo_sensor(ctx);
-
+	if (sensor_ctrl->extisp_sof_source == EXTISP_SOF_SOURCE_META) {
+		mtk_cam_event_frame_sync(ctx->pipe, dequeued_frame_seq_no);
+		sensor_ctrl->sof_time = irq_info->ts_ns / 1000000;
+		/* Trigger high resolution timer to try sensor setting */
+		if (ctx->sensor)
+			mtk_cam_sof_timer_setup(ctx);
+		else
+			mtk_cam_state_add_wo_sensor(ctx);
+	}
 	/* List state-queue status*/
 	spin_lock_irqsave(&sensor_ctrl->camsys_state_lock, flags);
 	list_for_each_entry(state_temp, &sensor_ctrl->camsys_state_list,
@@ -6332,10 +6492,37 @@ void mtk_cam_extisp_sv_frame_start(struct mtk_cam_ctx *ctx,
 				dequeued_frame_seq_no;
 			/* handle sv timestamp in stream_data */
 			mtk_cam_extisp_handle_sv_tstamp(ctx, stream_data, irq_info);
+			#ifdef OPLUS_FEATURE_CAMERA_COMMON
+			inner_key = stream_data->state.sof_cnt_key;
+			#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		}
 		/* Find to-be-set element*/
-		if (state_temp->estate == E_STATE_EXTISP_SENSOR)
-			state_sensor = state_temp;
+		if (state_temp->estate == E_STATE_EXTISP_SENSOR) {
+			if (stream_data->state.loss_raw_cq_key &&
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+				stream_data->state.loss_raw_cq_key == ctx->sv_dev->tg_cnt) {
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+				stream_data->state.loss_raw_cq_key == irq_info->tg_cnt) {
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+				dev_info(cam->dev, "[%s:pass] loss_raw_cq_key:%d, Req:%d / State:0x%x\n",
+				__func__, stream_data->state.loss_raw_cq_key,
+				stream_data->frame_seq_no, state_temp->estate);
+				stream_data->state.loss_raw_cq_key = 0;
+			#ifdef OPLUS_FEATURE_CAMERA_COMMON
+			} else if (raw_dev->vf_reset_cnt > 0) {
+				dev_info(ctx->cam->dev, "[%s] vf_reset_cnt:%d\n",
+					__func__, raw_dev->vf_reset_cnt);
+				raw_dev->vf_reset_cnt--;
+			#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+			#ifdef OPLUS_FEATURE_CAMERA_COMMON
+			} else if (inner_key == irq_info->tg_cnt && inner_key > 0) {
+				dev_info(ctx->cam->dev, "[%s] repeated key: inner:%d, tg_cnt:%d\n",
+					__func__, inner_key, irq_info->tg_cnt);
+			#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+			} else {
+				state_sensor = state_temp;
+			}
+		}
 		dev_dbg(ctx->cam->dev,
 		"[%s] STATE_CHECK [N-%d] Req:%d / State:0x%x\n",
 		__func__, stateidx, stream_data->frame_seq_no, state_temp->estate);
@@ -6345,24 +6532,44 @@ void mtk_cam_extisp_sv_frame_start(struct mtk_cam_ctx *ctx,
 	if (state_sensor) {
 		req = mtk_cam_ctrl_state_get_req(state_sensor);
 		stream_data = mtk_cam_req_get_s_data(req, ctx->stream_id, 0);
-		/* apply sv buffer */
-		if (mtk_cam_sv_apply_all_buffers(ctx) == 0) {
-			dev_info(cam->dev, "sv apply all buffers failed");
-			ret = 1;
-		}
-		/* apply mraw buffer */
-		if (mtk_cam_mraw_apply_all_buffers(ctx) == 0) {
-			dev_info(cam->dev, "mraw apply all buffers failed");
-			ret = 1;
-		}
-		if (ret == 0) {
-			state_transition(state_sensor, E_STATE_EXTISP_SENSOR,
-					 E_STATE_EXTISP_SV_OUTER);
-			stream_data->state.sof_cnt_key = ctx->sv_dev->tg_cnt;
-			dev_info(cam->dev, "[%s-ENQ] ctx:%d/req:%d s:0x%x, cnt:%d/%d, key:%d\n",
-			__func__, ctx->stream_id, stream_data->frame_seq_no,
-			state_sensor->estate, ctx->sv_dev->tg_cnt,
-			ctx->sv_dev->sof_count, stream_data->state.sof_cnt_key);
+		time_threadedirq_delay = ktime_get_boottime_ns() - irq_info->ts_ns;
+		/* check camsv cq trigger margin */
+		if (time_threadedirq_delay > ((SCQ_DEADLINE_MS - 4) * 1000000)) {
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+			dev_info(cam->dev, "%s:pass-threaded irq delay:%lld (ns), cnt:%d/%d\n",
+				__func__, time_threadedirq_delay, ctx->sv_dev->tg_cnt,
+				ctx->sv_dev->sof_count);
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+			dev_info(cam->dev, "%s:pass-threaded irq delay:%lld (ns), cnt:%d %d/%d\n",
+				__func__, time_threadedirq_delay, irq_info->tg_cnt,
+				ctx->sv_dev->tg_cnt, ctx->sv_dev->sof_count);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+		} else {
+			/* apply sv buffer */
+			if (mtk_cam_sv_apply_all_buffers(ctx, 0) == 0) {
+				dev_info(cam->dev, "sv apply all buffers failed");
+				ret = 1;
+			}
+			/* apply mraw buffer */
+			if (mtk_cam_mraw_apply_all_buffers(ctx, 0) == 0)
+				dev_info(cam->dev, "mraw apply all buffers failed");
+			if (ret == 0) {
+				state_transition(state_sensor, E_STATE_EXTISP_SENSOR,
+						 E_STATE_EXTISP_SV_OUTER);
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+				stream_data->state.sof_cnt_key = ctx->sv_dev->tg_cnt;
+				dev_info(cam->dev, "[%s-ENQ] ctx:%d/req:%d s:0x%x, cnt:%d/%d, key:%d\n",
+				__func__, ctx->stream_id, stream_data->frame_seq_no,
+				state_sensor->estate, ctx->sv_dev->tg_cnt,
+				ctx->sv_dev->sof_count, stream_data->state.sof_cnt_key);
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+				stream_data->state.sof_cnt_key = irq_info->tg_cnt;
+				dev_info(cam->dev, "[%s-ENQ] ctx:%d/req:%d s:0x%x, cnt:%d %d/%d, key:%d\n",
+				__func__, ctx->stream_id, stream_data->frame_seq_no,
+				state_sensor->estate, irq_info->tg_cnt, ctx->sv_dev->tg_cnt,
+				ctx->sv_dev->sof_count, stream_data->state.sof_cnt_key);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+			}
 		}
 	}
 	if (state_out) {
@@ -6404,8 +6611,11 @@ void mtk_cam_extisp_sv_frame_start(struct mtk_cam_ctx *ctx,
 				buf_entry->sub_cq_desc_offset);
 			state_transition(state_out, E_STATE_EXTISP_SV_OUTER,
 				 E_STATE_EXTISP_CQ);
+			#ifdef OPLUS_FEATURE_CAMERA_COMMON
+			raw_dev->vf_reset_cnt = 0;
+			#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		}
-		dev_info(cam->dev, "[%s] ctx:%d/req:%d state:0x%x\n", __func__,
+		dev_dbg(cam->dev, "[%s] ctx:%d/req:%d state:0x%x\n", __func__,
 			ctx->stream_id, stream_data->frame_seq_no, state_out->estate);
 	}
 }
@@ -6427,6 +6637,11 @@ int mtk_camsys_extisp_state_handle(struct mtk_raw_device *raw_dev,
 	u64 time_boot = ktime_get_boottime_ns();
 	u64 time_mono = ktime_get_ns();
 
+	#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	if (raw_dev->tg_count < 3)
+		dev_info(ctx->cam->dev, "[%s] FHO fbc_cnt:%d\n", __func__, irq_info->fbc_cnt);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 	/* List state-queue status*/
 	spin_lock_irqsave(&sensor_ctrl->camsys_state_lock, flags);
 	list_for_each_entry(state_temp, &sensor_ctrl->camsys_state_list,
@@ -6443,9 +6658,23 @@ int mtk_camsys_extisp_state_handle(struct mtk_raw_device *raw_dev,
 				state_out = state_temp;
 			}
 			if (state_temp->estate == E_STATE_EXTISP_SV_OUTER &&
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 				stream_data->state.sof_cnt_key == raw_dev->tg_count)
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+				stream_data->state.sof_cnt_key == irq_info->tg_cnt)
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 				if (!state_sv)
 					state_sv = state_temp;
+			if (state_temp->estate == E_STATE_EXTISP_SENSOR &&
+				stream_data->state.sof_cnt_key == 0 &&
+				stream_data->frame_seq_no == frame_inner_idx + 1 &&
+				stream_data->frame_seq_no > 1) {
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+				stream_data->state.loss_raw_cq_key = raw_dev->tg_count;
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+				stream_data->state.loss_raw_cq_key = irq_info->tg_cnt;
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+			}
 			dev_dbg(ctx->cam->dev,
 			"[%s] STATE_CHECK [N-%d] Req:%d / State:0x%x\n", __func__,
 			stateidx, stream_data->frame_seq_no, state_temp->estate);
@@ -6493,7 +6722,7 @@ int mtk_camsys_extisp_state_handle(struct mtk_raw_device *raw_dev,
 				atomic_set(&sensor_ctrl->isp_request_seq_no,
 					frame_inner_idx);
 				mtk_cam_extisp_handle_raw_tstamp(ctx, stream_data, irq_info);
-				dev_info(ctx->cam->dev,
+				dev_dbg(ctx->cam->dev,
 					"[%s] frame_seq_no:%d, OUTER->INNER state:0x%x\n",
 					__func__, stream_data->frame_seq_no, state_out->estate);
 			}
@@ -6599,7 +6828,12 @@ void mtk_camsys_extisp_raw_frame_start(struct mtk_raw_device *raw_dev,
 	int dequeued_frame_seq_no = irq_info->frame_idx_inner;
 
 	/*touch watchdog*/
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	mtk_ctx_watchdog_kick(ctx, raw_dev->id + MTKCAM_SUBDEV_RAW_START);
+	#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+	if (mtk_cam_extisp_all_sof_coming(ctx))
+		mtk_ctx_watchdog_kick(ctx, raw_dev->id + MTKCAM_SUBDEV_RAW_START);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	/* inner register dequeue number */
 	if (!(mtk_cam_ctx_has_raw(ctx) && mtk_cam_scen_is_sensor_stagger(&ctx->pipe->scen_active)))
 		ctx->dequeued_frame_seq_no = dequeued_frame_seq_no;
@@ -6662,12 +6896,19 @@ void mtk_camsys_extisp_raw_frame_start(struct mtk_raw_device *raw_dev,
 
 		/* req_stream_data of req_cq*/
 		req_stream_data = mtk_cam_ctrl_state_to_req_s_data(current_state);
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		dev_info(raw_dev->dev,
-		"SOF[ctx:%d-#%d], CQ-%d is update, composed:%d, cq_addr:0x%x, cnt:%d/%d, key:%d\n",
+		"SOF[ctx:%d-#%d], CQ-%d updated (buf:%d) composed:%d, cq_addr:0x%x, cnt:%d/%d, key:%d\n",
 		ctx->stream_id, dequeued_frame_seq_no, req_stream_data->frame_seq_no,
-		ctx->composed_frame_seq_no, base_addr,
+		buf_entry->s_data->frame_seq_no, ctx->composed_frame_seq_no, base_addr,
 		raw_dev->tg_count, raw_dev->sof_count, req_stream_data->state.sof_cnt_key);
-
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		dev_info(raw_dev->dev,
+		"SOF[ctx:%d-#%d], CQ-%d updated (buf:%d) composed:%d, cq_addr:0x%x, cnt:%d %d/%d, key:%d\n",
+		ctx->stream_id, dequeued_frame_seq_no, req_stream_data->frame_seq_no,
+		buf_entry->s_data->frame_seq_no, ctx->composed_frame_seq_no, base_addr, irq_info->tg_cnt,
+		raw_dev->tg_count, raw_dev->sof_count, req_stream_data->state.sof_cnt_key);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	}
 }
 
@@ -6686,8 +6927,15 @@ int mtk_cam_extisp_prepare_meta(struct mtk_cam_ctx *ctx,
 			img_fmt = &ctx->pipe->vdev_nodes[
 				MTK_RAW_META_SV_OUT_0 - MTK_RAW_SINK_NUM]
 				.active_fmt;
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 			img_fmt->fmt.pix_mp.width = result.exp_hsize;
 			img_fmt->fmt.pix_mp.height = result.exp_vsize;
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+			if (result.exp_hsize != 0 && result.exp_vsize != 0) {
+				img_fmt->fmt.pix_mp.width = result.exp_hsize;
+				img_fmt->fmt.pix_mp.height = result.exp_vsize;
+			}
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 			dev_info(ctx->cam->dev, "[%s] vdev_nodes:%d, w/h/size:%d/%d/%d\n",
 				__func__, MTK_RAW_META_SV_OUT_0 - MTK_RAW_SINK_NUM,
 				img_fmt->fmt.pix_mp.width,
@@ -6758,6 +7006,58 @@ void mtk_cam_extisp_handle_raw_tstamp(struct mtk_cam_ctx *ctx,
 		stream_data->preisp_meta_ts[1],
 		stream_data->preisp_meta_ts[2]);
 }
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+static void mtk_cam_extisp_vf_reset_correct(struct mtk_cam_ctx *ctx,
+	struct mtk_raw_device *raw_dev)
+{
+	struct mtk_cam_working_buf_entry *buf_entry;
+	unsigned int fbc_fho_ctl;
+	int fbc_cnt;
+
+	spin_lock(&ctx->composed_buffer_list.lock);
+	if (list_empty(&ctx->composed_buffer_list.list)) {
+		dev_info(ctx->cam->dev,
+			"SOF_INT_ST, no buffer update, composed_no:%d\n",
+			ctx->composed_frame_seq_no);
+		spin_unlock(&ctx->composed_buffer_list.lock);
+		return;
+	}
+	buf_entry = list_first_entry(&ctx->composed_buffer_list.list,
+				     struct mtk_cam_working_buf_entry,
+				     list_entry);
+	if (buf_entry->s_data->state.sof_cnt_key > 0) {
+		list_del(&buf_entry->list_entry);
+		ctx->composed_buffer_list.cnt--;
+		spin_unlock(&ctx->composed_buffer_list.lock);
+		spin_lock(&ctx->processing_buffer_list.lock);
+		list_add_tail(&buf_entry->list_entry,
+			      &ctx->processing_buffer_list.list);
+		ctx->processing_buffer_list.cnt++;
+		spin_unlock(&ctx->processing_buffer_list.lock);
+		dev_info(ctx->cam->dev,
+		"[%s] CQ buffer:%d clist->plist (key:%d, state:0x%x)\n",
+		__func__, buf_entry->s_data->frame_seq_no,
+		buf_entry->s_data->state.sof_cnt_key, buf_entry->s_data->state.estate);
+	} else {
+		spin_unlock(&ctx->composed_buffer_list.lock);
+	}
+	fbc_fho_ctl =
+		readl_relaxed(REG_FBC_CTL2(raw_dev->base + FBC_R1A_BASE, 1));
+	fbc_cnt = ((fbc_fho_ctl & CNT_BIT_MASK) >> 16) - 1;
+
+	raw_dev->vf_reset_cnt = fbc_cnt >= 0 ? fbc_cnt : 0;
+
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
+	dev_info(raw_dev->dev, "[%s] vf_reset_cnt:%d",
+		__func__, raw_dev->vf_reset_cnt);
+	#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+	dev_info(raw_dev->dev, "[%s] vf_reset_cnt:%d, fho_fbc_ctrl2:0x%x",
+			__func__, raw_dev->vf_reset_cnt, fbc_fho_ctl);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+}
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 void mtk_cam_extisp_vf_reset(struct mtk_raw_pipeline *pipe)
 {
 	struct mtk_raw_device *raw_dev = NULL;
@@ -6774,6 +7074,9 @@ void mtk_cam_extisp_vf_reset(struct mtk_raw_pipeline *pipe)
 	if (raw_dev) {
 		ctx = mtk_cam_find_ctx(raw_dev->cam, &pipe->subdev.entity);
 		if (ctx) {
+			#ifdef OPLUS_FEATURE_CAMERA_COMMON
+			mtk_cam_extisp_vf_reset_correct(ctx, raw_dev);
+			#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 			cam = ctx->cam;
 			mtk_cam_raw_vf_reset(ctx, raw_dev);
 			raw_dev->sof_count = 0;

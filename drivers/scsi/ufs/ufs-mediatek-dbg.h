@@ -11,6 +11,12 @@
 #include <linux/device.h>
 #include <linux/seq_file.h>
 #include <linux/types.h>
+//bsp.storage.ufs 2021.10.14 add for /proc/devinfo/ufs
+#define OPLUS_DEVINFO_UFS
+
+#ifdef OPLUS_DEVINFO_UFS
+#include <soc/oplus/device_info.h>
+#endif
 
 /*
  * snprintf may return a value of size or "more" to indicate
@@ -153,11 +159,6 @@ struct cmd_hist_struct {
 		struct clk_scaling_event_struct clk_scaling;
 		struct ufs_pm_struct pm;
 	} cmd;
-};
-
-struct ufs_mtk_clk_scaling_attr {
-	struct device_attribute downdifferential;
-	struct device_attribute upthreshold;
 };
 
 int ufs_mtk_dbg_register(struct ufs_hba *hba);

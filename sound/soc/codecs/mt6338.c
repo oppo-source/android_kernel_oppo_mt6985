@@ -32,6 +32,10 @@
 #include <linux/mfd/mt6685-audclk.h>
 #endif
 
+#ifndef OPLUS_ARCH_EXTENDS
+#define OPLUS_ARCH_EXTENDS
+#endif
+
 #define MTKAIFV4_SUPPORT
 #define MAX_DEBUG_WRITE_INPUT 256
 #define CODEC_SYS_DEBUG_SIZE (1024 * 48) // 32K
@@ -3834,9 +3838,15 @@ static int mt_mic_bias_0_event(struct snd_soc_dapm_widget *w,
 		}
 
 		/* MISBIAS0 = 1P9V */
+#ifdef OPLUS_ARCH_EXTENDS
+		regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON59,
+			RG_AUDMICBIAS0VREF_MASK_SFT,
+			MIC_BIAS_2P7 << RG_AUDMICBIAS0VREF_SFT);
+#else
 		regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON59,
 			RG_AUDMICBIAS0VREF_MASK_SFT,
 			MIC_BIAS_1P9 << RG_AUDMICBIAS0VREF_SFT);
+#endif
 		if (priv->vow_setup) {
 			regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON59,
 				RG_AUDMICBIAS0LOWPEN_MASK_SFT,
@@ -3891,6 +3901,11 @@ static int mt_mic_bias_1_event(struct snd_soc_dapm_widget *w,
 		regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON62,
 			RG_AUDMICBIAS1DCSW1PEN_MASK_SFT,
 			0x0 << RG_AUDMICBIAS1DCSW1PEN_SFT);
+#ifdef OPLUS_ARCH_EXTENDS
+		regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON61,
+			RG_AUDMICBIAS1VREF_MASK_SFT,
+			MIC_BIAS_2P7 << RG_AUDMICBIAS1VREF_SFT);
+#endif
 		if (priv->vow_setup) {
 			regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON61,
 				RG_AUDMICBIAS1LOWPEN_MASK_SFT,
@@ -3951,9 +3966,15 @@ static int mt_mic_bias_2_event(struct snd_soc_dapm_widget *w,
 		}
 
 		/* MISBIAS2 = 1P9V */
+#ifdef OPLUS_ARCH_EXTENDS
+		regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON63,
+			RG_AUDMICBIAS2VREF_MASK_SFT,
+			MIC_BIAS_2P7 << RG_AUDMICBIAS2VREF_SFT);
+#else
 		regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON63,
 			RG_AUDMICBIAS2VREF_MASK_SFT,
 			MIC_BIAS_1P9 << RG_AUDMICBIAS2VREF_SFT);
+#endif
 		if (priv->vow_setup) {
 			regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON63,
 				RG_AUDMICBIAS2LOWPEN_MASK_SFT,
@@ -4018,9 +4039,15 @@ static int mt_mic_bias_3_event(struct snd_soc_dapm_widget *w,
 		}
 
 		/* MISBIAS3 = 1P9V */
+#ifdef OPLUS_ARCH_EXTENDS
+		regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON65,
+			RG_AUDMICBIAS3VREF_MASK_SFT,
+			MIC_BIAS_2P7 << RG_AUDMICBIAS3VREF_SFT);
+#else
 		regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON65,
 			RG_AUDMICBIAS3VREF_MASK_SFT,
 			MIC_BIAS_1P9 << RG_AUDMICBIAS3VREF_SFT);
+#endif
 		if (priv->vow_setup) {
 			regmap_update_bits(priv->regmap, MT6338_AUDENC_PMU_CON65,
 				RG_AUDMICBIAS3LOWPEN_MASK_SFT,
@@ -7685,7 +7712,7 @@ static int mt_dcc_clk_connect(struct snd_soc_dapm_widget *source,
 static const struct snd_soc_dapm_route mt6338_dapm_routes[] = {
 	/* Capture */
 	{"AIFTX_Supply", NULL, "UL_GPIO"},
-	{"AIFTX_Supply", NULL, "KEY"},
+	/* {"AIFTX_Supply", NULL, "KEY"}, */
 	{"AIFTX_Supply", NULL, "CLK_BUF"},
 	{"AIFTX_Supply", NULL, "AUDGLB"},
 	{"AIFTX_Supply", NULL, "CLKSQ Audio"},
@@ -7856,7 +7883,7 @@ static const struct snd_soc_dapm_route mt6338_dapm_routes[] = {
 
 	/* DL Supply */
 	{"DL Power Supply", NULL, "DL_GPIO"},
-	{"DL Power Supply", NULL, "KEY"},
+	/* {"DL Power Supply", NULL, "KEY"}, */
 	{"DL Power Supply", NULL, "CLK_BUF"},
 	/* {"DL Power Supply", NULL, "vaud18"}, */
 	{"DL Power Supply", NULL, "NCP_CK"},
@@ -10395,9 +10422,7 @@ static const struct snd_kcontrol_new mt6338_snd_misc_controls[] = {
 
 static void keylock_set(struct mt6338_priv *priv)
 {
-	regmap_write(priv->regmap, MT6338_DA_INTF_STTING1, 0x6d);
-	regmap_write(priv->regmap, MT6338_TOP_CON, 0x4);
-
+/*
 	regmap_write(priv->regmap, MT6338_TOP_DIG_WPK, 0x0);
 	regmap_write(priv->regmap, MT6338_TOP_DIG_WPK_H, 0x0);
 	regmap_write(priv->regmap, MT6338_TOP_TMA_KEY_H, 0x0);
@@ -10406,7 +10431,7 @@ static void keylock_set(struct mt6338_priv *priv)
 	regmap_write(priv->regmap, MT6338_PSC_WPK_H, 0x0);
 	regmap_write(priv->regmap, MT6338_HK_TOP_WKEY_L, 0x0);
 	regmap_write(priv->regmap, MT6338_HK_TOP_WKEY_H, 0x0);
-
+*/
 }
 
 static void keylock_reset(struct mt6338_priv *priv)
@@ -10420,9 +10445,6 @@ static void keylock_reset(struct mt6338_priv *priv)
 	regmap_write(priv->regmap, MT6338_PSC_WPK_H, 0x47);
 	regmap_write(priv->regmap, MT6338_HK_TOP_WKEY_L, 0x38);
 	regmap_write(priv->regmap, MT6338_HK_TOP_WKEY_H, 0x63);
-
-	regmap_write(priv->regmap, MT6338_TOP_CON, 0x7);
-	regmap_write(priv->regmap, MT6338_DA_INTF_STTING1, 0x76);
 }
 
 static void codec_gpio_init(struct mt6338_priv *priv)
@@ -10651,8 +10673,14 @@ static int mt6338_codec_init_reg(struct mt6338_priv *priv)
 #ifdef NLE_IMP
 	hp_gain_ctl_select(priv, priv->hp_gain_ctl);
 #endif
+
+#ifdef OPLUS_ARCH_EXTENDS
+	priv->hp_hifi_mode = 1;
+#else /* OPLUS_ARCH_EXTENDS */
 	/* hp hifi mode, default normal mode */
 	priv->hp_hifi_mode = 0;
+#endif /* OPLUS_ARCH_EXTENDS */
+
 	/* mic hifi mode, default hifi mode */
 	priv->mic_hifi_mode = 0;
 

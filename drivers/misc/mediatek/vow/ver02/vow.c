@@ -916,12 +916,14 @@ static bool vow_service_SetSpeakerModel(unsigned long arg)
 	char *ptr8;
 #endif
 
-	I = vow_service_FindFreeSpeakerModel();
-	if (I == -1)
-		return false;
-
 	if (vow_service_GetParameter(arg) != 0)
 		return false;
+	I  = vow_service_SearchSpeakerModelWithKeyword(vowserv.vow_info_apuser[1]);
+	if (I  < 0) {
+		I = vow_service_FindFreeSpeakerModel();
+		if (I == -1)
+			return false;
+	}
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_SCP_SUPPORT)
 	vowserv.vow_speaker_model[I].model_ptr =
 	   (void *)(scp_get_reserve_mem_virt(VOW_MEM_ID))
@@ -2957,6 +2959,14 @@ static ssize_t VowDrv_read(struct file *fp,
 	bool dsp_inform_tx_flag = false;
 
 	VOWDRV_DEBUG("+%s()+\n", __func__);
+	if (count != sizeof(struct vow_eint_data_struct_t)) {
+		VOWDRV_DEBUG(
+			"%s(), cpy incorrect size to user, size=%d, correct size=%d, exit\n",
+			__func__,
+			count,
+			sizeof(struct vow_eint_data_struct_t));
+		goto exit;
+	}
 	VowDrv_SetVowEINTStatus(VOW_EINT_RETRY);
 
 	if (VowDrv_Wait_Queue_flag == 0)

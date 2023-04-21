@@ -129,6 +129,7 @@ config ANDROID_FIX_PCIE_SLAVE_ERROR
 	  When pcie encounters completion timeout, PCIe hardware will reply
 	  slave error to bus, which will causes the system to panic.
 
+source "drivers/android/oplus_binder/Kconfig"
 endif # if ANDROID
 
 endmenu

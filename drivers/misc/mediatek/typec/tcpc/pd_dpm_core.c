@@ -84,6 +84,13 @@ static const struct svdm_svid_ops svdm_svid_ops[] = {
 		.reset_state = dc_reset_state,
 	},
 #endif	/* CONFIG_USB_PD_ALT_MODE_RTDC */
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for pd svooc flow */
+	{
+		.name = "Oplus",
+		.svid = USB_VID_OPLUS,
+	},
+#endif
 };
 
 int dpm_check_supported_modes(void)
@@ -2178,11 +2185,14 @@ int pd_dpm_notify_pe_startup(struct pd_port *pd_port)
 		reactions |= DPM_REACTION_DISCOVER_SVID;
 #endif	/* CONFIG_USB_PD_ATTEMPT_ENTER_MODE */
 
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for pd svooc flow */
 #if CONFIG_USB_PD_REV30
 #if CONFIG_USB_PD_REV30_SRC_CAP_EXT_REMOTE
 	reactions |= DPM_REACTION_GET_SOURCE_CAP_EXT;
 #endif	/* CONFIG_USB_PD_REV30_SRC_CAP_EXT_REMOTE */
 #endif	/* CONFIG_USB_PD_REV30 */
+#endif /* OPLUS_FEATURE_CHG_BASIC */
 
 	dpm_reaction_set(pd_port, reactions);
 

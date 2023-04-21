@@ -81,8 +81,7 @@ extern struct dummy_mapping mt6983_dispsys_dummy_register[MT6983_DUMMY_REG_CNT];
 extern struct dummy_mapping mt6879_dispsys_dummy_register[MT6879_DUMMY_REG_CNT];
 
 
-const struct mtk_mmsys_reg_data *
-mtk_ddp_get_mmsys_reg_data(enum mtk_mmsys_id mmsys_id);
+const struct mtk_mmsys_reg_data *mtk_ddp_get_mmsys_reg_data(enum mtk_mmsys_id mmsys_id);
 
 void mtk_disp_ultra_offset(void __iomem *config_regs,
 			enum mtk_ddp_comp_id comp, bool is_dc);

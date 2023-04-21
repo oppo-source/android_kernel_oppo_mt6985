@@ -4,6 +4,14 @@
 #ifndef __ADAPTOR_DEF_H__
 #define __ADAPTOR_DEF_H__
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif
+
+#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+#include "../oplus/oplus_cam_event_report.h"
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 #define MODE_MAXCNT 25
 #define OF_SENSOR_NAMES_MAXCNT 20
 //#define POWERON_ONCE_OPENED

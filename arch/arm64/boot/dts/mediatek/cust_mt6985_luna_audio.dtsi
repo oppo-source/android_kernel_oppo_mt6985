@@ -1,0 +1,93 @@
+// SPDX-License-Identifier: GPL-2.0
+/* Copyright (c) 2020 MediaTek Inc. */
+
+&mt6338_accdet {
+	headset-three-key-threshold = <0 82 170 306>;
+	accdet-mic-vol = <7>;
+};
+
+&mt6338_pmic {
+	mediatek,i2c-driving = <11 11>;
+};
+
+&scp_i2c1{
+	pinctrl-names = "default";
+	pinctrl-0 = <&scp_i2c1_pins_default>;
+};
+
+&i2c6 {
+	clock-frequency = <400000>;
+
+	fsa4480: fsa4480@42 {
+		compatible = "qcom,fsa4480-i2c";
+		reg = <0x42>;
+		fsa_audio-supply = <&mt6373_vio28>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&fsa_hs_det>;
+		fsa4480,hs-det-gpio = <&pio 98 0>;
+	};
+
+	tfa98xx_R: tfa98xx@35 {
+		compatible = "nxp,tfa98xx";
+		reg = <0x35>;
+		reset-gpio = <&mt6373_pio 2 0>;
+		power-gpio = <&mt6373_pio 4 0>;
+		tfa_min_range = <5000>;
+		tfa_max_range = <8000>;
+		tfa_channel = <1>;
+		tfa98xx_vdd-supply = <&mt6373_vaud18>;
+		status = "okay";
+	};
+
+	tfa98xx_L: tfa98xx@34 {
+		compatible = "nxp,tfa98xx";
+		reg = <0x34>;
+		reset-gpio = <&mt6373_pio 1 0>;
+		tfa_min_range = <7000>;
+		tfa_max_range = <12000>;
+		tfa_channel = <0>;
+		status = "okay";
+	};
+
+	tfa98xx_L1: tfa98xx@36 {
+		compatible = "nxp,tfa98xx";
+		reg = <0x36>;
+		reset-gpio = <&mt6373_pio 3 0>;
+		tfa_min_range = <7000>;
+		tfa_max_range = <12000>;
+		tfa_channel = <2>;
+		status = "okay";
+	};
+};
+
+&audio_extend {
+ 	//for nxp speaker
+ 	oplus,speaker-vendor = "nxp";
+ 	oplus,speaker-i2s-id = <7>;
+ 	oplus,speaker-i2s-id-in = <6>;
+ 	oplus,speaker-codec-name = "tfa98xx.6-0034","tfa98xx.6-0035","tfa98xx.6-0036";
+ 	oplus,speaker-codec-dai-name = "tfa98xx-aif-6-34","tfa98xx-aif-6-35","tfa98xx-aif-6-36";
+	oplus,spk-i2s-index = <18 19>;
+};
+
+&pio {
+	fsa_hs_det: fsa_hs_det {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO98__FUNC_GPIO98>;
+			slew-rate = <1>;  /*direction 0:in, 1:out*/
+			output-high;
+		};
+	};
+
+	scp_i2c1_pins_default: scp_i2c1_pins_default {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO49__FUNC_SCP_SCL1>,
+					<PINMUX_GPIO50__FUNC_SCP_SDA1>;
+			/* 0x0: 75k    0x1: 10k */
+			/* 0x2: 5k      0x3: 4k     0x4:3k*/
+			/* 0x5: 2k   0x6: 1.5k   0x7:1k*/
+			bias-pull-up = <MTK_PULL_SET_RSEL_111>;
+		};
+	};
+};
+

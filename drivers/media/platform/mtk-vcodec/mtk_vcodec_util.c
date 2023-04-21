@@ -31,6 +31,79 @@ char mtk_vdec_tmp_prop[LOG_PROPERTY_SIZE];
 char mtk_venc_tmp_prop[LOG_PROPERTY_SIZE];
 
 
+void mtk_vcodec_check_alive(struct timer_list *t)
+{
+	struct dvfs_params *params;
+	struct mtk_vcodec_dev *dev;
+
+	/* Only support vdec check alive now */
+	if (mtk_vcodec_vcp & (1 << MTK_INST_DECODER)) {
+		params = from_timer(params, t, vdec_active_checker);
+		dev = container_of(params, struct mtk_vcodec_dev, vdec_dvfs_params);
+		dev->check_alive_work.dev = dev;
+		dev->check_alive_work.ctx = NULL;
+		queue_work(dev->check_alive_workqueue, &dev->check_alive_work.work);
+
+		/*retrigger timer for next check*/
+		params->vdec_active_checker.expires =
+			jiffies + msecs_to_jiffies(MTK_VDEC_CHECK_ACTIVE_INTERVAL);
+		add_timer(&params->vdec_active_checker);
+	}
+}
+EXPORT_SYMBOL_GPL(mtk_vcodec_check_alive);
+
+void mtk_vcodec_alive_checker_init(struct mtk_vcodec_dev *dev)
+{
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
+#ifdef VDEC_CHECK_ALIVE
+	int vdec_inst_count = 0;
+	struct mtk_vcodec_ctx *ctx;
+
+	/* Only support vdec check alive now */
+	if (mtk_vcodec_vcp & (1 << MTK_INST_DECODER)) {
+		list_for_each_entry(ctx, &dev->ctx_list, list) {
+			if (ctx->type == MTK_INST_DECODER)
+				vdec_inst_count++;
+		}
+		if (vdec_inst_count == 1 && !dev->vdec_dvfs_params.has_timer) {
+			mtk_v4l2_debug(0, "[VDVFS][VDEC] init vdec alive checker...");
+			timer_setup(&dev->vdec_dvfs_params.vdec_active_checker,
+				mtk_vcodec_check_alive, 0);
+			dev->vdec_dvfs_params.vdec_active_checker.expires =
+			jiffies + msecs_to_jiffies(MTK_VDEC_CHECK_ACTIVE_INTERVAL);
+			add_timer(&dev->vdec_dvfs_params.vdec_active_checker);
+			dev->vdec_dvfs_params.has_timer = 1;
+		}
+	}
+#endif
+#endif
+}
+
+void mtk_vcodec_alive_checker_deinit(struct mtk_vcodec_dev *dev)
+{
+
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
+#ifdef VDEC_CHECK_ALIVE
+	int vdec_inst_count = 0;
+	struct mtk_vcodec_ctx *ctx;
+
+	/* Only support vdec check alive now */
+	if (mtk_vcodec_vcp & (1 << MTK_INST_DECODER)) {
+		list_for_each_entry(ctx, &dev->ctx_list, list) {
+			if (ctx->type == MTK_INST_DECODER)
+				vdec_inst_count++;
+		}
+		if (vdec_inst_count == 0 && dev->vdec_dvfs_params.has_timer) {
+			del_timer_sync(&dev->vdec_dvfs_params.vdec_active_checker);
+			flush_workqueue(dev->check_alive_workqueue);
+			dev->vdec_dvfs_params.has_timer = 0;
+			mtk_v4l2_debug(0, "[VDVFS][VDEC] deinit vdec alive checker...");
+		}
+	}
+#endif
+#endif
+}
+
 /* For encoder, this will enable logs in venc/*/
 bool mtk_vcodec_dbg;
 EXPORT_SYMBOL_GPL(mtk_vcodec_dbg);
@@ -69,16 +142,20 @@ EXPORT_SYMBOL(mtk_venc_vcp_log);
 struct VENC_SLB_CB_T mtk_venc_slb_cb = {0};
 EXPORT_SYMBOL(mtk_venc_slb_cb);
 
-/* For vcp vdec sec mem debug */
-int mtk_vdec_sw_mem_sec;
-EXPORT_SYMBOL_GPL(mtk_vdec_sw_mem_sec);
-
 /* For vcp vdec align mode force setting limit grouping count */
 int mtk_vdec_align_limit;
 EXPORT_SYMBOL_GPL(mtk_vdec_align_limit);
 
 struct vcu_v4l2_func vcu_func = { NULL };
 EXPORT_SYMBOL_GPL(vcu_func);
+
+bool mtk_vcodec_is_vcp(int type)
+{
+	if (type > MTK_INST_ENCODER || type < MTK_INST_DECODER)
+		return false;
+	return (mtk_vcodec_vcp & (1 << type));
+}
+EXPORT_SYMBOL_GPL(mtk_vcodec_is_vcp);
 
 /* VCODEC FTRACE */
 #if VCODEC_TRACE
@@ -226,6 +303,7 @@ void mtk_vcodec_add_ctx_list(struct mtk_vcodec_ctx *ctx)
 	if (ctx != NULL) {
 		mutex_lock(&ctx->dev->ctx_mutex);
 		list_add(&ctx->list, &ctx->dev->ctx_list);
+		mtk_vcodec_alive_checker_init(ctx->dev);
 		mutex_unlock(&ctx->dev->ctx_mutex);
 	}
 }
@@ -236,6 +314,7 @@ void mtk_vcodec_del_ctx_list(struct mtk_vcodec_ctx *ctx)
 	if (ctx != NULL) {
 		mutex_lock(&ctx->dev->ctx_mutex);
 		list_del_init(&ctx->list);
+		mtk_vcodec_alive_checker_deinit(ctx->dev);
 		mutex_unlock(&ctx->dev->ctx_mutex);
 	}
 }
@@ -293,7 +372,8 @@ struct vdec_fb *mtk_vcodec_get_fb(struct mtk_vcodec_ctx *ctx)
 
 		mutex_lock(&ctx->buf_lock);
 		for (i = 0; i < dst_vb2_v4l2->vb2_buf.num_planes; i++) {
-			pfb->fb_base[i].va = vb2_plane_vaddr(dst_buf, i);
+			if (mtk_v4l2_dbg_level > 0)
+				pfb->fb_base[i].va = vb2_plane_vaddr(dst_buf, i);
 			pfb->fb_base[i].dma_addr =
 				vb2_dma_contig_plane_dma_addr(dst_buf, i);
 			pfb->fb_base[i].size = ctx->picinfo.fb_sz[i];
@@ -361,7 +441,7 @@ struct mtk_vcodec_mem *mtk_vcodec_get_bs(struct mtk_vcodec_ctx *ctx)
 		dst_buf_info = container_of(dst_vb2_v4l2, struct mtk_video_enc_buf, vb);
 		pbs_buf = &dst_buf_info->bs_buf;
 
-		if (!ctx->enc_params.svp_mode)
+		if (!ctx->enc_params.svp_mode && mtk_v4l2_dbg_level > 0)
 			pbs_buf->va = vb2_plane_vaddr(dst_buf, 0);
 		pbs_buf->dma_addr = vb2_dma_contig_plane_dma_addr(dst_buf, 0);
 		pbs_buf->size = (size_t)dst_buf->planes[0].length;
@@ -592,6 +672,8 @@ int mtk_vcodec_alloc_mem(struct vcodec_mem_obj *mem, struct device *dev,
 		   mem->type == MEM_TYPE_FOR_SEC_HW ||
 		   mem->type == MEM_TYPE_FOR_SEC_UBE_HW) {
 		dma_heap = dma_heap_find("mtk_svp_page-uncached");
+	} else if (mem->type == MEM_TYPE_FOR_SEC_WFD_HW) {
+		dma_heap = dma_heap_find("mtk_wfd_page-uncached");
 	} else {
 		mtk_v4l2_err("wrong type %u\n", mem->type);
 		return -EPERM;
@@ -657,7 +739,8 @@ int mtk_vcodec_free_mem(struct vcodec_mem_obj *mem, struct device *dev,
 		mem->type == MEM_TYPE_FOR_UBE_HW ||
 		mem->type == MEM_TYPE_FOR_SEC_SW ||
 		mem->type == MEM_TYPE_FOR_SEC_HW ||
-		mem->type == MEM_TYPE_FOR_SEC_UBE_HW) {
+		mem->type == MEM_TYPE_FOR_SEC_UBE_HW ||
+		mem->type == MEM_TYPE_FOR_SEC_WFD_HW) {
 		dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
 		dma_buf_detach((struct dma_buf *)mem->va, attach);
 		dma_heap_buffer_free((struct dma_buf *)mem->va);

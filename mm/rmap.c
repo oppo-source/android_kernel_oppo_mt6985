@@ -420,11 +420,13 @@ void unlink_anon_vmas(struct vm_area_struct *vma)
 	if (vma->anon_vma) {
 		vma->anon_vma->degree--;
 
+#ifndef CONFIG_SPECULATIVE_PAGE_FAULT
 		/*
 		 * vma would still be needed after unlink, and anon_vma will be prepared
 		 * when handle fault.
 		 */
 		vma->anon_vma = NULL;
+#endif
 	}
 	unlock_anon_vma_root(root);
 
@@ -534,6 +536,7 @@ struct anon_vma *page_lock_anon_vma_read(struct page *page)
 	struct anon_vma *anon_vma = NULL;
 	struct anon_vma *root_anon_vma;
 	unsigned long anon_mapping;
+	bool success = false;
 
 	rcu_read_lock();
 	anon_mapping = (unsigned long)READ_ONCE(page->mapping);
@@ -556,7 +559,11 @@ struct anon_vma *page_lock_anon_vma_read(struct page *page)
 		}
 		goto out;
 	}
-
+	trace_android_vh_do_page_trylock(page, NULL, NULL, &success);
+	if (success) {
+		anon_vma = NULL;
+		goto out;
+	}
 	/* trylock failed, we got to sleep */
 	if (!atomic_inc_not_zero(&anon_vma->refcount)) {
 		anon_vma = NULL;
@@ -2409,6 +2416,7 @@ static void rmap_walk_file(struct page *page, struct rmap_walk_control *rwc,
 	struct address_space *mapping = page_mapping(page);
 	pgoff_t pgoff_start, pgoff_end;
 	struct vm_area_struct *vma;
+	bool got_lock = false, success = false;
 
 	/*
 	 * The page lock not only makes sure that page->mapping cannot
@@ -2423,8 +2431,16 @@ static void rmap_walk_file(struct page *page, struct rmap_walk_control *rwc,
 
 	pgoff_start = page_to_pgoff(page);
 	pgoff_end = pgoff_start + thp_nr_pages(page) - 1;
-	if (!locked)
-		i_mmap_lock_read(mapping);
+	if (!locked) {
+		trace_android_vh_do_page_trylock(page,
+					&mapping->i_mmap_rwsem, &got_lock, &success);
+		if (success) {
+			if (!got_lock)
+				return;
+		} else {
+			i_mmap_lock_read(mapping);
+		}
+	}
 	vma_interval_tree_foreach(vma, &mapping->i_mmap,
 			pgoff_start, pgoff_end) {
 		unsigned long address = vma_address(page, vma);

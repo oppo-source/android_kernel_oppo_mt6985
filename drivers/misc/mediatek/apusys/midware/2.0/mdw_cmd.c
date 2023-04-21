@@ -215,7 +215,7 @@ out:
 static unsigned int mdw_cmd_create_infos(struct mdw_fpriv *mpriv,
 	struct mdw_cmd *c)
 {
-	unsigned int i = 0, j = 0, total_size = 0;
+	unsigned int i = 0, j = 0, total_size = 0, tmp_size = 0;
 	struct mdw_subcmd_exec_info *sc_einfo = NULL;
 	int ret = -ENOMEM;
 
@@ -275,13 +275,30 @@ static unsigned int mdw_cmd_create_infos(struct mdw_fpriv *mpriv,
 		/* accumulate cmdbuf size with alignment */
 		for (j = 0; j < c->subcmds[i].num_cmdbufs; j++) {
 			c->num_cmdbufs++;
+			/* alignment */
 			if (c->ksubcmds[i].cmdbufs[j].align) {
-				total_size = MDW_ALIGN(total_size,
-					c->ksubcmds[i].cmdbufs[j].align) +
-					c->ksubcmds[i].cmdbufs[j].size;
+				tmp_size = MDW_ALIGN(total_size,
+					c->ksubcmds[i].cmdbufs[j].align);
 			} else {
-				total_size += c->ksubcmds[i].cmdbufs[j].size;
+				tmp_size = MDW_ALIGN(total_size, MDW_DEFAULT_ALIGN);
 			}
+			if (tmp_size < total_size) {
+				mdw_drv_err("cmdbuf(%u,%u) size align overflow(%u/%u/%u)\n",
+					i, j, total_size,
+					c->ksubcmds[i].cmdbufs[j].align, tmp_size);
+				goto free_cmdbufs;
+			}
+			total_size = tmp_size;
+
+			/* accumulator */
+			tmp_size = total_size + c->ksubcmds[i].cmdbufs[j].size;
+			if (tmp_size < total_size) {
+				mdw_drv_err("cmdbuf(%u,%u) size overflow(%u/%u/%u)\n",
+					i, j, total_size,
+					c->ksubcmds[i].cmdbufs[j].size, tmp_size);
+				goto free_cmdbufs;
+			}
+			total_size = tmp_size;
 		}
 	}
 	c->size_cmdbufs = total_size;
@@ -355,7 +372,9 @@ void mdw_cmd_mpriv_release(struct mdw_fpriv *mpriv)
 			mdw_cmd_delete(c);
 		}
 		mdw_flw_debug("s(0x%llx) release mem\n", (uint64_t)mpriv);
+		mutex_lock(&mpriv->mdev->mctl_mtx);
 		mdw_mem_mpriv_release(mpriv);
+		mutex_unlock(&mpriv->mdev->mctl_mtx);
 	}
 }
 
@@ -512,7 +531,9 @@ static void mdw_cmd_release(struct kref *ref)
 	mdw_trace_begin("apumdw:cmd_release|c:0x%llx", c->kid);
 	if (c->del_internal)
 		c->del_internal(c);
+	mutex_lock(&mpriv->mdev->mctl_mtx);
 	mdw_cmd_unvoke_map(c);
+	mutex_unlock(&mpriv->mdev->mctl_mtx);
 	mdw_cmd_delete_infos(c->mpriv, c);
 	mdw_mem_put(c->mpriv, c->exec_infos);
 	kfree(c->adj_matrix);

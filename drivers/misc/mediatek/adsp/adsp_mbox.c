@@ -122,6 +122,8 @@ int adsp_mbox_send(struct mtk_mbox_pin_send *pin_send, void *msg,
 		return MBOX_PIN_BUSY;
 	}
 
+	adsp_enable_clock();
+
 	if (mtk_mbox_check_send_irq(mbdev, pin_send->mbox,
 				    pin_send->pin_index)) {
 		result = MBOX_PIN_BUSY;
@@ -160,6 +162,7 @@ int adsp_mbox_send(struct mtk_mbox_pin_send *pin_send, void *msg,
 		}
 	}
 EXIT:
+	adsp_disable_clock();
 	mutex_unlock(&pin_send->mutex_send);
 	return result;
 }

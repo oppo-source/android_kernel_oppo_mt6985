@@ -90,6 +90,18 @@ struct GED_DVFS_BW_DATA {
 
 #define MAX_BW_PROFILE 5
 
+#define MAX_OPP_LOGS_COLUMN_DIGITS 64
+struct GED_DVFS_OPP_STAT {
+	union {
+		uint32_t *aTrans;
+		uint32_t ui32Freq;
+	} uMem;
+
+	/* unit 1us */
+	uint64_t ui64Active;
+	uint64_t ui64Idle;
+};
+
 struct GpuUtilization_Ex {
 	// unit for util_*: %
 	unsigned int util_active;
@@ -145,6 +157,13 @@ enum ged_gpu_power_state {
 	GED_POWER_ON,
 };
 void ged_dvfs_gpu_clock_switch_notify(enum ged_gpu_power_state power_state);
+
+void ged_dvfs_reset_opp_cost(int oppsize);
+void ged_dvfs_update_opp_cost(unsigned int loading,	unsigned int TSDiff_us,
+		unsigned long long cur_us, unsigned int idx);
+int ged_dvfs_query_opp_cost(struct GED_DVFS_OPP_STAT *psReport,
+		int i32NumOpp, bool bStript);
+int ged_dvfs_init_opp_cost(void);
 
 GED_ERROR ged_dvfs_system_init(void);
 void ged_dvfs_system_exit(void);

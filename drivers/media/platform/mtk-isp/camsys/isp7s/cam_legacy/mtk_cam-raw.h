@@ -58,6 +58,10 @@ struct mtk_cam_request_stream_data;
 
 #define IMG_PIX_ALIGN		2
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 enum raw_module_id {
 	RAW_A = 0,
 	RAW_B = 1,
@@ -293,7 +297,11 @@ struct mtk_raw_pipeline {
 	struct mtk_cam_mstream_exposure mstream_exposure;
 	/* pde module */
 	struct mtk_raw_pde_config pde_config;
-	struct mtk_cam_hdr_timestamp_info hdr_timestamp;
+	/* vhdr timestamp */
+	int	hdr_ts_fifo_size;
+	void *hdr_ts_buffer;
+	struct kfifo hdr_ts_fifo;
+	atomic_t is_hdr_ts_fifo_overflow;
 	s64 hw_mode;
 	s64 hw_mode_pending;
 	/* Frame sync */
@@ -341,6 +349,9 @@ struct mtk_raw_device {
 
 	/* for preisp - for sof counter sync.*/
 	int tg_count;
+	#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	int vf_reset_cnt;
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	/* for subsample, sensor-control */
 	bool sub_sensor_ctrl_en;
 	int set_sensor_idx;
@@ -452,7 +463,8 @@ void enable_tg_db(struct mtk_raw_device *dev, int en);
 
 void initialize(struct mtk_raw_device *dev, int is_slave);
 
-void stream_on(struct mtk_raw_device *dev, int on);
+void stream_on(struct mtk_cam_ctx *ctx,
+		struct mtk_raw_device *dev, int on);
 
 void immediate_stream_off(struct mtk_raw_device *dev);
 
@@ -519,6 +531,13 @@ int mtk_cam_update_pd_meta_cfg_info(struct mtk_raw_pipeline *pipeline,
 							enum mtk_cam_ctrl_type ctrl_type);
 int mtk_cam_update_pd_meta_out_info(struct mtk_raw_pipeline *pipeline,
 							enum mtk_cam_ctrl_type ctrl_type);
+
+int mtk_cam_init_hdr_tsfifo(struct mtk_raw *raw, struct v4l2_device *v4l2_dev);
+int mtk_cam_reset_hdr_tsfifo(struct mtk_raw_pipeline *pipe);
+void mtk_cam_push_hdr_tsfifo(struct mtk_raw_pipeline *pipe,
+					struct mtk_cam_hdr_timestamp_info *ts_info);
+void mtk_cam_pop_hdr_tsfifo(struct mtk_raw_pipeline *pipe,
+					struct mtk_cam_hdr_timestamp_info *ts_info);
 
 #ifdef CAMSYS_TF_DUMP_7S
 int

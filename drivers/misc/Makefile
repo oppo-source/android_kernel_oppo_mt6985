@@ -62,3 +62,12 @@ obj-$(CONFIG_HI6421V600_IRQ)	+= hi6421v600-irq.o
 obj-$(CONFIG_UID_SYS_STATS)	+= uid_sys_stats.o
 obj-y				+= mediatek/
 obj-$(CONFIG_OPEN_DICE)		+= open-dice.o
+
+#ifdef OPLUS_FEATURE_SIM_DETECT
+obj-$(CONFIG_SIM_DETECT)	+= sim_detect/
+#endif
+
+#ifdef OPLUS_FEATURE_TP_BASIC
+#oplus add for vib aw86927
+obj-y += aw8697_haptic/
+#endif

@@ -69,6 +69,11 @@ GED_ERROR ged_gpufreq_init(void)
 	}
 
 	/* init core mask table if support DCS policy*/
+	if (!is_dcs_enable()) {
+		g_virtual_oppnum = g_working_oppnum;
+		g_min_virtual_oppidx = g_min_working_oppidx;
+		return GED_OK;
+	}
 	mutex_init(&g_ud_DCS_lock);
 	core_mask_table = dcs_get_avail_mask_table();
 	g_max_core_num = dcs_get_max_core_num();
@@ -218,6 +223,11 @@ int ged_get_min_oppidx_real(void)
 		return g_min_working_oppidx;
 	else
 		return gpufreq_get_opp_num(TARGET_DEFAULT) - 1;
+}
+
+unsigned int ged_get_all_available_opp_num(void)
+{
+	return g_virtual_oppnum;
 }
 
 unsigned int ged_get_opp_num(void)

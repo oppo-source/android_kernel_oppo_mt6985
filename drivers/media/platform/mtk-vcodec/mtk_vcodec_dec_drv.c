@@ -33,7 +33,6 @@ module_param(mtk_vcodec_perf, bool, 0644);
 module_param(mtk_vcodec_vcp, int, 0644);
 char mtk_vdec_property_prev[1024];
 char mtk_vdec_vcp_log_prev[1024];
-module_param(mtk_vdec_sw_mem_sec, int, 0644);
 module_param(mtk_vdec_align_limit, int, 0644);
 
 static struct mtk_vcodec_dev *dev_ptr;
@@ -83,7 +82,7 @@ static int fops_vcodec_open(struct file *file)
 	}
 
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
-	if (mtk_vcodec_vcp & (1 << MTK_INST_DECODER)) {
+	if (mtk_vcodec_is_vcp(MTK_INST_DECODER)) {
 		ret = vcp_register_feature(VDEC_FEATURE_ID);
 		if (ret) {
 			mtk_v4l2_err("Failed to vcp_register_feature");
@@ -281,7 +280,7 @@ static int fops_vcodec_release(struct file *file)
 		dev->dec_cnt--;
 	mutex_unlock(&dev->dev_mutex);
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
-	if (mtk_vcodec_vcp & (1 << MTK_INST_DECODER)) {
+	if (mtk_vcodec_is_vcp(MTK_INST_DECODER)) {
 		ret = vcp_deregister_feature(VDEC_FEATURE_ID);
 		if (ret) {
 			mtk_v4l2_err("Failed to vcp_deregister_feature");
@@ -336,16 +335,22 @@ static int mtk_vcodec_dec_resume(struct device *pDev)
 static int mtk_vcodec_dec_suspend_notifier(struct notifier_block *nb,
 					unsigned long action, void *data)
 {
+#if !IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
 	int wait_cnt = 0;
 	int val = 0;
 	int i;
 	struct mtk_vcodec_dev *dev =
 		container_of(nb, struct mtk_vcodec_dev, pm_notifier);
+#endif
 
 	mtk_v4l2_debug(1, "action = %ld", action);
 	switch (action) {
 	case PM_SUSPEND_PREPARE:
+#if !IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
+		mutex_lock(&dev->dec_dvfs_mutex);
 		dev->is_codec_suspending = 1;
+		mutex_unlock(&dev->dec_dvfs_mutex);
+
 		for (i = 0; i < MTK_VDEC_HW_NUM; i++) {
 			val = down_trylock(&dev->dec_sem[i]);
 			while (val == 1) {
@@ -362,9 +367,12 @@ static int mtk_vcodec_dec_suspend_notifier(struct notifier_block *nb,
 			}
 			up(&dev->dec_sem[i]);
 		}
+#endif
 		return NOTIFY_OK;
 	case PM_POST_SUSPEND:
+#if !IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
 		dev->is_codec_suspending = 0;
+#endif
 		return NOTIFY_OK;
 	default:
 		return NOTIFY_DONE;
@@ -375,6 +383,7 @@ static int mtk_vcodec_dec_suspend_notifier(struct notifier_block *nb,
 
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
 extern void vdec_vcp_probe(struct mtk_vcodec_dev *dev);
+extern void vdec_vcp_remove(struct mtk_vcodec_dev *dev);
 #endif
 
 static int mtk_vcodec_dec_probe(struct platform_device *pdev)
@@ -492,12 +501,16 @@ static int mtk_vcodec_dec_probe(struct platform_device *pdev)
 		sema_init(&dev->dec_sem[i], 1);
 		spin_lock_init(&dev->dec_power_lock[i]);
 		dev->dec_is_power_on[i] = false;
+		atomic_set(&dev->dec_hw_active[i], 0);
+		atomic_set(&dev->dec_clk_ref_cnt[i], 0);
 	}
+	atomic_set(&dev->dec_larb_ref_cnt, 0);
 	mutex_init(&dev->ctx_mutex);
 	mutex_init(&dev->dev_mutex);
 	mutex_init(&dev->ipi_mutex);
 	mutex_init(&dev->ipi_mutex_res);
 	mutex_init(&dev->dec_dvfs_mutex);
+	mutex_init(&dev->dec_always_on_mutex);
 	spin_lock_init(&dev->irqlock);
 
 	snprintf(dev->v4l2_dev.name, sizeof(dev->v4l2_dev.name), "%s",
@@ -547,12 +560,12 @@ static int mtk_vcodec_dec_probe(struct platform_device *pdev)
 	}
 
 
+#ifdef VDEC_CHECK_ALIVE
 	/*Init workqueue for vdec alive checker*/
-	/*
 	dev->check_alive_workqueue = create_singlethread_workqueue("vdec_check_alive");
 	INIT_WORK(&dev->check_alive_work.work, mtk_vdec_check_alive_work);
 	dev->check_alive_work.ctx = NULL;
-	 */
+#endif
 	ret = video_register_device(vfd_dec, VFL_TYPE_VIDEO, -1);
 	if (ret) {
 		mtk_v4l2_err("Failed to register video device");
@@ -676,8 +689,8 @@ static int mtk_vcodec_dec_remove(struct platform_device *pdev)
 	flush_workqueue(dev->decode_workqueue);
 	destroy_workqueue(dev->decode_workqueue);
 
-	// flush_workqueue(dev->check_alive_workqueue);
-	// destroy_workqueue(dev->check_alive_workqueue);
+	flush_workqueue(dev->check_alive_workqueue);
+	destroy_workqueue(dev->check_alive_workqueue);
 
 	if (dev->m2m_dev_dec)
 		v4l2_m2m_release(dev->m2m_dev_dec);
@@ -687,6 +700,10 @@ static int mtk_vcodec_dec_remove(struct platform_device *pdev)
 
 	v4l2_device_unregister(&dev->v4l2_dev);
 	mtk_vcodec_release_dec_pm(dev);
+
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
+	vdec_vcp_remove(dev);
+#endif
 	return 0;
 }
 

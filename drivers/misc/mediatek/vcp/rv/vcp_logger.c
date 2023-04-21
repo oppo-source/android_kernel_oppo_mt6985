@@ -236,6 +236,7 @@ ssize_t vcp_A_log_read(char __user *data, size_t len)
 	unsigned int retrytimes = VCP_IPI_RETRY_TIMES;
 	struct vcp_logger_ctrl_msg msg;
 	int ret;
+	int i;
 
 	if (!driver_init_done || !VCP_A_log_ctl->enable)
 		return 0;
@@ -252,10 +253,21 @@ ssize_t vcp_A_log_read(char __user *data, size_t len)
 
 	if (strcmp(current->comm, "mobile_log_d.rd") != 0) {
 		if (log_ctl_debug) {
+			i = 0;
+			while (!mutex_trylock(&vcp_pw_clk_mutex)) {
+				i += 5;
+				mdelay(5);
+				if (i > VCP_SYNC_TIMEOUT_MS) {
+					pr_notice("[VCP] %s lock fail\n", __func__);
+					goto error;
+				}
+			}
+
 			if (is_vcp_ready(VCP_A_ID)) {
 				msg.cmd = VCP_LOGGER_IPI_FLUSH;
 				ret = mtk_ipi_send(&vcp_ipidev, IPI_OUT_LOGGER_CTRL,
 					0, &msg, sizeof(msg)/MBOX_SLOT_SIZE, 0);
+				mutex_unlock(&vcp_pw_clk_mutex);
 
 				if (ret == IPI_ACTION_DONE) {
 					/* wait w_ptr updated or sync 10ms  */
@@ -265,13 +277,16 @@ ssize_t vcp_A_log_read(char __user *data, size_t len)
 					}
 					w_pos = VCP_A_buf_info->w_pos;
 				}
+			} else {
+				mutex_unlock(&vcp_pw_clk_mutex);
+				pr_notice("[VCP] %s not ready\n", __func__);
 			}
 			/* dump full logger buffer start from w_pos + 1 */
 			r_pos_debug = (w_pos >= DRAM_BUF_LEN) ?  0 : (w_pos+1);
 			log_ctl_debug = 0;
 		}
 
-		if (r_pos_debug == w_pos)
+		if (r_pos_debug == w_pos || (r_pos == 0 && w_pos == DRAM_BUF_LEN))
 			goto error;
 
 		if (r_pos_debug > w_pos)
@@ -295,7 +310,7 @@ ssize_t vcp_A_log_read(char __user *data, size_t len)
 		goto error;
 	}
 
-	if (r_pos == w_pos)
+	if (r_pos == w_pos || (r_pos == 0 && w_pos == DRAM_BUF_LEN))
 		goto error;
 
 	if (r_pos > w_pos)
@@ -337,8 +352,11 @@ error:
 
 unsigned int vcp_A_log_poll(void)
 {
-	if (VCP_A_buf_info->r_pos != VCP_A_buf_info->w_pos)
+	if (VCP_A_buf_info->r_pos != VCP_A_buf_info->w_pos) {
+		if (VCP_A_buf_info->r_pos == 0 && VCP_A_buf_info->w_pos == DRAM_BUF_LEN)
+			return 0;
 		return POLLIN | POLLRDNORM;
+	}
 
 	/*vcp_log_timer_add();*/
 
@@ -389,7 +407,7 @@ static unsigned int vcp_A_log_if_poll(struct file *file, poll_table *wait)
  */
 static unsigned int vcp_A_log_enable_set(unsigned int enable)
 {
-	int ret;
+	int ret, i = 0;
 	unsigned int retrytimes;
 	struct vcp_logger_ctrl_msg msg;
 
@@ -408,12 +426,25 @@ static unsigned int vcp_A_log_enable_set(unsigned int enable)
 		do {
 			msg.cmd = VCP_LOGGER_IPI_ENABLE;
 			msg.u.flag.enable = enable;
+			i = 0;
+			while (!mutex_trylock(&vcp_pw_clk_mutex)) {
+				i += 5;
+				mdelay(5);
+				if (i > VCP_SYNC_TIMEOUT_MS) {
+					pr_notice("[VCP] %s lock fail\n", __func__);
+					goto error;
+				}
+			}
 			if (is_vcp_ready(VCP_A_ID)) {
 				ret = mtk_ipi_send(&vcp_ipidev, IPI_OUT_LOGGER_CTRL,
 					0, &msg, sizeof(msg)/MBOX_SLOT_SIZE, 0);
+				mutex_unlock(&vcp_pw_clk_mutex);
 
 				if (ret == IPI_ACTION_DONE)
 					break;
+			} else {
+				mutex_unlock(&vcp_pw_clk_mutex);
+				pr_notice("[VCP] %s not ready\n", __func__);
 			}
 			retrytimes--;
 			udelay(1000);
@@ -679,6 +710,8 @@ static int vcp_logger_init_handler(struct VCP_LOG_INFO *log_info)
 	unsigned long flags;
 	phys_addr_t dma_addr;
 
+	struct arm_smccc_res res;
+
 	dma_addr = vcp_get_reserve_mem_phys(VCP_A_LOGGER_MEM_ID);
 	pr_debug("[VCP] vcp_get_reserve_mem_phys=%llx\n", (uint64_t)dma_addr);
 	spin_lock_irqsave(&vcp_A_log_buf_spinlock, flags);
@@ -706,6 +739,13 @@ static int vcp_logger_init_handler(struct VCP_LOG_INFO *log_info)
 		pr_debug("[VCP]  end of last_log_info.vcp_last_log_buf %x is over tcm_size %x\n",
 			last_log_info.vcp_log_buf_addr + last_log_info.vcp_log_buf_maxlen,
 				vcpreg.total_tcmsize);
+
+	arm_smccc_smc(MTK_SIP_TINYSYS_VCP_CONTROL,
+			MTK_TINYSYS_VCP_KERNEL_OP_SET_SRAMLOGBUF_INFO,
+			last_log_info.vcp_log_buf_addr,
+			last_log_info.vcp_log_end_addr,
+			last_log_info.vcp_log_buf_maxlen,
+			0, 0, 0, &res);
 
 	/* setting dram ctrl config to vcp*/
 	/* vcp side get wakelock, AP to write info to vcp sram*/
@@ -1016,7 +1056,7 @@ void vcp_crash_log_move_to_buf(enum vcp_core_id vcp_id)
 		if (w_pos >= DRAM_BUF_LEN) {
 			pr_notice("[VCP] %s(): w_pos >= DRAM_BUF_LEN, w_pos=%u",
 				__func__, w_pos);
-			return;
+			goto exit;
 		}
 
 		/* copy to dram buffer */
@@ -1025,8 +1065,8 @@ void vcp_crash_log_move_to_buf(enum vcp_core_id vcp_id)
 		/* check write address don't over logger reserve memory */
 		if (dram_logger_buf > dram_logger_limit) {
 			pr_debug("[VCP] %s: dram_logger_buf %x oversize reserve mem %x\n",
-			__func__, dram_logger_buf, dram_logger_limit);
-		goto exit;
+				__func__, dram_logger_buf, dram_logger_limit);
+			goto exit;
 		}
 
 		/* memory copy from log buf */

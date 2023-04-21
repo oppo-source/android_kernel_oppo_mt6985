@@ -2073,10 +2073,13 @@ int tcpc_typec_handle_cc_change(struct tcpc_device *tcpc)
 			typec_enter_low_power_mode(tcpc);
 		if (typec_is_drp_toggling())
 			return 0;
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for mini adapter did not charge */
 		if (tcpc->tcpc_flags & TCPC_FLAGS_FLOATING_GROUND &&
 		   (tcpc->typec_state == typec_unattached_snk ||
 		    tcpc->typec_state == typec_unattached_src))
 			return 0;
+#endif
 	}
 
 #if CONFIG_TYPEC_CAP_NORP_SRC
@@ -2849,6 +2852,12 @@ int tcpc_typec_init(struct tcpc_device *tcpc, uint8_t typec_role)
 #endif	/* CONFIG_TYPEC_POWER_CTRL_INIT */
 
 	typec_unattached_entry(tcpc);
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for cc toggle */
+	tcpci_notify_wd0_state(tcpc, false);
+#endif
+
 	return ret;
 }
 

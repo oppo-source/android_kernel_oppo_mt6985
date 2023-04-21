@@ -426,7 +426,12 @@ static const u8 mt6375_wd_volcmp_reg[MT6375_WD_CHAN_NUM] = {
 
 struct tcpc_desc def_tcpc_desc = {
 	.role_def = TYPEC_ROLE_DRP,
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for pd svooc flow */
 	.rp_lvl = TYPEC_CC_RP_DFT,
+#else
+	.rp_lvl = TYPEC_RP_DFT,
+#endif
 	.vconn_supply = TCPC_VCONN_SUPPLY_ALWAYS,
 	.name = "type_c_port0",
 	.en_wd = false,
@@ -1351,6 +1356,9 @@ static int mt6375_set_cc_toggling(struct mt6375_tcpc_data *ddata, int rp_lvl)
 		return ret;
 	/* Set Low Power LDO to 2V */
 	ret = mt6375_write8(ddata, MT6375_REG_LPWRCTRL3, 0xD8);
+	if (ret < 0)
+		return ret;
+	ret = tcpci_update_local_cc(ddata->tcpc, TYPEC_CC_DRP); 
 	if (ret < 0)
 		return ret;
 #if CONFIG_TCPC_LOW_POWER_MODE

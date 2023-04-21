@@ -295,6 +295,11 @@ static int battery_psy_get_property(struct power_supply *psy,
 	struct battery_data *bs_data;
 
 	gm = (struct mtk_battery *)power_supply_get_drvdata(psy);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for 806 dump */
+	if (gm == NULL)
+		return -ENODEV;
+#endif
 	bs_data = &gm->bs_data;
 
 	if (gm->algo.active == true)
@@ -491,6 +496,11 @@ static int battery_psy_set_property(struct power_supply *psy,
 	struct mtk_battery *gm;
 
 	gm = (struct mtk_battery *)power_supply_get_drvdata(psy);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for 806 dump */
+	if (gm == NULL)
+		return -ENODEV;
+#endif
 
 	switch (psp) {
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE:
@@ -626,7 +636,12 @@ void battery_service_data_init(struct mtk_battery *gm)
 	struct battery_data *bs_data;
 
 	bs_data = &gm->bs_data;
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for charging */
 	bs_data->psd.name = "battery",
+#else
+	bs_data->psd.name = "mtk-battery",
+#endif
 	bs_data->psd.type = POWER_SUPPLY_TYPE_BATTERY;
 	bs_data->psd.properties = battery_props;
 	bs_data->psd.num_properties = ARRAY_SIZE(battery_props);
@@ -939,6 +954,10 @@ int gauge_get_property(enum gauge_property gp,
 	struct mtk_gauge *gauge;
 	struct power_supply *psy;
 	struct mtk_gauge_sysfs_field_info *attr;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for 6375 wakelock */
+	static struct mtk_battery *gm;
+#endif
 	int ret = 0;
 
 	psy = power_supply_get_by_name("mtk-gauge");
@@ -946,6 +965,17 @@ int gauge_get_property(enum gauge_property gp,
 		return -ENODEV;
 
 	gauge = (struct mtk_gauge *)power_supply_get_drvdata(psy);
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for 6375 wakelock */
+	gm = gauge->gm;
+	if (gm != NULL && gm->disableGM30) {
+		bm_err("%s disable GM30", __func__);
+		return -EOPNOTSUPP;
+	}
+	bm_err("%s enable GM30", __func__);
+#endif
+
 	attr = gauge->attr;
 
 	if (attr == NULL) {
@@ -2612,6 +2642,11 @@ static ssize_t bat_sysfs_store(struct device *dev,
 
 	psy = dev_get_drvdata(dev);
 	gm = (struct mtk_battery *)power_supply_get_drvdata(psy);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for 806 dump */
+	if (gm == NULL)
+		return -ENODEV;
+#endif
 
 	battery_attr = container_of(attr,
 		struct mtk_battery_sysfs_field_info, attr);
@@ -2632,6 +2667,11 @@ static ssize_t bat_sysfs_show(struct device *dev,
 
 	psy = dev_get_drvdata(dev);
 	gm = (struct mtk_battery *)power_supply_get_drvdata(psy);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for 806 dump */
+	if (gm == NULL)
+		return -ENODEV;
+#endif
 
 	battery_attr = container_of(attr,
 		struct mtk_battery_sysfs_field_info, attr);
@@ -2663,11 +2703,21 @@ int battery_get_property(enum battery_property bp,
 	struct mtk_battery *gm;
 	struct power_supply *psy;
 
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for charging */
 	psy = power_supply_get_by_name("battery");
+#else
+	psy = power_supply_get_by_name("mtk-battery");
+#endif
 	if (psy == NULL)
 		return -ENODEV;
 
 	gm = (struct mtk_battery *)power_supply_get_drvdata(psy);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for 806 dump */
+	if (gm == NULL)
+		return -ENODEV;
+#endif
 	if (battery_sysfs_field_tbl[bp].prop == bp)
 		battery_sysfs_field_tbl[bp].get(gm,
 			&battery_sysfs_field_tbl[bp], val);
@@ -2693,11 +2743,21 @@ int battery_set_property(enum battery_property bp,
 	struct mtk_battery *gm;
 	struct power_supply *psy;
 
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for charging */
 	psy = power_supply_get_by_name("battery");
+#else
+	psy = power_supply_get_by_name("mtk-battery");
+#endif
 	if (psy == NULL)
 		return -ENODEV;
 
 	gm = (struct mtk_battery *)power_supply_get_drvdata(psy);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for 806 dump */
+	if (gm == NULL)
+		return -ENODEV;
+#endif
 
 	if (battery_sysfs_field_tbl[bp].prop == bp)
 		battery_sysfs_field_tbl[bp].set(gm,
@@ -3503,8 +3563,11 @@ void mtk_power_misc_init(struct mtk_battery *gm)
 	alarm_init(&gm->sdc.kthread_fgtimer, ALARM_BOOTTIME,
 		power_misc_kthread_fgtimer_func);
 	init_waitqueue_head(&gm->sdc.wait_que);
-
-	kthread_run(power_misc_routine_thread, gm, "power_misc_thread");
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for 6375 wakelock */
+	if (!gm->disableGM30)
+#endif
+		kthread_run(power_misc_routine_thread, gm, "power_misc_thread");
 
 	gm->sdc.psy_nb.notifier_call = mtk_power_misc_psy_event;
 	power_supply_reg_notifier(&gm->sdc.psy_nb);
@@ -3697,8 +3760,11 @@ int battery_init(struct platform_device *pdev)
 		sw_uisoc_timer_callback);
 	INIT_WORK(&gm->sw_uisoc_timer_work, sw_uisoc_timer_work_handler);
 
-
-	kthread_run(battery_update_routine, gm, "battery_thread");
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for 6375 wakelock */
+	if (!gm->disableGM30)
+#endif
+		kthread_run(battery_update_routine, gm, "battery_thread");
 
 #ifdef CONFIG_PM
 	gm->pm_nb.notifier_call = system_pm_notify;

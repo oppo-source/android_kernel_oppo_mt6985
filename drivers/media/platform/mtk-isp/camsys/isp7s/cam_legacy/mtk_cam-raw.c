@@ -50,6 +50,13 @@
 #include <aee.h>
 #endif
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+#define USING_CUSTOM_PRATE 1
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 static unsigned int debug_raw;
 module_param(debug_raw, uint, 0644);
 MODULE_PARM_DESC(debug_raw, "activates debug info");
@@ -568,7 +575,7 @@ mtk_cam_raw_try_res_ctrl(struct mtk_raw_pipeline *pipeline,
 
 	// currently only support normal & stagger 2-exp
 	if (res_cfg->hw_mode != 0) {
-		if (!mtk_cam_scen_is_stagger_2_exp(&res_cfg->scen) &&
+		if (!mtk_cam_scen_is_sensor_stagger(&res_cfg->scen) &&
 			!mtk_cam_scen_is_sensor_normal(&res_cfg->scen)) {
 			dev_info(dev, "scen(%d) not support hw_mode(%d)",
 				 res_cfg->scen.id, res_cfg->hw_mode);
@@ -1130,24 +1137,17 @@ static const struct v4l2_ctrl_ops cam_ctrl_ops = {
 static int mtk_raw_hdr_timestamp_get_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct mtk_raw_pipeline *pipeline;
-	struct mtk_cam_hdr_timestamp_info *hdr_ts_info;
 	struct mtk_cam_hdr_timestamp_info *hdr_ts_info_p;
 	struct device *dev;
 	int ret = 0;
 
 	pipeline = mtk_cam_ctrl_handler_to_raw_pipeline(ctrl->handler);
-	hdr_ts_info = &pipeline->hdr_timestamp;
 	hdr_ts_info_p = ctrl->p_new.p;
 	dev = pipeline->raw->devs[pipeline->id];
 
 	switch (ctrl->id) {
 	case V4L2_CID_MTK_CAM_CAMSYS_HDR_TIMESTAMP:
-		hdr_ts_info_p->le = hdr_ts_info->le;
-		hdr_ts_info_p->le_mono = hdr_ts_info->le_mono;
-		hdr_ts_info_p->ne = hdr_ts_info->ne;
-		hdr_ts_info_p->ne_mono = hdr_ts_info->ne_mono;
-		hdr_ts_info_p->se = hdr_ts_info->se;
-		hdr_ts_info_p->se_mono = hdr_ts_info->se_mono;
+		mtk_cam_pop_hdr_tsfifo(pipeline, hdr_ts_info_p);
 		dev_dbg(dev, "%s [le:%lld,%lld][ne:%lld,%lld][se:%lld,%lld]\n",
 			 __func__,
 			 hdr_ts_info_p->le, hdr_ts_info_p->le_mono,
@@ -1642,9 +1642,8 @@ void reset(struct mtk_raw_device *dev)
 	writel(0xffffffff, dev->yuv_base + REG_CTL_RAW_MOD5_DCM_DIS);
 
 	/* enable CQI_R1 ~ R4 before reset and make sure loaded to inner */
-	writel(readl(dev->base + REG_CTL_MOD6_EN) | CQI_ALL_EN,
-	    dev->base + REG_CTL_MOD6_EN);
-	toggle_db(dev);
+	writel(readl(dev->base_inner + REG_CTL_MOD6_EN) | CQI_ALL_EN,
+	    dev->base_inner + REG_CTL_MOD6_EN);
 
 	writel(0, dev->base + REG_CTL_SW_CTL);
 	writel(1, dev->base + REG_CTL_SW_CTL);
@@ -1684,6 +1683,9 @@ void reset(struct mtk_raw_device *dev)
 	/* do hw rst */
 	writel(4, dev->base + REG_CTL_SW_CTL);
 	writel(0, dev->base + REG_CTL_SW_CTL);
+
+	/* CAM_MAIN_ADLRD_MUX_SEL forcely use raw C */
+	writel(0x2 << 1 | 0x1, dev->cam->base + 0x32c);
 
 RESET_FAILURE:
 	/* Enable all DMA DCM back */
@@ -1917,6 +1919,68 @@ static int push_msgfifo(struct mtk_raw_device *dev,
 	return 0;
 }
 
+/* vhdr timesatamp fifo control */
+int mtk_cam_init_hdr_tsfifo(struct mtk_raw *raw, struct v4l2_device *v4l2_dev)
+{
+	struct device *dev = raw->cam_dev;
+	struct mtk_cam_device *cam_dev = dev_get_drvdata(dev);
+	unsigned int i;
+
+	for (i = 0; i < cam_dev->num_raw_drivers; i++) {
+		struct mtk_raw_pipeline *pipe = raw->pipelines + i;
+
+		pipe->hdr_ts_fifo_size =
+			roundup_pow_of_two(4 * sizeof(struct mtk_cam_hdr_timestamp_info));
+
+		pipe->hdr_ts_buffer =
+			devm_kzalloc(dev, pipe->hdr_ts_fifo_size, GFP_KERNEL);
+		if (!pipe->hdr_ts_buffer)
+			return -ENOMEM;
+	}
+
+	return 0;
+}
+
+int mtk_cam_reset_hdr_tsfifo(struct mtk_raw_pipeline *pipe)
+{
+	atomic_set(&pipe->is_hdr_ts_fifo_overflow, 0);
+	return kfifo_init(&pipe->hdr_ts_fifo,
+			pipe->hdr_ts_buffer, pipe->hdr_ts_fifo_size);
+}
+
+void mtk_cam_push_hdr_tsfifo(struct mtk_raw_pipeline *pipe,
+			struct mtk_cam_hdr_timestamp_info *ts_info)
+{
+	struct device *dev = pipe->raw->devs[pipe->id];
+	int len;
+
+	if (unlikely(kfifo_avail(&pipe->hdr_ts_fifo) < sizeof(*ts_info)))
+		atomic_set(&pipe->is_hdr_ts_fifo_overflow, 1);
+
+	len = kfifo_in(&pipe->hdr_ts_fifo, ts_info, sizeof(*ts_info));
+	if (len != sizeof(*ts_info))
+		dev_info(dev, " %s: (pipe:%d) push fail\n",
+				__func__, pipe->id);
+}
+
+void mtk_cam_pop_hdr_tsfifo(struct mtk_raw_pipeline *pipe,
+		struct mtk_cam_hdr_timestamp_info *ts_info)
+{
+	struct device *dev = pipe->raw->devs[pipe->id];
+	int len;
+
+	if (unlikely(atomic_cmpxchg(&pipe->is_hdr_ts_fifo_overflow, 1, 0)))
+		dev_info(dev, "hdr ts fifo overflow\n");
+
+	if (kfifo_len(&pipe->hdr_ts_fifo) >= sizeof(*ts_info)) {
+		len = kfifo_out(&pipe->hdr_ts_fifo, ts_info, sizeof(*ts_info));
+
+		if (len != sizeof(*ts_info))
+			dev_info(dev, " %s: (pipe:%d) pop fail\n",
+				__func__, pipe->id);
+	}
+}
+
 void toggle_db(struct mtk_raw_device *dev)
 {
 	int value;
@@ -1938,6 +2002,30 @@ void toggle_db(struct mtk_raw_device *dev)
 			readl_relaxed(dev->base_inner + REG_TG_DCIF_CTL),
 			val_sen,
 			readl_relaxed(dev->base_inner + REG_TG_SEN_MODE));
+}
+
+static void toggle_db_all_raw(struct mtk_cam_ctx *ctx)
+{
+	struct mtk_raw_device *raw;
+
+	raw = get_master_raw_dev(ctx->cam, ctx->pipe);
+
+	if (raw)
+		toggle_db(raw);
+
+	if (ctx->pipe->res_config.raw_num_used >= 2) {
+		raw = get_slave_raw_dev(ctx->cam, ctx->pipe);
+
+		if (raw)
+			toggle_db(raw);
+	}
+
+	if (ctx->pipe->res_config.raw_num_used >= 3) {
+		raw = get_slave2_raw_dev(ctx->cam, ctx->pipe);
+
+		if (raw)
+			toggle_db(raw);
+	}
 }
 
 void enable_tg_db(struct mtk_raw_device *dev, int en)
@@ -2324,7 +2412,8 @@ void immediate_stream_off(struct mtk_raw_device *dev)
 				 offset, cur_val, cfg_val);
 }
 
-void stream_on(struct mtk_raw_device *dev, int on)
+void stream_on(struct mtk_cam_ctx *ctx,
+		struct mtk_raw_device *dev, int on)
 {
 	u32 val;
 	u32 cfg_val;
@@ -2343,7 +2432,12 @@ void stream_on(struct mtk_raw_device *dev, int on)
 			fps_ratio = get_fps_ratio(dev);
 			dev_info(dev->dev, "VF on - REG_TG_TIME_STAMP_CNT val:%d fps(30x):%d\n",
 			val, fps_ratio);
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 			if (mtk_cam_scen_is_sensor_stagger(scen_active))
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+			if (mtk_cam_scen_is_sensor_stagger(scen_active) ||
+				mtk_cam_scen_is_ext_isp(scen_active))
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 				writel_relaxed(0xffffffff, dev->base + REG_SCQ_START_PERIOD);
 			else
 				writel_relaxed(SCQ_DEADLINE_MS * 1000 * SCQ_DEFAULT_CLK_RATE /
@@ -2362,7 +2456,7 @@ void stream_on(struct mtk_raw_device *dev, int on)
 			dev->grab_err_cnt = 0;
 			enable_tg_db(dev, 0);
 			enable_tg_db(dev, 1);
-			toggle_db(dev);
+			toggle_db_all_raw(ctx);
 			if (mtk_cam_scen_is_time_shared(scen_active) ||
 				mtk_cam_scen_is_odt(scen_active)) {
 				dev_info(dev->dev, "[%s] M2M view finder disable\n", __func__);
@@ -2453,6 +2547,7 @@ static void mtk_raw_update_debug_param(struct mtk_cam_device *cam,
 		dev_info(cam->dev, "DEBUG: force debug_clk_idx: %d\n",
 			 debug_clk_idx);
 		res->clk_target = clk->clklv[debug_clk_idx];
+		res->opp_idx = debug_clk_idx;
 	}
 
 	dev_dbg(cam->dev,
@@ -2492,7 +2587,11 @@ bool mtk_raw_resource_calc(struct mtk_cam_device *cam,
 	calc.mipi_pixel_rate = (s64)(in_w + res->hblank) * (in_h + res->vblank)
 		* res->interval.denominator / res->interval.numerator;
 	/* fake preisp line time from customized prate */
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	if (mtk_cam_scen_is_ext_isp(&res->scen) && pixel_rate > 0) {
+#else /* OPLUS_FEATURE_CAMERA_COMMON */
+	if ((mtk_cam_scen_is_ext_isp(&res->scen) || USING_CUSTOM_PRATE) && pixel_rate > 0) {
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
 		calc.line_time = 1000000000L * in_w / pixel_rate;
 		dev_info(cam->dev, "preisp:res linetime:%lld, prate:%lld, w:%d\n",
 			calc.line_time, pixel_rate, in_w);
@@ -2547,7 +2646,7 @@ bool mtk_raw_resource_calc(struct mtk_cam_device *cam,
 	mtk_raw_update_debug_param(cam, res);
 
 	dev_info(cam->dev,
-		 "Res-end bin/raw_num/tg_pxlmode/before_raw/opp(%d/%d/%d/%d/%d), vb/hb(%d,%d), clk(%d), out(%dx%d)\n",
+		 "Res-end bin/raw_num/tg_pxlmode/before_raw/opp(%d/%d/%d/%d/%d), clk(%d), vb/hb(%d,%d), out(%dx%d)\n",
 		 res->bin_enable, res->raw_num_used, res->tgo_pxl_mode,
 		 res->tgo_pxl_mode_before_raw, res->opp_idx, res->clk_target,
 		 res->vblank, res->hblank, *out_w, *out_h);
@@ -2702,6 +2801,9 @@ static irqreturn_t mtk_irq_raw(int irq, void *data)
 		else
 			raw_dev->tg_count = tg_cnt;
 		raw_dev->last_sof_time_ns = irq_info.ts_ns;
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+		irq_info.tg_cnt = raw_dev->tg_count;
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		irq_info.write_cnt = ((fbc_fho_ctl2 & WCNT_BIT_MASK) >> 8) - 1;
 		irq_info.fbc_cnt = (fbc_fho_ctl2 & CNT_BIT_MASK) >> 16;
 	}
@@ -3231,22 +3333,24 @@ static int mtk_raw_sd_subscribe_event(struct v4l2_subdev *subdev,
 				      struct v4l2_fh *fh,
 				      struct v4l2_event_subscription *sub)
 {
+#define EVENT_DEPTH 4
 	switch (sub->type) {
 	case V4L2_EVENT_FRAME_SYNC:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_REQUEST_DRAINED:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_EOS:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_REQUEST_DUMPED:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_ESD_RECOVERY:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_REQUEST_SENSOR_TRIGGER:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_ERROR:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
-
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
+	case V4L2_EVENT_EXTISP_CAMSYS_READY:
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	default:
 		return -EINVAL;
 	}
@@ -3565,6 +3669,9 @@ void mtk_cam_raw_vf_reset(struct mtk_cam_ctx *ctx,
 		dev_info(dev->dev, "%s: wait vf off timeout: TG_VF_CON 0x%x\n",
 				 __func__, chk_val);
 	}
+	#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	reset_dma_fbc(dev->dev, dev->base, dev->yuv_base);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	enable_tg_db(dev, 1);
 	dev_info(dev->dev, "preisp raw_vf_reset vf_en off");
 
@@ -4653,7 +4760,7 @@ static struct mtk_cam_format_desc meta_ext_fmts[] = {
 	{
 		.vfmt.fmt.meta = {
 			.dataformat = V4L2_META_FMT_MTISP_3A,
-			.buffersize = 0,
+			.buffersize = 4,
 		},
 	},
 };

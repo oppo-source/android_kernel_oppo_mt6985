@@ -10,6 +10,8 @@
 #include <linux/workqueue.h>
 #include <linux/wait.h>
 #include <linux/pm_wakeup.h>
+#include <linux/timer.h>
+
 #include <drm/drm_crtc.h>
 #include <drm/drm_writeback.h>
 
@@ -121,9 +123,14 @@ enum DISP_PMQOS_SLOT {
 #define DISP_SLOT_REQUEST_TE_PREPARE (DISP_SLOT_TE1_EN + 0x4)
 #define DISP_SLOT_REQUEST_TE_EN (DISP_SLOT_REQUEST_TE_PREPARE + 0x4)
 
+/* reset OVL log */
+#define OVL_RT_LOG_NR 10
+#define DISP_SLOT_OVL_COMP_ID(n) (DISP_SLOT_REQUEST_TE_EN + 0x4 + (0x4 * (n)))
+#define DISP_SLOT_OVL_GREQ_CNT(n) (DISP_SLOT_OVL_COMP_ID(OVL_RT_LOG_NR) + (0x4 * (n)))
+#define DISP_SLOT_OVL_RT_LOG_END DISP_SLOT_OVL_GREQ_CNT(OVL_RT_LOG_NR)
 
 #define DISP_SLOT_LAYER_AVG_RATIO(n)                                          \
-	(DISP_SLOT_REQUEST_TE_EN + 0x14 + (0x8 * (n)))
+	(DISP_SLOT_OVL_RT_LOG_END + 0x14 + (0x8 * (n)))
 #define DISP_SLOT_LAYER_PEAK_RATIO(n)                                          \
 	(DISP_SLOT_LAYER_AVG_RATIO(n) + 0x4)
 #define DISP_SLOT_SIZE            \
@@ -385,11 +392,23 @@ enum MTK_CRTC_PROP {
 	CRTC_PROP_OVL_DSI_SEQ,
 	CRTC_PROP_OUTPUT_SCENARIO,
 	CRTC_PROP_CAPS_BLOB_ID,
+#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+	CRTC_PROP_AUTO_MODE,
+	CRTC_PROP_AUTO_FAKE_FRAME,
+	CRTC_PROP_AUTO_MIN_FPS,
+#endif /* OPLUS_FEATURE_DISPLAY_ADFR */
+#ifdef OPLUS_FEATURE_DISPLAY_PANELCHAPLIN
+	CRTC_PROP_HW_BLENDSPACE,
+#endif
 	CRTC_PROP_AOSP_CCORR_LINEAR,
+/* #ifdef OPLUS_FEATURE_LOCAL_HDR  */
+	CRTC_PROP_HW_BRIGHTNESS,
+/* #endif */
 	CRTC_PROP_MAX,
 };
 
 #define USER_SCEN_BLANK (BIT(0))
+#define USER_SCEN_SAME_POWER_MODE (BIT(2))
 
 enum MTK_CRTC_COLOR_FMT {
 	CRTC_COLOR_FMT_UNKNOWN = 0,
@@ -492,6 +511,7 @@ enum CRTC_GCE_EVENT_TYPE {
 	EVENT_OVLSYS1_WDMA0_EOF,
 	EVENT_SYNC_TOKEN_VIDLE_POWER_ON,
 	EVENT_SYNC_TOKEN_CHECK_TRIGGER_MERGE,
+	EVENT_OVLSYS_WDMA1_EOF,
 	EVENT_TYPE_MAX,
 };
 
@@ -774,7 +794,7 @@ struct mtk_drm_crtc {
 	unsigned int layer_nr;
 	bool pending_planes;
 	unsigned int ovl_usage_status;
-
+	struct timer_list esd_timer;
 	void __iomem *ovlsys0_regs;
 	resource_size_t ovlsys0_regs_pa;
 	void __iomem *ovlsys1_regs;
@@ -836,6 +856,7 @@ struct mtk_drm_crtc {
 
 	unsigned int avail_modes_num;
 	struct drm_display_mode *avail_modes;
+	struct mtk_panel_params **panel_params;
 	struct timespec64 vblank_time;
 
 	bool mipi_hopping_sta;
@@ -848,6 +869,9 @@ struct mtk_drm_crtc {
 	unsigned int mode_change_index;
 	int mode_idx;
 	bool res_switch;
+#ifdef OPLUS_FEATURE_DISPLAY
+	bool skip_unnecessary_switch;
+#endif /* OPLUS_FEATURE_DISPLAY */
 	int fbt_layer_id;
 
 	wait_queue_head_t state_wait_queue;
@@ -870,7 +894,8 @@ struct mtk_drm_crtc {
 	atomic_t cwb_task_active;
 
 	ktime_t pf_time;
-	ktime_t prev_pf_time;
+	ktime_t sof_time;
+	spinlock_t pf_time_lock;
 	struct task_struct *signal_present_fece_task;
 	struct cmdq_cb_data cb_data;
 	atomic_t cmdq_done;
@@ -907,6 +932,17 @@ struct mtk_drm_crtc {
 
 	atomic_t force_high_step;
 	int force_high_enabled;
+#ifdef OPLUS_FEATURE_DISPLAY_PANELCHAPLIN
+	int blendspace;
+#endif
+/* #ifdef OPLUS_FEATURE_LOCAL_HDR  */
+	/* indicate that whether the current frame backlight has been updated */
+	bool oplus_backlight_updated;
+#ifdef OPLUS_FEATURE_DISPLAY_APOLLO
+	int oplus_pending_backlight;
+#endif /* OPLUS_FEATURE_DISPLAY_APOLLO */
+/* #endif OPLUS_FEATURE_LOCAL_HDR */
+
 };
 
 struct mtk_crtc_state {
@@ -952,6 +988,7 @@ struct mtk_cmdq_cb_data {
 	unsigned int hrt_idx;
 	struct mtk_lcm_dsi_cmd_packet *ddic_packet;
 	ktime_t signal_ts;
+	struct cb_data_store *store_cb_data;
 };
 #define TIGGER_INTERVAL_S(x) ((unsigned long long)x*1000*1000*1000)
 extern unsigned int disp_spr_bypass;
@@ -1096,6 +1133,7 @@ void mtk_crtc_start_sodi_loop(struct drm_crtc *crtc);
 bool mtk_crtc_with_event_loop(struct drm_crtc *crtc);
 void mtk_crtc_stop_event_loop(struct drm_crtc *crtc);
 void mtk_crtc_start_event_loop(struct drm_crtc *crtc);
+bool mtk_crtc_is_event_loop_active(struct mtk_drm_crtc *mtk_crtc);
 
 void mtk_crtc_change_output_mode(struct drm_crtc *crtc, int aod_en);
 int mtk_crtc_user_cmd(struct drm_crtc *crtc, struct mtk_ddp_comp *comp,
@@ -1172,4 +1210,22 @@ int mtk_drm_setbacklight(struct drm_crtc *crtc, unsigned int level,
 			unsigned int panel_ext_param, unsigned int cfg_flag);
 int mtk_drm_setbacklight_grp(struct drm_crtc *crtc, unsigned int level,
 			unsigned int panel_ext_param, unsigned int cfg_flag);
+
+#ifdef OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
+void mtk_atomic_hbm_bypass_pq(struct drm_crtc *crtc,
+		struct cmdq_pkt *handle, int en);
+#endif /* OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT */
+#ifdef OPLUS_FEATURE_DISPLAY
+void mtk_drm_send_lcm_cmd_prepare(struct drm_crtc *crtc,
+	struct cmdq_pkt **cmdq_handle);
+void mtk_drm_send_lcm_cmd_flush(struct drm_crtc *crtc,
+	struct cmdq_pkt **cmdq_handle, bool sync);
+int mtk_crtc_set_high_pwm_switch(struct drm_crtc *crtc, unsigned int en);
+#endif /* OPLUS_FEATURE_DISPLAY */
+
+#ifdef OPLUS_FEATURE_DISPLAY_APOLLO
+int mtk_drm_setbacklight_without_lock(struct drm_crtc *crtc, unsigned int level,
+			unsigned int panel_ext_param, unsigned int cfg_flag);
+#endif /* OPLUS_FEATURE_DISPLAY_APOLLO */
+
 #endif /* MTK_DRM_CRTC_H */

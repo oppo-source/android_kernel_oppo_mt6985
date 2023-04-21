@@ -34,6 +34,10 @@ struct cmdq_sec_helper_fp *cmdq_sec_helper;
 
 #endif
 
+#ifdef OPLUS_FEATURE_DISPLAY
+#include <soc/oplus/system/oplus_mm_kevent_fb.h>
+#endif
+
 #ifndef cmdq_util_msg
 #define cmdq_util_msg(f, args...) cmdq_msg(f, ##args)
 #endif
@@ -488,12 +492,13 @@ static void cmdq_dump_vcp_reg(struct cmdq_pkt *pkt)
 	}
 }
 
-static bool cmdq_pkt_is_exec(struct cmdq_pkt *pkt)
+bool cmdq_pkt_is_exec(struct cmdq_pkt *pkt)
 {
 	if (pkt && pkt->task_alloc && !pkt->rec_irq)
 		return true;
 	return false;
 }
+EXPORT_SYMBOL(cmdq_pkt_is_exec);
 
 void cmdq_mbox_pool_set_limit(struct cmdq_client *cl, u32 limit)
 {
@@ -2545,6 +2550,11 @@ void cmdq_pkt_err_dump_cb(struct cmdq_cb_data data)
 
 	cmdq_util_user_err(client->chan, "hwid:%d Begin of Error %u",
 		hwid, err_num[hwid]);
+#ifdef OPLUS_FEATURE_DISPLAY
+		if (err_num[hwid] < 5) {
+			mm_fb_display_kevent("DisplayDriverID@@508$$", MM_FB_KEY_RATELIMIT_1H, "cmdq timeout hwid:%d Begin of Error %u", hwid, err_num[hwid]);
+		}
+#endif
 	if (!err_num[hwid])
 		cmdq_util_helper->error_enable((u8)hwid);
 
@@ -2628,14 +2638,9 @@ void cmdq_pkt_err_dump_cb(struct cmdq_cb_data data)
 			mod = "CMDQ";
 
 		/* no inst available */
-		if (aee == CMDQ_AEE_EXCEPTION)
-			cmdq_util_aee_ex(aee, mod,
-				"DISPATCH:%s(%s) unknown instruction thread:%d",
-				mod, cmdq_util_helper->hw_name(client->chan), thread_id);
-		else
-			cmdq_util_aee_ex(CMDQ_AEE_WARN, mod,
-				"DISPATCH:%s(%s) unknown instruction thread:%d",
-				mod, cmdq_util_helper->hw_name(client->chan), thread_id);
+		cmdq_util_aee_ex(aee, mod,
+			"DISPATCH:%s(%s) unknown instruction thread:%d",
+			mod, cmdq_util_helper->hw_name(client->chan), thread_id);
 	}
 #ifdef CMDQ_SECURE_SUPPORT
 done:

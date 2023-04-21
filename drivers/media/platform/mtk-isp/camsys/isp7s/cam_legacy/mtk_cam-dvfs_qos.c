@@ -10,6 +10,10 @@
 #include "mtk_cam-dvfs_qos.h"
 #include "soc/mediatek/mmqos.h"
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 static unsigned int debug_mmqos;
 module_param(debug_mmqos, uint, 0644);
 MODULE_PARM_DESC(debug_mmqos, "activates debug mmqos");

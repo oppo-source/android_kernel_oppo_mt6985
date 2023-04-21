@@ -27,6 +27,10 @@
 
 #include <iommu_debug.h>
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 #if IS_ENABLED(CONFIG_MTK_CMDQ_MBOX_EXT)
 #include "cmdq-util.h"
 struct cmdq_util_controller_fp *cmdq_util_controller;
@@ -242,6 +246,7 @@ struct cmdq {
 	atomic_t		usage;
 	struct workqueue_struct *timeout_wq;
 	spinlock_t		lock;
+	spinlock_t		event_lock;
 	u32			token_cnt;
 	u16			*tokens;
 #if IS_ENABLED(CONFIG_CMDQ_MMPROFILE_SUPPORT)
@@ -2397,6 +2402,7 @@ static int cmdq_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, cmdq);
 
 	spin_lock_init(&cmdq->lock);
+	spin_lock_init(&cmdq->event_lock);
 
 	cmdq_mmp_init();
 
@@ -3030,8 +3036,11 @@ void cmdq_set_event(void *chan, u16 event_id)
 {
 	struct cmdq *cmdq = container_of(((struct mbox_chan *)chan)->mbox,
 		typeof(*cmdq), mbox);
+	unsigned long flags;
 
+	spin_lock_irqsave(&cmdq->event_lock, flags);
 	writel((1L << 16) | event_id, cmdq->base + CMDQ_SYNC_TOKEN_UPD);
+	spin_unlock_irqrestore(&cmdq->event_lock, flags);
 }
 EXPORT_SYMBOL(cmdq_set_event);
 
@@ -3039,8 +3048,11 @@ void cmdq_clear_event(void *chan, u16 event_id)
 {
 	struct cmdq *cmdq = container_of(((struct mbox_chan *)chan)->mbox,
 		typeof(*cmdq), mbox);
+	unsigned long flags;
 
+	spin_lock_irqsave(&cmdq->event_lock, flags);
 	writel(event_id, cmdq->base + CMDQ_SYNC_TOKEN_UPD);
+	spin_unlock_irqrestore(&cmdq->event_lock, flags);
 }
 EXPORT_SYMBOL(cmdq_clear_event);
 
@@ -3048,9 +3060,14 @@ u32 cmdq_get_event(void *chan, u16 event_id)
 {
 	struct cmdq *cmdq = container_of(((struct mbox_chan *)chan)->mbox,
 		typeof(*cmdq), mbox);
+	u32 event_val = 0;
+	unsigned long flags;
 
+	spin_lock_irqsave(&cmdq->event_lock, flags);
 	writel(0x3FF & event_id, cmdq->base + CMDQ_SYNC_TOKEN_ID);
-	return readl(cmdq->base + CMDQ_SYNC_TOKEN_VAL);
+	event_val = readl(cmdq->base + CMDQ_SYNC_TOKEN_VAL);
+	spin_unlock_irqrestore(&cmdq->event_lock, flags);
+	return event_val;
 }
 EXPORT_SYMBOL(cmdq_get_event);
 

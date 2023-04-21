@@ -18,6 +18,10 @@
 #include "mtk-hcp-aee.h"
 #include "mtk-img-ipi.h"
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 //#include "scp_ipi.h"
 
 /**
@@ -339,6 +343,9 @@ struct mtk_hcp {
 	struct task_struct *current_task;
 	struct workqueue_struct *daemon_notify_wq[MODULE_MAX_ID];
 	struct hcp_aee_info aee_info;
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	bool is_mem_alloc;
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 };
 
 struct mtk_hcp_data {

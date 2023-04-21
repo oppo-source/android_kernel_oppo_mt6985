@@ -12,6 +12,10 @@
 
 #define MTK_CAM_INITIAL_REQ_SYNC 0
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 struct mtk_cam_device;
 struct mtk_raw_device;
 
@@ -55,6 +59,9 @@ struct mtk_camsys_irq_info {
 	unsigned int sof_tags;
 	unsigned int done_groups;
 	unsigned int err_tags;
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	int tg_cnt;
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	union {
 		struct mtk_camsys_irq_normal_data	n;
 		struct mtk_camsys_irq_error_data	e;
@@ -106,6 +113,7 @@ struct mtk_camsys_ctrl_state {
 	struct list_head state_element;
 	/* for sof counter between each data in preisp */
 	int sof_cnt_key;
+	int loss_raw_cq_key;
 };
 
 struct mtk_camsys_link_ctrl {
@@ -140,6 +148,14 @@ struct mtk_camsys_sensor_ctrl {
 	/* link change ctrl */
 	struct mtk_camsys_link_ctrl link_ctrl;
 	struct mtk_cam_request *link_change_req;
+	/* ext isp case sof source from PD */
+	u32 extisp_sof_source;
+};
+
+enum {
+	EXTISP_SOF_SOURCE_META = 0,
+	EXTISP_SOF_SOURCE_PD_MRAW,
+	EXTISP_SOF_SOURCE_PD_CAMSV,
 };
 
 enum {
@@ -213,6 +229,7 @@ void mtk_cam_event_esd_recovery(struct mtk_raw_pipeline *pipeline,
 				     unsigned int frame_seq_no);
 
 void mtk_cam_event_error(struct mtk_raw_pipeline *pipeline, char *msg);
+void mtk_cam_event_extisp_camsys_ready(struct mtk_raw_pipeline *pipeline);
 
 int mtk_cam_extisp_prepare_meta(struct mtk_cam_ctx *ctx, int pad_src);
 void mtk_cam_extisp_sv_frame_start(struct mtk_cam_ctx *ctx,

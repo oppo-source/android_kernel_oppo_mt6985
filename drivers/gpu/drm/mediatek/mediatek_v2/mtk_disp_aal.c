@@ -92,6 +92,10 @@ static atomic_t g_force_delay_check_trig = ATOMIC_INIT(0);
 static struct workqueue_struct *aal_flip_wq;
 static struct workqueue_struct *aal_refresh_wq;
 
+#ifdef OPLUS_FEATURE_DISPLAY
+extern unsigned int oplus_display_brightness;
+#endif /* OPLUS_FEATURE_DISPLAY  */
+
 enum AAL_UPDATE_HIST {
 	UPDATE_NONE = 0,
 	UPDATE_SINGLE,
@@ -448,6 +452,9 @@ void disp_aal_notify_backlight_changed(int trans_backlight, int max_backlight)
 		service_flags = AAL_SERVICE_FORCE_UPDATE;
 
 	if (trans_backlight == 0) {
+#ifdef OPLUS_FEATURE_DISPLAY
+		oplus_display_brightness = 0;
+#endif /* OPLUS_FEATURE_DISPLAY  */
 		mtk_leds_brightness_set("lcd-backlight", 0, 0, (0X1<<SET_BACKLIGHT_LEVEL));
 		/* set backlight = 0 may be not from AAL, */
 		/* we have to let AALService can turn on backlight */
@@ -1584,12 +1591,17 @@ int mtk_drm_ioctl_aal_set_ess20_spect_param(struct drm_device *dev, void *data,
 	struct drm_file *file_priv)
 {
 	int ret = 0;
+	unsigned int flag = 0;
 	struct DISP_AAL_ESS20_SPECT_PARAM *param = (struct DISP_AAL_ESS20_SPECT_PARAM *) data;
 
 	memcpy(&g_aal_ess20_spect_param, param, sizeof(*param));
 	AALAPI_LOG("[aal_kernel]ELVSSPN = %d, flag = %d",
 		g_aal_ess20_spect_param.ELVSSPN, g_aal_ess20_spect_param.flag);
-
+	if (g_aal_ess20_spect_param.flag & (1 << ENABLE_DYN_ELVSS)) {
+		AALAPI_LOG("[aal_kernel]enable dyn elvss  flag = %d", g_aal_ess20_spect_param.flag);
+		flag = 1 << ENABLE_DYN_ELVSS;
+		mtk_leds_brightness_set("lcd-backlight", 0, 0, flag);
+	}
 	return ret;
 }
 
@@ -1613,10 +1625,6 @@ int mtk_drm_ioctl_aal_set_param(struct drm_device *dev, void *data,
 	/* since only AALService can set AAL parameters. */
 	memcpy(&g_aal_param, param, sizeof(*param));
 	backlight_value = g_aal_param.FinalBacklight;
-	/* set cabc gain zero when detect backlight */
-	/* setting equal to zero */
-	if (backlight_value == 0)
-		g_aal_param.cabc_fltgain_force = 0;
 
 	mutex_lock(&g_aal_sram_lock);
 	ret = mtk_crtc_user_cmd(crtc, comp, SET_PARAM, data);
@@ -1631,6 +1639,9 @@ int mtk_drm_ioctl_aal_set_param(struct drm_device *dev, void *data,
 		if (g_aal_param.silky_bright_flag == 0) {
 			AALAPI_LOG("backlight_value = %d, silky_bright_flag = %d",
 				backlight_value, g_aal_param.silky_bright_flag);
+#ifdef OPLUS_FEATURE_DISPLAY
+			oplus_display_brightness = g_aal_param.FinalBacklight;
+#endif /* OPLUS_FEATURE_DISPLAY  */
 			mtk_leds_brightness_set("lcd-backlight", backlight_value,
 					g_aal_ess20_spect_param.ELVSSPN,
 					g_aal_ess20_spect_param.flag);
@@ -1642,13 +1653,13 @@ int mtk_drm_ioctl_aal_set_param(struct drm_device *dev, void *data,
 		mtk_trans_gain_to_gamma(crtc, &g_aal_param.silky_bright_gain[0],
 			backlight_value, (void *)&g_aal_ess20_spect_param);
 	} else {
-		AALAPI_LOG("%d", backlight_value);
+		AALAPI_LOG("bl=%d,pn=%d,flag=%d", backlight_value, g_aal_ess20_spect_param.ELVSSPN,
+			g_aal_ess20_spect_param.flag);
 		mtk_leds_brightness_set("lcd-backlight", backlight_value,
 					g_aal_ess20_spect_param.ELVSSPN,
 					g_aal_ess20_spect_param.flag);
 	}
-	g_aal_ess20_spect_param.ELVSSPN = 0;
-	g_aal_ess20_spect_param.flag = (0x01<<SET_BACKLIGHT_LEVEL);
+
 	AALFLOW_LOG("delay refresh: %d", g_aal_param.refreshLatency);
 	if (g_aal_param.refreshLatency == 33)
 		delay_refresh = true;

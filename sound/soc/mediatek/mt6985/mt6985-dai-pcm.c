@@ -147,6 +147,8 @@ static const struct snd_kcontrol_new mtk_pcm_2_playback_ch2_mix[] = {
 				    I_DL4_CH2, 1, 0),
 	SOC_DAPM_SINGLE_AUTODISABLE("DL11_CH2", AFE_CONN18_2,
 				    I_DL11_CH2, 1, 0),
+	SOC_DAPM_SINGLE_AUTODISABLE("DL11_CH3", AFE_CONN18_2,
+				    I_DL11_CH3, 1, 0),
 	SOC_DAPM_SINGLE_AUTODISABLE("HW_SRC_1_OUT_CH2", AFE_CONN18_1,
 				    I_SRC_1_OUT_CH2, 1, 0),
 	SOC_DAPM_SINGLE_AUTODISABLE("I2S0_CH2", AFE_CONN18,
@@ -193,6 +195,8 @@ static const struct snd_kcontrol_new mtk_pcm_2_playback_ch5_mix[] = {
 				    I_DL4_CH2, 1, 0),
 	SOC_DAPM_SINGLE_AUTODISABLE("DL11_CH2", AFE_CONN25_2,
 				    I_DL11_CH2, 1, 0),
+	SOC_DAPM_SINGLE_AUTODISABLE("DL11_CH3", AFE_CONN25_2,
+				    I_DL11_CH3, 1, 0),
 	SOC_DAPM_SINGLE_AUTODISABLE("HW_SRC_3_OUT_CH2", AFE_CONN25_2,
 				    I_SRC_3_OUT_CH2, 1, 0),
 	SOC_DAPM_SINGLE_AUTODISABLE("HW_SRC_2_OUT_CH2", AFE_CONN25_1,
@@ -307,8 +311,10 @@ static const struct snd_soc_dapm_route mtk_dai_pcm_routes[] = {
 
 	{"PCM_2_PB_CH1", "DL11_CH1", "DL11"},
 	{"PCM_2_PB_CH2", "DL11_CH2", "DL11"},
+	{"PCM_2_PB_CH2", "DL11_CH3", "DL11"},
 	{"PCM_2_PB_CH4", "DL11_CH1", "DL11"},
 	{"PCM_2_PB_CH5", "DL11_CH2", "DL11"},
+	{"PCM_2_PB_CH5", "DL11_CH3", "DL11"},
 };
 
 /* dai ops */

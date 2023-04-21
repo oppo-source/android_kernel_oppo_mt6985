@@ -1,5 +1,11 @@
 subdir-ccflags-y += -Werror
 
+#OPLUS_FEATURE_DISPLAY
+#build oplus file into mediatek_drm.ko
+ccflags-y += -I$(srctree)/drivers/gpu/drm/oplus
+ccflags-y += -I$(srctree)/drivers/gpu/drm/mediatek/mediatek_v2
+#end OPLUS_FEATURE_DISPLAY
+
 mediatek-drm-y := mtk_drm_drv.o \
 		  mtk_disp_tdshp.o \
 		  mtk_disp_color.o \
@@ -128,3 +134,22 @@ ccflags-y += -DCCORR_SUPPORT
 
 subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/
 subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat/
+
+#OPLUS_FEATURE_DISPLAY
+ccflags-y += -DOPLUS_FEATURE_DISPLAY_TEMP_COMPENSATION
+ccflags-y += -DOPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
+
+#build oplus file into mediatek_drm.ko
+subdir-ccflags-y += -I$(srctree)/drivers/staging/android/ion/ \
+			-I$(srctree)/drivers/staging/android/ion/mtk
+
+mediatek-drm-y += ../../oplus/oplus_display_private_api.o \
+			../../oplus/oplus_display_panel_power.o \
+			../../oplus/oplus_display_common.o \
+			../../oplus/oplus_display_dc.o \
+			../../oplus/oplus_display_onscreenfingerprint.o \
+			../../oplus/oplus_display_mtk_debug.o \
+			../../oplus/oplus_display_panel.o \
+			../../oplus/oplus_adfr.o \
+			../../oplus/oplus_display_temp_compensation.o
+#end OPLUS_FEATURE_DISPLAY

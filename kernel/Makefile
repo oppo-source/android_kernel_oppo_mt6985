@@ -140,6 +140,28 @@ KASAN_SANITIZE_stackleak.o := n
 KCSAN_SANITIZE_stackleak.o := n
 KCOV_INSTRUMENT_stackleak.o := n
 
+#ifdef OPLUS_FEATURE_OMRG
+obj-$(CONFIG_OPLUS_OMRG) += oplus_cpu/oplus_omrg/
+#endif /* OPLUS_FEATURE_OMRG */
+
+#ifdef OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING
+obj-$(CONFIG_OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING) += oplus_cpu/cpufreq_bouncing/
+#endif /* OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING */
+
+obj-$(CONFIG_OPLUS_CPU_FREQ_GOV_UAG) += oplus_cpu/uad/
+
+#ifdef CONFIG_OPLUS_FEATURE_OCH
+obj-$(CONFIG_OPLUS_FEATURE_OCH) += oplus_cpu/cpufreq_health/
+#endif /* CONFIG_OPLUS_FEATURE_OCH */
+#ifdef OPLUS_FEATURE_PERFORMANCE_SCHED
+obj-$(CONFIG_OPLUS_FEATURE_PERFORMANCE_SCHED) += oplus_cpu/sched/
+#endif /* OPLUS_FEATURE_PERFORMANCE_SCHED */
+
+#ifdef OPLUS_FEATURE_THERMAL
+obj-$(CONFIG_HORAE_THERMAL_SHELL) += oplus_cpu/thermal/
+#endif /* OPLUS_FEATURE_THERMAL */
+
+
 obj-$(CONFIG_SCF_TORTURE_TEST) += scftorture.o
 
 $(obj)/configs.o: $(obj)/config_data.gz

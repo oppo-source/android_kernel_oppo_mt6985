@@ -395,7 +395,7 @@ static struct latched_seq clear_seq = {
 #endif
 
 /* the maximum size of a formatted record (i.e. with prefix added per line) */
-#define CONSOLE_LOG_MAX		1024
+#define CONSOLE_LOG_MAX		2048
 
 /* the maximum size allowed to be reserved for a record */
 #define LOG_LINE_MAX		(CONSOLE_LOG_MAX - PREFIX_MAX)

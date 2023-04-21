@@ -23,6 +23,10 @@
 #include "adaptor-trace.h"
 #include "imgsensor-glue/imgsensor-glue.h"
 #include "virt-sensor/virt-sensor-entry.h"
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+#include <linux/of_gpio.h>
+#include <linux/gpio.h>
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 #undef E
 #define E(__x__) (__x__##_entry)
@@ -294,7 +298,7 @@ static int set_sensor_mode(struct adaptor_ctx *ctx,
 		__v4l2_ctrl_modify_range(ctx->hblank, min, max, 1, def);
 
 		/* vblank */
-		min = def = mode->fll - mode->height;
+		min = def = get_mode_vb(ctx, mode);
 		max = ctx->subctx.max_frame_length - mode->height;
 		__v4l2_ctrl_modify_range(ctx->vblank, min, max, 1, def);
 
@@ -1305,7 +1309,49 @@ ERR_DEBUG_SENSOR_MODE_OPS_STORE:
 }
 
 static DEVICE_ATTR_RW(debug_sensor_mode_ops);
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+static struct task_struct *pg_task = NULL;
+void cam_aon_do_work(struct work_struct *work)
+{
+	int rc = 0;
+	struct kernel_siginfo info;
+	struct adaptor_ctx *ctx =
+			container_of(work, struct adaptor_ctx, aon_wq);
+	dev_info(ctx->dev, "send signal to userspace");
+	if (ctx->irq_cnt == 0) {
+		adaptor_i2c_wr_regs_u8(ctx->subctx.i2c_client, ctx->subctx.i2c_write_id >> 1,
+				ctx->subctx.s_ctx.aonhemd_clear_setting_table, ctx->subctx.s_ctx.aonhemd_clear_setting_len);
+	}
+	if (ctx->pid != 0 && ctx->irq_cnt == 1) {
+		dev_info(ctx->dev, "send signal to app");
+		if (pg_task != NULL)
+			put_task_struct(pg_task);
+		pg_task = get_pid_task(find_vpid(ctx->pid), PIDTYPE_PID);
+		if (pg_task == NULL) {
+			dev_err(ctx->dev, "pg_task = NULL return");
+			return;
+		}
+		info.si_signo = SIGIO;
+		info.si_errno = 0;
+		info.si_code = 1;
+		info.si_addr = NULL;
+		rc = send_sig_info(SIGIO, &info, pg_task);
+		if (rc < 0) {
+			dev_err(ctx->dev, "send_sig_info failed");
+			return;
+		}
+	}
+	ctx->irq_cnt++;
+	return;
+}
 
+static irqreturn_t aon_interupt_handler(int irq, void *data)
+{
+	struct adaptor_ctx *ctx = data;
+	schedule_work(&ctx->aon_wq);
+	return IRQ_HANDLED;
+}
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 static int imgsensor_probe(struct i2c_client *client)
 {
 	struct device *dev = &client->dev;
@@ -1315,6 +1361,12 @@ static int imgsensor_probe(struct i2c_client *client)
 	unsigned int reindex;
 	const char *reindex_match[OF_SENSOR_NAMES_MAXCNT];
 	int reindex_match_cnt;
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	/*Added by rentianzhi@CamDrv, release the hw resource for Explorer AON driver, 20220124*/
+	const char* of_support_explorer_aon = NULL;
+	int irq_flags = 0;
+#endif
 
 	ctx = devm_kzalloc(dev, sizeof(*ctx), GFP_KERNEL);
 	if (!ctx)
@@ -1329,6 +1381,19 @@ static int imgsensor_probe(struct i2c_client *client)
 	ctx->sensor_debug_flag = &sensor_debug;
 	ctx->aov_pm_ops_flag = 0;
 	ctx->aov_mclk_ulposc_flag = 0;
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	/*Added by rentianzhi@CamDrv, release the hw resource for Explorer AON driver, 20220124*/
+	ret = of_property_read_string(ctx->dev->of_node, "support_explorer_aon", &of_support_explorer_aon);
+	if ( !ret && strcmp(of_support_explorer_aon, "true") == 0) {
+		ctx->support_explorer_aon_fl = 1;
+	} else {
+		ctx->support_explorer_aon_fl = 0;
+	}
+	dev_dbg(ctx->dev, "%s support_explorer_aon_fl:%d\n", __func__, ctx->support_explorer_aon_fl);
+	ctx->aon_irq_gpio = of_get_named_gpio(dev->of_node, "aon-irq-gpio", 0);
+	dev_dbg(dev, "parsing dtsi aon_irq_gpio = %d", ctx->aon_irq_gpio);
+#endif
 
 	endpoint = of_graph_get_next_endpoint(dev->of_node, NULL);
 	if (!endpoint) {
@@ -1355,6 +1420,9 @@ static int imgsensor_probe(struct i2c_client *client)
 	ret = search_sensor(ctx);
 	if (ret) {
 		dev_err(dev, "no sensor found\n");
+		#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+		push_sensor_name(ctx->subdrv->name);
+		#endif /* OPLUS_FEATURE_CAMERA_COMMON */
 		return ret;
 	}
 
@@ -1450,6 +1518,22 @@ static int imgsensor_probe(struct i2c_client *client)
 	if (!ctx->sensor_ws)
 		dev_info(dev, "failed to wakeup_source_register\n");
 
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	if (ctx->aon_irq_gpio > 0) {
+		gpio_direction_input(ctx->aon_irq_gpio);
+		if (ret) {
+			dev_err(dev, "aon_irq_gpio request failed\n");
+		}
+		irq_flags = IRQF_TRIGGER_RISING | IRQF_ONESHOT;
+		ret = devm_request_irq(dev, gpio_to_irq(ctx->aon_irq_gpio), aon_interupt_handler,
+					irq_flags, "aon-hemd-irq", ctx);
+		disable_irq(gpio_to_irq(ctx->aon_irq_gpio));
+		INIT_WORK(&ctx->aon_wq, cam_aon_do_work);
+		ctx->pid = 0;
+		ctx->irq_cnt = 0;
+	}
+#endif
+
 	return 0;
 
 free_entity:
@@ -1458,6 +1542,9 @@ free_entity:
 free_ctrl:
 	v4l2_ctrl_handler_free(&ctx->ctrls);
 	mutex_destroy(&ctx->mutex);
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	mutex_destroy(&ctx->hw_mutex);
+#endif
 
 	return ret;
 }
@@ -1489,6 +1576,9 @@ static int imgsensor_remove(struct i2c_client *client)
 	device_remove_file(ctx->dev, &dev_attr_debug_sensor_mode_ops);
 
 	mutex_destroy(&ctx->mutex);
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	mutex_destroy(&ctx->hw_mutex);
+#endif
 
 	return 0;
 }

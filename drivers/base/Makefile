@@ -29,6 +29,9 @@ obj-$(CONFIG_GENERIC_ARCH_NUMA) += arch_numa.o
 obj-y			+= test/
 
 ccflags-$(CONFIG_DEBUG_DRIVER) := -DDEBUG
+#ifdef OPLUS_FEATURE_TP_BASIC
+obj-$(CONFIG_OPLUS_FW_UPDATE)	+=  kernelFwUpdate/
+#endif /*OPLUS_FEATURE_TP_BASIC*/
 
 # define_trace.h needs to know how to find our header
 CFLAGS_trace.o		:= -I$(src)

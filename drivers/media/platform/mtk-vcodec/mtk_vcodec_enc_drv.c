@@ -78,7 +78,7 @@ static int fops_vcodec_open(struct file *file)
 		return -ENOMEM;
 	}
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
-	if (mtk_vcodec_vcp & (1 << MTK_INST_ENCODER)) {
+	if (mtk_vcodec_is_vcp(MTK_INST_ENCODER)) {
 		ret = vcp_register_feature(VENC_FEATURE_ID);
 		if (ret) {
 			mtk_v4l2_err("Failed to vcp_register_feature");
@@ -211,7 +211,7 @@ static int fops_vcodec_release(struct file *file)
 		dev->enc_cnt--;
 	mutex_unlock(&dev->dev_mutex);
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
-	if (mtk_vcodec_vcp & (1 << MTK_INST_ENCODER)) {
+	if (mtk_vcodec_is_vcp(MTK_INST_ENCODER)) {
 		ret = vcp_deregister_feature(VENC_FEATURE_ID);
 		if (ret) {
 			mtk_v4l2_err("Failed to vcp_deregister_feature");
@@ -303,6 +303,7 @@ static int mtk_vcodec_enc_suspend_notifier(struct notifier_block *nb,
 
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
 extern void venc_vcp_probe(struct mtk_vcodec_dev *dev);
+extern void venc_vcp_remove(struct mtk_vcodec_dev *dev);
 #endif
 
 static int mtk_vcodec_enc_probe(struct platform_device *pdev)
@@ -610,6 +611,10 @@ static int mtk_vcodec_enc_remove(struct platform_device *pdev)
 
 	v4l2_device_unregister(&dev->v4l2_dev);
 	mtk_vcodec_release_enc_pm(dev);
+
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
+		venc_vcp_remove(dev);
+#endif
 	return 0;
 }
 

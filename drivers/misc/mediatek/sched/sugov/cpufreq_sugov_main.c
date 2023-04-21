@@ -29,6 +29,17 @@
 #include <linux/sched/cpufreq.h>
 #include <linux/kthread.h>
 #include <thermal_interface.h>
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+#include <../kernel/oplus_cpu/sched/frame_boost/frame_group.h>
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_OMRG)
+#include <linux/oplus_omrg.h>
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_OCH)
+#include <linux/cpufreq_health.h>
+#endif
 
 #define CREATE_TRACE_POINTS
 #include "sugov_trace.h"
@@ -54,6 +65,15 @@ struct sugov_cpu {
 };
 
 static DEFINE_PER_CPU(struct sugov_cpu, sugov_cpu);
+
+/*
+ * dynamic control util_est
+ * 0:disable 1:enable
+ */
+#if IS_ENABLED(CONFIG_MTK_SCHEDULER)
+bool sysctl_util_est = true;
+EXPORT_SYMBOL(sysctl_util_est);
+#endif
 
 /************************ Governor internals ***********************/
 
@@ -85,6 +105,11 @@ static bool sugov_should_update_freq(struct sugov_policy *sg_policy, u64 time)
 		return true;
 	}
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	if (sg_policy->flags & SCHED_CPUFREQ_DEF_FRAMEBOOST)
+		return true;
+#endif
+
 	/* No need to recalculate next freq for min_rate_limit_us
 	 * at least. However we might still decide to further rate
 	 * limit once frequency change direction is decided, according
@@ -101,6 +126,11 @@ static bool sugov_up_down_rate_limit(struct sugov_policy *sg_policy, u64 time,
 	s64 delta_ns;
 
 	delta_ns = time - sg_policy->last_freq_update_time;
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	if (sg_policy->flags & SCHED_CPUFREQ_DEF_FRAMEBOOST)
+		return false;
+#endif
 
 	if (next_freq > sg_policy->next_freq &&
 	    delta_ns < sg_policy->up_rate_delay_ns)
@@ -210,6 +240,7 @@ unsigned long mtk_cpu_util(int cpu, struct util_rq *util_rq,
 	unsigned long util_ori;
 	bool sbb_trigger = false;
 	struct rq *rq = cpu_rq(cpu);
+	unsigned long pointer;
 
 	if (util_rq->base) {
 		util_rq->dl_util = cpu_util_dl(rq);
@@ -222,6 +253,8 @@ unsigned long mtk_cpu_util(int cpu, struct util_rq *util_rq,
 
 	if (!uclamp_is_used() &&
 	    type == FREQUENCY_UTIL && rt_rq_is_runnable(&rq->rt)) {
+		asm volatile("ldur    %[pointer], [sp, #+80]" : [pointer] "=&r" (pointer) :: "memory");
+		dsb(sy);
 		return max;
 	}
 
@@ -231,8 +264,11 @@ unsigned long mtk_cpu_util(int cpu, struct util_rq *util_rq,
 	 * update_irq_load_avg().
 	 */
 	irq = util_rq->irq_util;
-	if (unlikely(irq >= max))
+	if (unlikely(irq >= max)) {
+		asm volatile("ldur    %[pointer], [sp, #+80]" : [pointer] "=&r" (pointer) :: "memory");
+		dsb(sy);
 		return max;
+	}
 
 	/*
 	 * Because the time spend on RT/DL tasks is visible as 'lost' time to
@@ -278,8 +314,11 @@ unsigned long mtk_cpu_util(int cpu, struct util_rq *util_rq,
 	 * NOTE: numerical errors or stop class might cause us to not quite hit
 	 * saturation when we should -- something for later.
 	 */
-	if (util + dl_util >= max)
+	if (util + dl_util >= max) {
+		asm volatile("ldur    %[pointer], [sp, #+80]" : [pointer] "=&r" (pointer) :: "memory");
+		dsb(sy);
 		return max;
+	}
 
 	/*
 	 * OTOH, for energy computation we need the estimated running time, so
@@ -313,6 +352,8 @@ unsigned long mtk_cpu_util(int cpu, struct util_rq *util_rq,
 	if (type == FREQUENCY_UTIL)
 		util += util_rq->bw_dl_util;
 
+	asm volatile("ldur    %[pointer], [sp, #+80]" : [pointer] "=&r" (pointer) :: "memory");
+	dsb(sy);
 	return min(max, util);
 }
 EXPORT_SYMBOL(mtk_cpu_util);
@@ -326,7 +367,7 @@ static void sugov_get_util(struct sugov_cpu *sg_cpu)
 	sg_cpu->max = max;
 	sg_cpu->bw_dl = cpu_bw_dl(rq);
 
-	util_rq_sugov.util_cfs = cpu_util_cfs(rq);
+	util_rq_sugov.util_cfs = mtk_cpu_util_cfs(rq);
 	util_rq_sugov.base = 1;
 	sg_cpu->util = mtk_cpu_util(sg_cpu->cpu, &util_rq_sugov, max, FREQUENCY_UTIL,
 							(struct task_struct *)UINTPTR_MAX,
@@ -527,16 +568,30 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 	u64 ts[2];
 #endif
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	unsigned long irq_flags;
+#endif
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	raw_spin_lock_irqsave(&sg_policy->update_lock, irq_flags);
+#else
 	raw_spin_lock(&sg_policy->update_lock);
+#endif
 
 	sugov_iowait_boost(sg_cpu, time, flags);
 	sg_cpu->last_update = time;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	sg_policy->flags = flags;
+#endif
 
 	ignore_dl_rate_limit(sg_cpu);
 
 	if (!sugov_should_update_freq(sg_policy, time)) {
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+		raw_spin_unlock_irqrestore(&sg_policy->update_lock, irq_flags);
+#else
 		raw_spin_unlock(&sg_policy->update_lock);
+#endif
 		return;
 	}
 
@@ -553,11 +608,18 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 		umax = rq->uclamp[UCLAMP_MAX].value;
 		trace_sugov_ext_util(sg_cpu->cpu, sg_cpu->util, umin, umax);
 	}
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	fbg_freq_policy_util(sg_cpu->sg_policy->flags, sg_policy->policy->cpus, &sg_cpu->util);
+#endif
 
 	next_f = get_next_freq(sg_policy, sg_cpu->util, sg_cpu->max);
 
 	if (!sugov_update_next_freq(sg_policy, time, next_f)) {
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+		raw_spin_unlock_irqrestore(&sg_policy->update_lock, irq_flags);
+#else
 		raw_spin_unlock(&sg_policy->update_lock);
+#endif
 		return;
 	}
 
@@ -582,7 +644,11 @@ static void sugov_update_single(struct update_util_data *hook, u64 time,
 	} else
 		sugov_deferred_update(sg_policy);
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	raw_spin_unlock_irqrestore(&sg_policy->update_lock, irq_flags);
+#else
 	raw_spin_unlock(&sg_policy->update_lock);
+#endif
 }
 
 static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
@@ -616,6 +682,9 @@ static unsigned int sugov_next_freq_shared(struct sugov_cpu *sg_cpu, u64 time)
 			max = j_max;
 		}
 	}
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	fbg_freq_policy_util(sg_policy->flags, policy->cpus, &util);
+#endif
 
 	return get_next_freq(sg_policy, util, max);
 }
@@ -626,14 +695,26 @@ sugov_update_shared(struct update_util_data *hook, u64 time, unsigned int flags)
 	struct sugov_cpu *sg_cpu = container_of(hook, struct sugov_cpu, update_util);
 	struct sugov_policy *sg_policy = sg_cpu->sg_policy;
 	unsigned int next_f;
+
 #if IS_ENABLED(CONFIG_MTK_IRQ_MONITOR_DEBUG)
 	u64 ts[2];
 #endif
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	unsigned long irq_flags;
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	raw_spin_lock_irqsave(&sg_policy->update_lock, irq_flags);
+#else
 	raw_spin_lock(&sg_policy->update_lock);
+#endif
 
 	sugov_iowait_boost(sg_cpu, time, flags);
 	sg_cpu->last_update = time;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	sg_policy->flags = flags;
+#endif
 
 	ignore_dl_rate_limit(sg_cpu);
 
@@ -663,7 +744,11 @@ unlock:
 	/* Critical Task aware thermal throttling, notify thermal */
 	mtk_set_cpu_min_opp_shared(sg_cpu);
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	raw_spin_unlock_irqrestore(&sg_policy->update_lock, irq_flags);
+#else
 	raw_spin_unlock(&sg_policy->update_lock);
+#endif
 }
 
 static void sugov_work(struct kthread_work *work)
@@ -914,12 +999,23 @@ static int sugov_init(struct cpufreq_policy *policy)
 	struct sugov_policy *sg_policy;
 	struct sugov_tunables *tunables;
 	int ret = 0;
+	unsigned int first_cpu;
+	int cluster_id;
 
 	/* State should be equivalent to EXIT */
 	if (policy->governor_data)
 		return -EBUSY;
 
 	cpufreq_enable_fast_switch(policy);
+
+#if IS_ENABLED(CONFIG_OPLUS_OMRG)
+	omrg_cpufreq_register(policy);
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_OCH)
+	if(cpufreq_health_register(policy))
+		pr_err("cpufreq health init failed!\n");
+#endif
 
 	sg_policy = sugov_policy_alloc(policy);
 	if (!sg_policy) {
@@ -963,6 +1059,11 @@ static int sugov_init(struct cpufreq_policy *policy)
 	if (ret)
 		goto fail;
 
+	first_cpu = cpumask_first(policy->related_cpus);
+	cluster_id = topology_physical_package_id(first_cpu);
+	if (cluster_id < MAX_CLUSTERS)
+		init_flag[cluster_id] = 1;
+
 	policy->dvfs_possible_from_any_cpu = 1;
 
 out:
@@ -993,6 +1094,13 @@ static void sugov_exit(struct cpufreq_policy *policy)
 	struct sugov_policy *sg_policy = policy->governor_data;
 	struct sugov_tunables *tunables = sg_policy->tunables;
 	unsigned int count;
+	unsigned int first_cpu;
+	int cluster_id;
+
+	first_cpu = cpumask_first(policy->related_cpus);
+	cluster_id = topology_physical_package_id(first_cpu);
+	if (cluster_id < MAX_CLUSTERS)
+		init_flag[cluster_id] = 0;
 
 	mutex_lock(&global_tunables_lock);
 
@@ -1024,6 +1132,9 @@ static int sugov_start(struct cpufreq_policy *policy)
 	sg_policy->limits_changed		= false;
 	sg_policy->need_freq_update		= false;
 	sg_policy->cached_raw_freq		= 0;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	sg_policy->flags = 0;
+#endif
 
 	for_each_cpu(cpu, policy->cpus) {
 		struct sugov_cpu *sg_cpu = &per_cpu(sugov_cpu, cpu);
@@ -1118,6 +1229,10 @@ static int __init cpufreq_mtk_init(void)
 		pr_info("register android_vh_arch_set_freq_scale failed\n");
 	else
 		topology_clear_scale_freq_source(SCALE_FREQ_SOURCE_ARCH, cpu_possible_mask);
+
+	ret = register_trace_android_vh_map_util_freq_new(nonlinear_map_util_freq, NULL);
+	if (ret)
+		pr_info("register android_vh_map_util_freq failed\n");
 #endif
 
 	return cpufreq_register_governor(&mtk_gov);
@@ -1125,6 +1240,9 @@ static int __init cpufreq_mtk_init(void)
 
 static void __exit cpufreq_mtk_exit(void)
 {
+#if IS_ENABLED(CONFIG_NONLINEAR_FREQ_CTL)
+	unregister_trace_android_vh_map_util_freq_new(nonlinear_map_util_freq, NULL);
+#endif
 	clear_opp_cap_info();
 	cpufreq_unregister_governor(&mtk_gov);
 }

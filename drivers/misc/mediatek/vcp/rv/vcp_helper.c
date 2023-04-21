@@ -167,7 +167,7 @@ static unsigned int vcp_timeout_times;
 
 #endif
 
-static DEFINE_MUTEX(vcp_pw_clk_mutex);
+DEFINE_MUTEX(vcp_pw_clk_mutex);
 static DEFINE_MUTEX(vcp_A_notify_mutex);
 static DEFINE_MUTEX(vcp_feature_mutex);
 
@@ -318,6 +318,7 @@ static int vcp_ipi_dbg_resume_noirq(struct device *dev)
 static void vcp_wait_awake_count(void)
 {
 	int i = 0;
+	unsigned long spin_flags;
 
 	while (vcp_awake_counts[VCP_A_ID] != 0) {
 		i += 1;
@@ -327,7 +328,10 @@ static void vcp_wait_awake_count(void)
 			break;
 		}
 	}
-	pr_info("[VCP] %s wait count: %d\n", __func__, i);
+
+	spin_lock_irqsave(&vcp_awake_spinlock, spin_flags);
+	vcp_awake_counts[VCP_A_ID] = 0;
+	spin_unlock_irqrestore(&vcp_awake_spinlock, spin_flags);
 }
 
 /*
@@ -533,7 +537,7 @@ static void vcp_A_notify_ws(struct work_struct *ws)
 #endif
 	vcp_ready[VCP_A_ID] = 1;
 
-	if (vcp_notify_flag && mmup_enable_count() > 0) {
+	if (vcp_notify_flag) {
 		pr_debug("[VCP] notify blocking call\n");
 		blocking_notifier_call_chain(&vcp_A_notifier_list
 			, VCP_EVENT_READY, NULL);
@@ -687,9 +691,18 @@ static void vcp_err_info_handler(int id, void *prdata, void *data,
  */
 void trigger_vcp_halt(enum vcp_core_id id)
 {
-	int j;
+	int i, j;
 
-	mutex_lock(&vcp_pw_clk_mutex);
+	i = 0;
+	while (!mutex_trylock(&vcp_pw_clk_mutex)) {
+		i += 5;
+		mdelay(5);
+		if (i > VCP_SYNC_TIMEOUT_MS) {
+			pr_notice("[VCP] %s lock fail\n", __func__);
+			return;
+		}
+	}
+
 	if (mmup_enable_count() && vcp_ready[id]) {
 		vcp_dump_last_regs(mmup_enable_count());
 
@@ -700,7 +713,9 @@ void trigger_vcp_halt(enum vcp_core_id id)
 			if (feature_table[j].enable)
 				pr_info("[VCP] Active feature id %d cnt %d\n",
 					j, feature_table[j].enable);
-	}
+		mtk_smi_dbg_hang_detect("VCP EE");
+	} else
+		pr_notice("[VCP] %s not ready\n", __func__);
 	mutex_unlock(&vcp_pw_clk_mutex);
 }
 EXPORT_SYMBOL_GPL(trigger_vcp_halt);
@@ -877,16 +892,16 @@ int vcp_disable_pm_clk(enum feature_id id)
 
 		vcp_disable_irqs();
 		flush_workqueue(vcp_workqueue);
+#if VCP_LOGGER_ENABLE
+		vcp_logger_uninit();
+		flush_workqueue(vcp_logger_workqueue);
+#endif
 		vcp_ready[VCP_A_ID] = 0;
 
 		/* trigger halt isr, force vcp enter wfi */
 		writel(B_GIPC4_SETCLR_1, R_GIPC_IN_SET);
 		wait_vcp_ready_to_reboot();
 
-#if VCP_LOGGER_ENABLE
-		vcp_logger_uninit();
-		flush_workqueue(vcp_logger_workqueue);
-#endif
 #if VCP_BOOT_TIME_OUT_MONITOR
 		del_timer(&vcp_ready_timer[VCP_A_ID].tl);
 #endif
@@ -897,8 +912,8 @@ int vcp_disable_pm_clk(enum feature_id id)
 			readl(VCP_BUS_DEBUG_OUT), waitCnt);
 #endif  // CONFIG_MTK_TINYSYS_VCP_DEBUG_SUPPORT
 
-		vcp_disable_dapc();
 		vcp_wait_awake_count();
+		vcp_disable_dapc();
 
 		ret = pm_runtime_put_sync(vcp_io_devs[VCP_IOMMU_256MB1]);
 		if (ret)

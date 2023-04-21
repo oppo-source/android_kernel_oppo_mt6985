@@ -2267,6 +2267,7 @@ void mmc_start_host(struct mmc_host *host)
 {
 	host->f_init = max(min(freqs[0], host->f_max), host->f_min);
 	host->rescan_disable = 0;
+	printk(KERN_ERR"[single boot xxxxxx %s:%d]\n", __func__, __LINE__);
 
 	if (!(host->caps2 & MMC_CAP2_NO_PRESCAN_POWERUP)) {
 		mmc_claim_host(host);

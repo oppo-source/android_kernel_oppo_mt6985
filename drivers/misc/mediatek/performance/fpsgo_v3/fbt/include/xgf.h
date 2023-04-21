@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Copyright (c) 2019 MediaTek Inc.
+ *
+ * Because fpsgo.ko is dependent on this file,
+ * don't modify this file
  */
 
 #ifndef _XGF_H_
@@ -25,6 +28,7 @@
 #define MAX_DEP_PATH_NUM 50
 #define MAX_DEP_TASK_NUM 100
 #define N 8
+#define MAX_XGF_POLICY_CMD_NUM 10
 
 enum XGF_ERROR {
 	XGF_NOTIFY_OK,
@@ -177,6 +181,7 @@ struct xgf_render {
 	int dep_frames;
 
 	int ema2_enable;
+	int filter_dep_task_enable;
 	struct xgf_ema2_predictor *ema2_pt;
 };
 
@@ -231,6 +236,7 @@ struct xgf_policy_cmd {
 
 	int tgid;
 	int ema2_enable;
+	int filter_dep_task_enable;
 	unsigned long long ts;
 };
 

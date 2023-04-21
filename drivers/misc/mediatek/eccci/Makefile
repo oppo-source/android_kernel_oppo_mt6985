@@ -79,8 +79,9 @@ ccci_md_all-$(CCCI_OBJ) += fsm/ccci_fsm.o \
 			fsm/modem_sys1.o \
 			fsm/md_sys1_platform.o \
 			fsm/ap_md_reg_dump.o \
-			fsm/ap_md_mem.o
-
+			fsm/ap_md_mem.o \
+			fsm/oplus_criticallog.o \
+			fsm/criticallog_class.o
 # fsm end
 
 # plat start

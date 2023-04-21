@@ -317,7 +317,8 @@ unsigned int mtk_cam_sv_format_sel(unsigned int pixel_fmt);
 unsigned int mtk_cam_sv_pak_sel(unsigned int tg_fmt,
 	unsigned int pixel_mode);
 unsigned int mtk_cam_sv_xsize_cal(
-	struct mtkcam_ipi_input_param *cfg_in_param);
+	struct mtkcam_ipi_input_param *cfg_in_param,
+	int img_fmt);
 int mtk_cam_sv_central_common_config(struct mtk_camsv_device *dev,
 	unsigned int sub_ratio);
 int mtk_cam_sv_dmao_common_config(struct mtk_camsv_device *dev);
@@ -335,7 +336,7 @@ int mtk_cam_sv_central_common_enable(struct mtk_camsv_device *dev);
 int mtk_cam_sv_fbc_disable(struct mtk_camsv_device *dev, unsigned int tag_idx);
 int mtk_cam_sv_enquehwbuf(struct mtk_camsv_device *dev,
 	dma_addr_t ba, unsigned int seq_no, unsigned int tag);
-int mtk_cam_sv_apply_all_buffers(struct mtk_cam_ctx *ctx);
+int mtk_cam_sv_apply_all_buffers(struct mtk_cam_ctx *ctx, int initial);
 unsigned int mtk_cam_get_sv_tag_index(struct mtk_cam_ctx *ctx,
 		unsigned int pipe_id);
 int mtk_cam_sv_dev_pertag_write_rcnt(

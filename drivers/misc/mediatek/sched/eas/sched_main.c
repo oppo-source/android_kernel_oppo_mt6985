@@ -21,6 +21,9 @@
 #include "common.h"
 #include "eas_plus.h"
 #include "sched_sys_common.h"
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+#include <../kernel/oplus_cpu/sched/sched_assist/sa_common.h>
+#endif
 #include "sugov/cpufreq.h"
 
 #define CREATE_TRACE_POINTS
@@ -124,6 +127,13 @@ static void sched_queue_task_hook(void *data, struct rq *rq, struct task_struct 
 		printk_deferred("%s duration %llu, ts[0]=%llu, ts[1]=%llu\n",
 				__func__, ts[1] - ts[0], ts[0], ts[1]);
 	}
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+	if (type == enqueue)
+		android_rvh_enqueue_task_handler(data, rq, p, flags);
+	else
+		android_rvh_dequeue_task_handler(data, rq, p, flags);
 #endif
 }
 
@@ -322,6 +332,49 @@ static long eas_ioctl_impl(struct file *filp,
 		if (easctl_copy_from_user(&val, (void *)arg, sizeof(unsigned int)))
 			return -1;
 		set_sbb_active_ratio(val);
+		break;
+	case EAS_TURN_POINT_UTIL_C0:
+		if (easctl_copy_from_user(&val, (void *)arg, sizeof(unsigned int)))
+			return -1;
+		set_turn_point_freq(0, val);
+		break;
+	case EAS_TURN_POINT_UTIL_C1:
+		if (easctl_copy_from_user(&val, (void *)arg, sizeof(unsigned int)))
+			return -1;
+		set_turn_point_freq(1, val);
+		break;
+	case EAS_TURN_POINT_UTIL_C2:
+		if (easctl_copy_from_user(&val, (void *)arg, sizeof(unsigned int)))
+			return -1;
+		set_turn_point_freq(2, val);
+		break;
+	case EAS_TARGET_MARGIN_C0:
+		if (easctl_copy_from_user(&val, (void *)arg, sizeof(unsigned int)))
+			return -1;
+		set_target_margin(0, val);
+		break;
+	case EAS_TARGET_MARGIN_C1:
+		if (easctl_copy_from_user(&val, (void *)arg, sizeof(unsigned int)))
+			return -1;
+		set_target_margin(1, val);
+		break;
+	case EAS_TARGET_MARGIN_C2:
+		if (easctl_copy_from_user(&val, (void *)arg, sizeof(unsigned int)))
+			return -1;
+		set_target_margin(2, val);
+		break;
+	case EAS_UTIL_EST_CONTROL:
+		if (easctl_copy_from_user(&val, (void *)arg, sizeof(unsigned int)))
+			return -1;
+		set_util_est_ctrl(val);
+		break;
+	case EAS_SET_TASK_IDLE_PREFER:
+		if (easctl_copy_from_user(&val, (void *)arg, sizeof(unsigned int)))
+			return -1;
+		if (val > 0)
+			set_task_idle_prefer(val, 1);
+		else if (val < 0)
+			set_task_idle_prefer(val * -1, 0);
 		break;
 	default:
 		pr_debug(TAG "%s %d: unknown cmd %x\n",

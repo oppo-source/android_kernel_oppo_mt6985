@@ -137,6 +137,7 @@ static const struct snd_soc_dapm_route mtk_dai_hostless_routes[] = {
 	{"Hostless_Sph_Echo_Ref_UL", NULL, "I2S0"},
 	{"Hostless_Sph_Echo_Ref_UL", NULL, "I2S2"},
 
+
 	/* Hostless_Spk_Init_DAI */
 	{"I2S1", NULL, "Hostless_Spk_Init_DL"},
 	{"I2S3", NULL, "Hostless_Spk_Init_DL"},
@@ -253,9 +254,16 @@ static int mtk_dai_hostless_prepare(struct snd_pcm_substream *substream,
 	return 0;
 }
 
+static int mtk_dai_hostless_trigger(struct snd_pcm_substream *substream,
+				    int cmd, struct snd_soc_dai *dai)
+{
+	return 0;
+}
+
 static const struct snd_soc_dai_ops mtk_dai_hostless_ops = {
 	.startup = mtk_dai_hostless_startup,
 	.prepare = mtk_dai_hostless_prepare,
+	.trigger = mtk_dai_hostless_trigger,
 };
 
 /* dai driver */

@@ -5,6 +5,7 @@
  */
 
 #include<linux/leds-mtk.h>
+#include "../drivers/gpu/drm/mediatek/mediatek_v2/mtk_panel_ext.h"
 
 extern struct list_head leds_list;
 
@@ -31,7 +32,9 @@ struct mt_led_data {
 		int brightness, unsigned int params, unsigned int params_flag);
 	struct mutex	led_access;
 };
-
+#ifdef OPLUS_FEATURE_DISPLAY_APOLLO
+unsigned int mBrightnessValue = 1;
+#endif /* OPLUS_FEATURE_DISPLAY_APOLLO */
 int mt_leds_parse_dt(struct mt_led_data *mdev, struct fwnode_handle *fwnode);
 int mt_leds_classdev_register(struct device *parent,
 					 struct mt_led_data *led_dat);

@@ -26,11 +26,25 @@
 #include "mtk_disp_c3d.h"
 #include "mtk_disp_gamma.h"
 #include "mtk_disp_oddmr/mtk_disp_oddmr.h"
+#include "mtk_drm_trace.h"
+
 #ifdef CONFIG_MTK_SMI_EXT
 #include "smi_public.h"
 #endif
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
 #include "vcp_status.h"
+#endif
+
+#ifdef OPLUS_FEATURE_DISPLAY
+#include <soc/oplus/system/oplus_mm_kevent_fb.h>
+#endif
+
+#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+#include "mtk_drm_trace.h"
+#include "oplus_adfr.h"
+extern unsigned long long last_rdma_start_time;
+extern int g_commit_pid;
+extern int oplus_adfr_cancel_fakeframe(void);
 #endif
 
 #define DISPSYS0	0
@@ -15515,6 +15529,10 @@ void mtk_disp_mutex_submit_sof(struct mtk_disp_mutex *mutex)
 		}
 	}
 }
+
+#ifdef OPLUS_FEATURE_DISPLAY_APOLLO
+unsigned long long mutex_sof_ns = 0;
+#endif /* OPLUS_FEATURE_DISPLAY_APOLLO */
 static irqreturn_t mtk_disp_mutex_irq_handler(int irq, void *dev_id)
 {
 	struct mtk_ddp *ddp = dev_id;
@@ -15549,6 +15567,8 @@ static irqreturn_t mtk_disp_mutex_irq_handler(int irq, void *dev_id)
 		if (val & (0x1 << (m_id + DISP_MUTEX_TOTAL))) {
 			DDPIRQ("[IRQ] mutex%d eof!\n", m_id);
 			DRM_MMP_MARK(mutex[m_id], val, 1);
+			if (m_id == 0)
+				drm_trace_tag_mark("mutex0_eof");
 			if (mtk_crtc && mtk_crtc->esd_ctx) {
 				if (priv && priv->data->mmsys_id == MMSYS_MT6985)
 					atomic_set(&mtk_crtc->esd_ctx->target_time, 0);
@@ -15562,14 +15582,29 @@ static irqreturn_t mtk_disp_mutex_irq_handler(int irq, void *dev_id)
 		if (val & (0x1 << m_id)) {
 			DDPIRQ("[IRQ] mutex%d sof!\n", m_id);
 			DRM_MMP_MARK(mutex[m_id], val, 0);
+			if (m_id == 0)
+				drm_trace_tag_mark("mutex0_sof");
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
 			if (m_id == 0) {
 				//hint vcp display SOF
 				vcp_cmd_ex(VCP_SET_DISP_SYNC);
 			}
 #endif
-			if (m_id == 0 && ddp->data->wakeup_pf_wq)
+			if (m_id == 0 && ddp->data->wakeup_pf_wq) {
+				mtk_crtc->sof_time = ktime_get();
 				mtk_wakeup_pf_wq();
+#ifdef OPLUS_FEATURE_DISPLAY_APOLLO
+				mutex_sof_ns = ktime_get();
+#endif /* OPLUS_FEATURE_DISPLAY_APOLLO */
+				#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+				last_rdma_start_time = sched_clock();
+				mtk_drm_trace_c("%d|smutex sof|%d", g_commit_pid, 1);
+				mtk_drm_trace_c("%d|smutex sof|%d", g_commit_pid, 0);
+				if (oplus_adfr_fakeframe_is_enable()) {
+					oplus_adfr_cancel_fakeframe();
+				}
+				#endif /* OPLUS_FEATURE_DISPLAY_ADFR */
+			}
 			if (disp_helper_get_stage() == DISP_HELPER_STAGE_NORMAL) {
 				irq_debug[3] = sched_clock();
 				mtk_drm_cwb_backup_copy_size();
@@ -17378,12 +17413,9 @@ void mmsys_config_dump_analysis_mt6895(void __iomem *config_regs)
 	char *name = NULL;
 	unsigned int valid[6] = {0};
 	unsigned int ready[6] = {0};
-	unsigned int greq0 =
-		readl_relaxed(config_regs +
-				MT6895_DISP_REG_CONFIG_SMI_LARB0_GREQ);
-	unsigned int greq1 =
-		readl_relaxed(config_regs +
-				MT6895_DISP_REG_CONFIG_SMI_LARB1_GREQ);
+	unsigned int greq0 = 0;
+	unsigned int greq1 = 0;
+
 	valid[0] =
 		readl_relaxed(config_regs + MT6895_DISP_REG_CONFIG_DL_VALID_0);
 	valid[1] =
@@ -17410,6 +17442,10 @@ void mmsys_config_dump_analysis_mt6895(void __iomem *config_regs)
 	ready[5] =
 		readl_relaxed(config_regs + MT6895_DISP_REG_CONFIG_DL_READY_5);
 
+	greq0 = readl_relaxed(config_regs +
+				MT6895_DISP_REG_CONFIG_SMI_LARB0_GREQ);
+	greq1 = readl_relaxed(config_regs +
+				MT6895_DISP_REG_CONFIG_SMI_LARB1_GREQ);
 	DDPDUMP("== DISP MMSYS_CONFIG ANALYSIS ==\n");
 	reg = readl_relaxed(config_regs + DISP_REG_CONFIG_MMSYS_CG_CON0_MT6895);
 	for (bit = 0; bit < 32; bit++) {
@@ -18464,6 +18500,9 @@ SKIP_OVLSYS_CONFIG:
 		DDPAEE("%s:%d, failed to request irq:%d ret:%d\n",
 				__func__, __LINE__,
 				irq, ret);
+#ifdef OPLUS_FEATURE_DISPLAY
+		mm_fb_display_kevent("DisplayDriverID@@504$$", MM_FB_KEY_RATELIMIT_1H, "mtk_ddp_probe failed to request irq:%d ret:%d", irq, ret);
+#endif
 		return ret;
 	}
 

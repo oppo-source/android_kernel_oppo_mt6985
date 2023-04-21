@@ -24,6 +24,7 @@
 #include "ged.h"
 #include "ged_dvfs.h"
 #include "ged_dcs.h"
+#include "ged_kpi.h"
 
 #if defined(CONFIG_MTK_GPUFREQ_V2)
 #include <ged_gpufreq_v2.h>
@@ -160,6 +161,12 @@ static void ged_notify_sw_sync_work_handle(struct work_struct *psWork)
 			}
 			ged_set_backup_timer_timeout(timeout_value);   // set init value
 
+#if defined(MTK_GPU_FW_IDLE)
+			/* set initial idle time to 5ms if runtime policy stay default flavor */
+			if (ged_kpi_is_fw_idle_policy_enable() == -1)
+				mtk_set_gpu_idle(5);
+#endif /* MTK_GPU_FW_IDLE */
+
 			temp = 0;
 			/* if callback is queued, send mode off to real driver */
 			ged_sw_vsync_event(false);
@@ -182,6 +189,11 @@ static void ged_notify_sw_sync_work_handle(struct work_struct *psWork)
 		}
 		mutex_unlock(&gsPolicyLock);
 	}
+#if defined(MTK_GPU_FW_IDLE)
+	/* set initial idle time to 5ms if runtime policy stay default flavor */
+	if (ged_kpi_is_fw_idle_policy_enable() == -1)
+		mtk_set_gpu_idle(5);
+#endif /* MTK_GPU_FW_IDLE */
 }
 
 #define GED_VSYNC_MISS_QUANTUM_NS 16666666
@@ -189,7 +201,6 @@ static void ged_notify_sw_sync_work_handle(struct work_struct *psWork)
 #ifdef ENABLE_COMMON_DVFS
 static unsigned long long hw_vsync_ts;
 #endif
-static unsigned long long g_ns_gpu_on_ts;
 static unsigned long long g_ns_gpu_off_ts;
 
 static bool g_timer_on;
@@ -234,9 +245,6 @@ void ged_set_backup_timer_timeout(u64 time_out)
 		g_fallback_time_out = time_out;
 	else
 		g_fallback_time_out = GED_DVFS_FB_TIMER_TIMEOUT;
-
-	ged_log_perf_trace_counter("lb_timer",
-		(long long)g_fallback_time_out / 1000000, 5566, 0, 0);
 }
 
 
@@ -490,8 +498,10 @@ void ged_dvfs_gpu_clock_switch_notify(enum ged_gpu_power_state power_state)
 			ged_log_buf_print(ghLogBuf_DVFS,
 				"[GED_K] Timer Already Start");
 		} else {
+			mutex_lock(&gsPolicyLock);
 			hrtimer_start(&g_HT_hwvsync_emu,
-			ns_to_ktime(GED_DVFS_TIMER_TIMEOUT), HRTIMER_MODE_REL);
+				ns_to_ktime(GED_DVFS_TIMER_TIMEOUT), HRTIMER_MODE_REL);
+			mutex_unlock(&gsPolicyLock);
 			ged_log_buf_print(ghLogBuf_DVFS,
 				"[GED_K] HW Start Timer");
 			timer_switch(true);

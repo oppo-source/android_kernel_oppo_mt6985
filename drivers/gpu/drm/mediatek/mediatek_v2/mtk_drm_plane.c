@@ -152,6 +152,10 @@ static struct mtk_drm_property mtk_plane_property[PLANE_PROP_MAX] = {
 	{DRM_MODE_PROP_ATOMIC, "BUFFER_ALLOC_ID", 0, ULONG_MAX, 0},	/* 10 */
 	{DRM_MODE_PROP_ATOMIC, "OVL_CSC_SET_BRIGHTNESS", 0, ULONG_MAX, 0},
 	{DRM_MODE_PROP_ATOMIC, "OVL_CSC_SET_COLORTRANSFORM", 0, ULONG_MAX, 0},
+#ifdef OPLUS_FEATURE_DISPLAY_PANELCHAPLIN
+	{DRM_MODE_PROP_ATOMIC, "IS_BT2020", 0, UINT_MAX, 0},
+#endif
+
 };
 
 static void mtk_plane_reset(struct drm_plane *plane)
@@ -481,7 +485,7 @@ static void mtk_plane_atomic_update(struct drm_plane *plane,
 		mtk_plane_state->pending.pitch = pitch;
 		mtk_plane_state->pending.format = fb->format->format;
 		mtk_plane_state->pending.addr = (dma_addr_t)(mtk_crtc->mml_ir_sram.data.paddr);
-		mtk_plane_state->pending.modifier = MTK_FMT_NONE;
+		mtk_plane_state->pending.modifier = fb->modifier;
 		mtk_plane_state->pending.size = pitch  * height;
 		mtk_plane_state->pending.src_x = 0;
 		mtk_plane_state->pending.src_y = 0;

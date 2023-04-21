@@ -106,8 +106,10 @@
 
 		mt6363keys: mt6363keys {
 			compatible = "mediatek,mt6363-keys";
-			mediatek,long-press-mode = <1>;
-			power-off-time-sec = <0>;
+			//#ifdef OPLUS_BUG_STABILITY
+			mediatek,long-press-mode = <2>;
+			power-off-time-sec = <1>;
+			//#endif
 
 			power {
 				linux,keycodes = <116>;

@@ -18,6 +18,11 @@
 
 #define MTK_CTD_DRV_VERSION	"1.0.0_MTK"
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/*oplus add for charge*/
+extern bool oplus_chg_wake_update_work(void);
+#endif
+
 struct mtk_ctd_info {
 	struct device *dev;
 	/* device tree */
@@ -120,6 +125,10 @@ static int typec_attach_thread(void *data)
 		if (ret < 0)
 			dev_info(mci->dev,
 				 "%s: fail to set online(%d)\n", __func__, ret);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/*oplus add for charge*/
+		oplus_chg_wake_update_work();
+#endif
 	}
 	return ret;
 }

@@ -42,6 +42,10 @@ void fs_alg_dump_fs_inst_data(const unsigned int idx);
 void fs_alg_dump_all_fs_inst_data(void);
 
 
+void fs_alg_get_fl_rec_st_info(const unsigned int idx,
+	unsigned int *p_target_min_fl_us, unsigned int *p_out_fl_us);
+
+
 /*******************************************************************************
  * fs algo operation functions (set information data)
  ******************************************************************************/
@@ -52,7 +56,9 @@ void fs_alg_set_anti_flicker(unsigned int idx, unsigned int flag);
 void fs_alg_set_extend_framelength(unsigned int idx,
 	unsigned int ext_fl_lc, unsigned int ext_fl_us);
 
-void fs_alg_seamless_switch(unsigned int idx);
+void fs_alg_seamless_switch(const unsigned int idx,
+	struct fs_seamless_st *p_seamless_info,
+	const struct fs_sa_cfg *p_sa_cfg);
 
 void fs_alg_update_tg(unsigned int idx, unsigned int tg);
 

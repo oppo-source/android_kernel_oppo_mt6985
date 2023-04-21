@@ -167,7 +167,9 @@ void mtk_vcodec_release_dec_pm(struct mtk_vcodec_dev *dev)
 void mtk_vcodec_dec_pw_on(struct mtk_vcodec_pm *pm)
 {
 	int ret, larb_index;
+	struct mtk_vcodec_dev *dev = container_of(pm, struct mtk_vcodec_dev, pm);
 
+	atomic_inc(&dev->dec_larb_ref_cnt);
 	for (larb_index = 0; larb_index < MTK_VDEC_MAX_LARB_COUNT; larb_index++) {
 		if (pm->larbvdecs[larb_index]) {
 			ret = mtk_smi_larb_get(pm->larbvdecs[larb_index]);
@@ -181,7 +183,27 @@ void mtk_vcodec_dec_pw_on(struct mtk_vcodec_pm *pm)
 void mtk_vcodec_dec_pw_off(struct mtk_vcodec_pm *pm)
 {
 	int larb_index;
+	int hw_lock_cnt = 0, i;
+	struct mtk_vcodec_dev *dev = container_of(pm, struct mtk_vcodec_dev, pm);
 
+	if (atomic_read(&dev->dec_larb_ref_cnt) <= 0) {
+		mtk_v4l2_err("dec_larb_ref_cnt %d invalid !!",
+			atomic_read(&dev->dec_larb_ref_cnt));
+		// BUG();
+		// return;
+	}
+	for (i = 0; i < MTK_VDEC_HW_NUM; i++)
+		hw_lock_cnt += atomic_read(&dev->dec_hw_active[i]);
+	if (atomic_read(&dev->dec_larb_ref_cnt) == 1 && hw_lock_cnt > 0) {
+		mtk_v4l2_err("error off last larb ref cnt (%d) when some hw locked %d (%d %d)",
+			atomic_read(&dev->dec_larb_ref_cnt), hw_lock_cnt,
+			atomic_read(&dev->dec_hw_active[MTK_VDEC_LAT]),
+			atomic_read(&dev->dec_hw_active[MTK_VDEC_CORE]));
+		// BUG();
+		dump_stack();
+		// return;
+	}
+	atomic_dec(&dev->dec_larb_ref_cnt);
 	for (larb_index = 0; larb_index < MTK_VDEC_MAX_LARB_COUNT; larb_index++) {
 		if (pm->larbvdecs[larb_index])
 			mtk_smi_larb_put(pm->larbvdecs[larb_index]);
@@ -413,7 +435,6 @@ void mtk_vcodec_dec_clock_on(struct mtk_vcodec_pm *pm, int hw_id)
 	int j, ret;
 	struct mtk_vcodec_dev *dev;
 	void __iomem *vdec_racing_addr;
-	int larb_index;
 	int clk_id;
 	struct mtk_vdec_clks_data *clks_data;
 	unsigned long flags;
@@ -421,15 +442,10 @@ void mtk_vcodec_dec_clock_on(struct mtk_vcodec_pm *pm, int hw_id)
 	time_check_start(MTK_FMT_DEC, hw_id);
 
 	clks_data = &pm->vdec_clks_data;
+	dev = container_of(pm, struct mtk_vcodec_dev, pm);
+	atomic_inc(&dev->dec_clk_ref_cnt[hw_id]);
 
-	for (larb_index = 0; larb_index < MTK_VDEC_MAX_LARB_COUNT; larb_index++) {
-		if (pm->larbvdecs[larb_index]) {
-			ret = mtk_smi_larb_get(pm->larbvdecs[larb_index]);
-			if (ret)
-				mtk_v4l2_err("Failed to get vdec larb. index: %d, hw_id: %d",
-					larb_index, hw_id);
-		}
-	}
+	mtk_vcodec_dec_pw_on(pm);
 
 	// enable main clocks
 	for (j = 0; j < clks_data->main_clks_len; j++) {
@@ -474,7 +490,6 @@ void mtk_vcodec_dec_clock_on(struct mtk_vcodec_pm *pm, int hw_id)
 		return;
 	}
 
-	dev = container_of(pm, struct mtk_vcodec_dev, pm);
 	if (!ret) {
 		spin_lock_irqsave(&dev->dec_power_lock[hw_id], flags);
 		dev->dec_is_power_on[hw_id] = true;
@@ -538,14 +553,20 @@ void mtk_vcodec_dec_clock_off(struct mtk_vcodec_pm *pm, int hw_id)
 	struct mtk_vcodec_dev *dev;
 	void __iomem *vdec_racing_addr;
 	int i;
-	int larb_index;
 	int clk_id;
 	struct mtk_vdec_clks_data *clks_data;
 	unsigned long flags;
 
 	clks_data = &pm->vdec_clks_data;
-
 	dev = container_of(pm, struct mtk_vcodec_dev, pm);
+	if (atomic_read(&dev->dec_clk_ref_cnt[hw_id]) <= 0) {
+		mtk_v4l2_err("dec_clk_ref_cnt[%d] %d invalid !!",
+			hw_id, atomic_read(&dev->dec_larb_ref_cnt));
+		// BUG();
+		// return;
+	}
+	atomic_dec(&dev->dec_clk_ref_cnt[hw_id]);
+
 	if (pm->mtkdev->vdec_hw_ipm == VCODEC_IPM_V2) {
 		mutex_lock(&pm->dec_racing_info_mutex);
 		if (atomic_dec_and_test(&pm->dec_active_cnt)) {
@@ -602,11 +623,7 @@ void mtk_vcodec_dec_clock_off(struct mtk_vcodec_pm *pm, int hw_id)
 		}
 	}
 
-	for (larb_index = 0; larb_index < MTK_VDEC_MAX_LARB_COUNT; larb_index++) {
-		if (pm->larbvdecs[larb_index])
-			mtk_smi_larb_put(pm->larbvdecs[larb_index]);
-	}
-
+	mtk_vcodec_dec_pw_off(pm);
 #endif
 }
 

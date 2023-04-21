@@ -146,7 +146,7 @@ void mmc_mtk_biolog_send_command(__u16 task_id, struct mmc_request *mrq)
 		ctx->period_start_t = tsk->t[tsk_send_cmd];
 
 	ctx->q_depth++;
-	mtk_btag_mictx_update(mmc_mtk_btag, 0, ctx->q_depth, 0);
+	mtk_btag_mictx_update(mmc_mtk_btag, 0, ctx->q_depth, 0, 0);
 
 	spin_unlock_irqrestore(&ctx->lock, flags);
 }
@@ -209,7 +209,7 @@ void mmc_mtk_biolog_transfer_req_compl(struct mmc_host *mmc,
 		ctx->q_depth = 0;
 	else
 		ctx->q_depth--;
-	mtk_btag_mictx_update(mmc_mtk_btag, 0, ctx->q_depth, 0);
+	mtk_btag_mictx_update(mmc_mtk_btag, 0, ctx->q_depth, 0, 1);
 	mtk_btag_mictx_accumulate_weight_qd(mmc_mtk_btag, 0,
 					    tsk->t[tsk_send_cmd],
 					    tsk->t[tsk_req_compl]);
@@ -267,6 +267,7 @@ static struct mtk_btag_trace *mmc_mtk_bio_print_trace(
 	memcpy(&tr->workload, &ctx->workload, sizeof(struct mtk_btag_workload));
 
 	tr->time = sched_clock();
+	tr->flags |= BTAG_TR_READY;
 	mtk_btag_next_trace(rt);
 out:
 	spin_unlock_irqrestore(&rt->lock, flags);

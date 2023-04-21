@@ -51,7 +51,11 @@
 #define MAX_SV_PIPES_PER_STREAM (MAX_PIPES_PER_STREAM-1)
 #define MAX_MRAW_PIPES_PER_STREAM (MAX_PIPES_PER_STREAM-1)
 
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+#define MTK_CAM_CTX_WATCHDOG_INTERVAL	150
+#else
 #define MTK_CAM_CTX_WATCHDOG_INTERVAL	100
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 /*stagger sensor stability option for camsys*/
 #define STAGGER_CQ_LAST_SOF 1
@@ -432,8 +436,17 @@ struct mtk_cam_watchdog_data {
 	atomic_t watchdog_dumped;
 	atomic_t watchdog_dump_cnt;
 	struct work_struct watchdog_work;
+	struct completion watchdog_complete;
 	u64 watchdog_time_diff_ns;
 };
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+struct mtk_cam_m2m_watchdog {  /* independent from sensor */
+	struct timer_list timer;
+	struct mtk_cam_watchdog_data data;
+	bool is_running;
+};
+#endif
 
 struct mtk_cam_dvfs_tbl {
 	int opp_cnt[MTK_CAM_OPP_TBL_MAX];
@@ -542,6 +555,10 @@ struct mtk_cam_ctx {
 	struct timer_list watchdog_timer;
 	struct mtk_cam_watchdog_data watchdog_data[MTKCAM_SUBDEV_MAX];
 
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	struct mtk_cam_m2m_watchdog m2m_watchdog;
+#endif
+
 	/* To support debug dump */
 	struct mtkcam_ipi_config_param config_params;
 	/* Serialize raw-sensor switch operations */
@@ -562,6 +579,7 @@ struct mtk_cam_device {
 	struct media_device media_dev;
 	void __iomem *base;
 	void __iomem *adl_base;
+	void __iomem *mraw_base;
 	//TODO: for real SCP
 	//struct device *smem_dev;
 	//struct platform_device *scp_pdev; /* only for scp case? */
@@ -1009,7 +1027,11 @@ static inline bool mtk_cam_ctx_support_pure_raw_with_sv(struct mtk_cam_ctx *ctx)
 
 static inline bool mtk_cam_ctx_has_raw(struct mtk_cam_ctx *ctx)
 {
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	return (ctx && ctx->used_raw_num > 0 && ctx->pipe);
+#else/*OPLUS_FEATURE_CAMERA_COMMON*/
 	return (ctx && ctx->used_raw_num > 0);
+#endif/*OPLUS_FEATURE_CAMERA_COMMON*/
 }
 
 static inline bool mtk_cam_is_raw_switch_req(struct mtk_cam_request *req,
@@ -1056,8 +1078,12 @@ int mtk_cam_ctx_stream_off(struct mtk_cam_ctx *ctx);
 bool watchdog_scenario(struct mtk_cam_ctx *ctx);
 void mtk_ctx_watchdog_kick(struct mtk_cam_ctx *ctx, int pipe_id);
 void mtk_ctx_watchdog_start(struct mtk_cam_ctx *ctx, int timeout_cnt, int pipe_id);
-void mtk_ctx_watchdog_stop(struct mtk_cam_ctx *ctx, int pipe_id);
-
+void mtk_ctx_watchdog_stop(struct mtk_cam_ctx *ctx, int pipe_id, int ctx_streamoff);
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+void mtk_ctx_m2m_watchdog_kick(struct mtk_cam_ctx *ctx);
+void mtk_ctx_m2m_watchdog_start(struct mtk_cam_ctx *ctx, int timeout_cnt);
+void mtk_ctx_m2m_watchdog_stop(struct mtk_cam_ctx *ctx);
+#endif
 // FIXME: refine following
 void mtk_cam_dev_req_enqueue(struct mtk_cam_device *cam,
 			     struct mtk_cam_request *req);

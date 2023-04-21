@@ -56,6 +56,9 @@
 #define CCORR_CLIP(val, min, max) ((val >= max) ? \
 	max : ((val <= min) ? min : val))
 
+#ifdef OPLUS_FEATURE_DISPLAY
+extern unsigned int oplus_display_brightness;
+#endif /* OPLUS_FEATURE_DISPLAY  */
 static unsigned int g_ccorr_8bit_switch[DISP_CCORR_TOTAL];
 static unsigned int g_ccorr_relay_value[DISP_CCORR_TOTAL];
 
@@ -618,8 +621,12 @@ void disp_pq_notify_backlight_changed(int bl_1024)
 	DDPINFO("%s: %d\n", __func__, bl_1024);
 
 	if (m_new_pq_persist_property[DISP_PQ_CCORR_SILKY_BRIGHTNESS]) {
-		if (default_comp != NULL &&
-			g_ccorr_relay_value[index_of_ccorr(default_comp->id)] != 1) {
+		if (default_comp != NULL
+			#ifdef OPLUS_FEATURE_DISPLAY_APOLLO
+			/* to keep value of backlight for FOD while screen is turning on */
+			/* &&g_ccorr_relay_value[index_of_ccorr(default_comp->id)] != 1 */
+			#endif /* OPLUS_FEATURE_DISPLAY_APOLLO */
+			) {
 			atomic_set(&g_irq_backlight_change, 1);
 			disp_ccorr_set_interrupt(default_comp, 1);
 
@@ -976,6 +983,9 @@ int mtk_drm_ioctl_set_ccorr(struct drm_device *dev, void *data,
 			DDPINFO("brightness = %d, silky_bright_flag = %d",
 				ccorr_config->FinalBacklight,
 				ccorr_config->silky_bright_flag);
+#ifdef OPLUS_FEATURE_DISPLAY
+			oplus_display_brightness = ccorr_config->FinalBacklight;
+#endif /* OPLUS_FEATURE_DISPLAY  */
 			mtk_leds_brightness_set("lcd-backlight",
 				ccorr_config->FinalBacklight, 0, (0X01<<SET_BACKLIGHT_LEVEL));
 		}

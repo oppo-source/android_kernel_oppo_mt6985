@@ -59,6 +59,7 @@
 #include "mtk_disp_chist.h"
 #include "mtk_lease.h"
 #include "mtk_disp_oddmr/mtk_disp_oddmr.h"
+#include "mtk_drm_trace.h"
 
 #include "mtk_drm_mmp.h"
 /* *******Panel Master******** */
@@ -76,6 +77,18 @@
 #include <linux/syscalls.h>
 #define CLKBUF_COMMON_H
 #include <mtk_clkbuf_ctl.h>
+
+#ifdef OPLUS_FEATURE_DISPLAY
+#include "oplus_display_private_api.h"
+#include "oplus/oplus_display_panel.h"
+#include "oplus_adfr.h"
+#include <mt-plat/mtk_boot_common.h>
+extern unsigned long silence_mode;
+#endif /* OPLUS_FEATURE_DISPLAY  */
+
+#ifdef OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
+#include "oplus_display_onscreenfingerprint.h"
+#endif /* OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT */
 
 #define DRIVER_NAME "mediatek"
 #define DRIVER_DESC "Mediatek SoC DRM"
@@ -1490,6 +1503,12 @@ static void mtk_atomic_complete(struct mtk_drm_private *private,
 
 	mtk_drm_enable_trig(drm, state);
 
+	#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+	if (oplus_adfr_is_support()) {
+		oplus_adfr_dsi_display_auto_mode_update(drm);
+	}
+	#endif
+
 	mtk_atomic_disp_rsz_roi(drm, state);
 
 	mtk_atomic_calculate_plane_enabled_number(drm, state);
@@ -1565,40 +1584,59 @@ static int mtk_atomic_commit(struct drm_device *drm,
 	uint32_t crtc_mask;
 	struct drm_crtc *crtc;
 	struct mtk_drm_crtc *mtk_crtc;
-	int ret, i = 0;
-	int index;
+	int ret, i = 0, j = 0;
+	unsigned int pf = 0;
+	struct drm_crtc_state *new_crtc_state = NULL;
+	struct mtk_crtc_state *mtk_crtc_state = NULL;
 
 	DDP_PROFILE("[PROFILE] %s+\n", __func__);
 	ret = drm_atomic_helper_prepare_planes(drm, state);
 	if (ret)
 		return ret;
 
-	mutex_lock(&private->commit.lock);
-	flush_work(&private->commit.work);
-
 	crtc_mask = mtk_atomic_crtc_mask(drm, state);
 
+	for_each_new_crtc_in_state(state, crtc, new_crtc_state, j) {
+		/* check only crtc 0 for mml and update pf */
+		if (!(crtc_mask & 0x1))
+			break;
+
+		mtk_crtc = to_mtk_crtc(crtc);
+		mtk_crtc_state = to_mtk_crtc_state(new_crtc_state);
+		pf = (unsigned int)mtk_crtc_state->prop_val[CRTC_PROP_PRES_FENCE_IDX];
+
+		if (mtk_crtc->is_mml) {
+			if (mtk_crtc_state->prop_val[CRTC_PROP_USER_SCEN] &
+					USER_SCEN_SAME_POWER_MODE) {
+				DDPMSG("MML IR skip atomic commit with same power mode\n");
+				return 0;
+			}
+
+			/* if last frame is mml, need to wait job done before holding lock */
+			ret = wait_event_interruptible(mtk_crtc->signal_mml_last_job_is_flushed_wq,
+					atomic_read(&mtk_crtc->wait_mml_last_job_is_flushed));
+			DDP_PROFILE("[PROFILE] pf:%u mml last job is flushed\n", pf);
+		}
+		break;
+	}
+
+	DDP_MUTEX_LOCK(&private->commit.lock, __func__, pf);
+	flush_work(&private->commit.work);
 	DRM_MMP_EVENT_START(mutex_lock, 0, 0);
+
 	for (i = 0; i < MAX_CRTC; i++) {
 		if (!(crtc_mask >> i & 0x1))
 			continue;
-
 		crtc = private->crtc[i];
 		mtk_crtc = to_mtk_crtc(crtc);
-		index = drm_crtc_index(crtc);
 
-		// if last frame is mml, need to wait job done before holding lock
-		if (mtk_crtc->is_mml) {
-			ret = wait_event_interruptible(
-				mtk_crtc->signal_mml_last_job_is_flushed_wq
-				, atomic_read(&mtk_crtc->wait_mml_last_job_is_flushed));
-		}
 		atomic_set(&(mtk_crtc->wait_mml_last_job_is_flushed), 0);
 
 		DRM_MMP_MARK(mutex_lock, (unsigned long)&mtk_crtc->lock, i);
 
 		DDP_MUTEX_LOCK_NESTED(&mtk_crtc->lock, i, __func__, __LINE__);
-		CRTC_MMP_EVENT_START(index, atomic_commit, 0, 0);
+		CRTC_MMP_EVENT_START(drm_crtc_index(crtc), atomic_commit, 0, 0);
+		drm_trace_tag_mark_bycrtc("atomic_commit", drm_crtc_index(crtc));
 	}
 	mutex_nested_time_start = sched_clock();
 
@@ -1606,7 +1644,7 @@ static int mtk_atomic_commit(struct drm_device *drm,
 	if (ret) {
 		DDPPR_ERR("DRM swap state failed! state:%p, ret:%d\n",
 				state, ret);
-		goto err_mutex_unlock;
+		goto mutex_unlock;
 	}
 
 	drm_atomic_state_get(state);
@@ -1621,28 +1659,24 @@ static int mtk_atomic_commit(struct drm_device *drm,
 	if (mutex_nested_time_period > 1000000000) {
 		DDPPR_ERR("M_ULOCK_NESTED:%s[%d] timeout:<%lld ns>!\n",
 			__func__, __LINE__, mutex_nested_time_period);
-		DRM_MMP_MARK(mutex_lock,
-			(unsigned long)mutex_time_period, 0);
+		DRM_MMP_MARK(mutex_lock, (unsigned long)mutex_time_period, 0);
 		dump_stack();
 	}
 
-err_mutex_unlock:
+mutex_unlock:
 	for (i = MAX_CRTC - 1; i >= 0; i--) {
 		if (!(crtc_mask >> i & 0x1))
 			continue;
-
 		crtc = private->crtc[i];
 		mtk_crtc = to_mtk_crtc(crtc);
-		index = drm_crtc_index(crtc);
 
-		CRTC_MMP_EVENT_END(index, atomic_commit, 0, 0);
+		CRTC_MMP_EVENT_END(drm_crtc_index(crtc), atomic_commit, 0, 0);
 		DDP_MUTEX_UNLOCK_NESTED(&mtk_crtc->lock, i, __func__, __LINE__);
-		DRM_MMP_MARK(mutex_lock, (unsigned long)&mtk_crtc->lock,
-				i + (1 << 8));
+		DRM_MMP_MARK(mutex_lock, (unsigned long)&mtk_crtc->lock, i + (1 << 8));
 	}
-	DRM_MMP_EVENT_END(mutex_lock, 0, 0);
 
-	mutex_unlock(&private->commit.lock);
+	DRM_MMP_EVENT_END(mutex_lock, 0, 0);
+	DDP_MUTEX_UNLOCK(&private->commit.lock, __func__, pf);
 	DDP_PROFILE("[PROFILE] %s-\n", __func__);
 
 	return 0;
@@ -5243,6 +5277,106 @@ int mtk_drm_ioctl_get_lcm_index(struct drm_device *dev, void *data,
 	return ret;
 }
 
+int mtk_drm_ioctl_kick_idle(struct drm_device *dev, void *data,
+		struct drm_file *file_priv)
+{
+	int ret = 0;
+	unsigned int *crtc_id = data;
+	struct drm_crtc *crtc;
+
+	crtc = drm_crtc_find(dev, file_priv, *crtc_id);
+	if (!crtc) {
+		DDPPR_ERR("Unknown CRTC ID %d\n", *crtc_id);
+		ret = -ENOENT;
+		return ret;
+	}
+
+	/* async kick idle */
+	mtk_drm_idlemgr_kick_async(crtc);
+
+	return ret;
+}
+
+int mtk_drm_get_mode_ext_info_ioctl(struct drm_device *dev, void *data,
+		struct drm_file *file_priv)
+{
+	struct drm_crtc *crtc;
+	struct mtk_drm_crtc *mtk_crtc;
+	struct mtk_drm_mode_ext_info *args = (struct mtk_drm_mode_ext_info *)data;
+	unsigned int *total_offset = NULL;
+	struct mtk_drm_private *priv = dev->dev_private;
+	unsigned int copy_num;
+	int i = 0;
+
+	DDPINFO("%s\n", __func__);
+
+	crtc = drm_crtc_find(dev, file_priv, args->crtc_id);
+	if (!crtc) {
+		DDPPR_ERR("%s unknown CRTC ID %d\n", __func__, args->crtc_id);
+		return -EINVAL;
+	}
+
+	mtk_crtc = to_mtk_crtc(crtc);
+	if (!mtk_crtc) {
+		DDPPR_ERR("%s mtk_crtc is null\n", __func__);
+		return  -EFAULT;
+	}
+
+	if (drm_crtc_index(crtc) != 0 || !mtk_crtc_is_frame_trigger_mode(crtc))
+		return 0;
+
+	total_offset = kzalloc(sizeof(unsigned int) * mtk_crtc->avail_modes_num,
+			GFP_KERNEL);
+	if (!total_offset) {
+		DDPPR_ERR("%s alloc mem fail\n", __func__);
+		return -EFAULT;
+	}
+
+	for (i = 0;  i < mtk_crtc->avail_modes_num; i++) {
+		unsigned int merge_trigger_offset = 150;
+		unsigned int prefetch_te_offset = 150;
+
+		if (!mtk_drm_helper_get_opt(priv->helper_opt,
+			MTK_DRM_OPT_CHECK_TRIGGER_MERGE))
+			merge_trigger_offset = 0;
+		else if (mtk_crtc->panel_params[i]->merge_trig_offset)
+			merge_trigger_offset = mtk_crtc->panel_params[i]->merge_trig_offset;
+
+		if (!mtk_drm_helper_get_opt(priv->helper_opt,
+			MTK_DRM_OPT_PREFETCH_TE))
+			prefetch_te_offset = 0;
+		else if (mtk_crtc->panel_params[i]->prefetch_offset)
+			prefetch_te_offset = mtk_crtc->panel_params[i]->prefetch_offset;
+
+		total_offset[i] = merge_trigger_offset + prefetch_te_offset;
+	}
+
+	if(args->mode_num > mtk_crtc->avail_modes_num) {
+		copy_num = mtk_crtc->avail_modes_num;
+		DDPPR_ERR("%s mode_num:%d > avail_mode_num:%d\n", __func__,
+			args->mode_num, mtk_crtc->avail_modes_num);
+	} else if (args->mode_num < mtk_crtc->avail_modes_num) {
+		copy_num = args->mode_num;
+		DDPPR_ERR("%s mode_num:%d < avail_mode_num:%d\n", __func__,
+			args->mode_num, mtk_crtc->avail_modes_num);
+	} else
+		copy_num = mtk_crtc->avail_modes_num;
+
+	if (copy_to_user(args->total_offset, total_offset,
+		sizeof(unsigned int) * copy_num)) {
+		DDPPR_ERR("%s copy failed:(0x%p,0x%p), size:%ld\n",
+			__func__, args->total_offset, total_offset,
+			sizeof(unsigned int) * copy_num);
+
+		kfree(total_offset);
+		return -EFAULT;
+	}
+
+	kfree(total_offset);
+
+	return 0;
+}
+
 int mtk_drm_ioctl_get_all_connector_panel_info(struct drm_device *dev, void *data,
 		struct drm_file *file_priv)
 {
@@ -5647,7 +5781,6 @@ static int mtk_drm_kms_init(struct drm_device *drm)
 		goto err_unset_dma_parms;
 	}
 
-	drm_kms_helper_poll_init(drm);
 	drm_mode_config_reset(drm);
 
 	INIT_WORK(&private->unreference.work, mtk_unreference_work);
@@ -5671,6 +5804,17 @@ static int mtk_drm_kms_init(struct drm_device *drm)
 #endif
 	disp_dbg_init(drm);
 	PanelMaster_Init(drm);
+
+	#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+	if (oplus_adfr_is_support()) {
+		oplus_adfr_init(drm, private);
+	}
+	#endif
+
+#ifdef OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
+	oplus_ofp_init(private);
+#endif /* OPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT */
+
 	if (mtk_drm_helper_get_opt(private->helper_opt,
 			MTK_DRM_OPT_MMDVFS_SUPPORT))
 		mtk_drm_mmdvfs_init(drm->dev);
@@ -5723,6 +5867,7 @@ static void mtk_drm_kms_deinit(struct drm_device *drm)
 	}
 }
 
+#if IS_ENABLED(CONFIG_DEBUG_FS)
 int mtk_drm_fm_lcm_auto_test(struct drm_device *dev, void *data,
 			 struct drm_file *file_priv)
 {
@@ -5773,6 +5918,7 @@ int mtk_drm_fm_lcm_auto_test(struct drm_device *dev, void *data,
 	}
 	return 0;
 }
+#endif
 
 static const struct drm_ioctl_desc mtk_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(MTK_GEM_CREATE, mtk_gem_create_ioctl,
@@ -5901,8 +6047,10 @@ static const struct drm_ioctl_desc mtk_ioctls[] = {
 			  DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(MTK_BYPASS_DISP_GAMMA, mtk_drm_ioctl_bypass_disp_gamma,
 		DRM_UNLOCKED),
+#if IS_ENABLED(CONFIG_DEBUG_FS)
 	DRM_IOCTL_DEF_DRV(MTK_FACTORY_LCM_AUTO_TEST, mtk_drm_fm_lcm_auto_test,
 			  DRM_UNLOCKED),
+#endif
 	DRM_IOCTL_DEF_DRV(MTK_GET_PQ_CAPS, mtk_drm_ioctl_get_pq_caps,
 			  DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(MTK_SET_PQ_CAPS, mtk_drm_ioctl_set_pq_caps,
@@ -5920,6 +6068,10 @@ static const struct drm_ioctl_desc mtk_ioctls[] = {
 	DRM_IOCTL_DEF_DRV(MTK_ODDMR_CTL, mtk_drm_ioctl_oddmr_ctl,
 				  DRM_UNLOCKED),
 	DRM_IOCTL_DEF_DRV(MTK_SET_GAMMA_MUL_DISABLE, mtk_drm_ioctl_gamma_mul_disable,
+				  DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(MTK_KICK_IDLE, mtk_drm_ioctl_kick_idle,
+				  DRM_UNLOCKED),
+	DRM_IOCTL_DEF_DRV(MTK_GET_MODE_EXT_INFO, mtk_drm_get_mode_ext_info_ioctl,
 				  DRM_UNLOCKED),
 };
 
@@ -6982,6 +7134,14 @@ SKIP_OVLSYS_CONFIG:
 
 	disp_dts_gpio_init(dev, private);
 
+#ifdef OPLUS_FEATURE_DISPLAY
+	pr_err("get_boot_mode() is %d\n", get_boot_mode());
+	if ((get_boot_mode() == SILENCE_BOOT)
+		||(get_boot_mode() == OPPO_SAU_BOOT)) {
+		pr_err("%s OPPO_SILENCE_BOOT set silence_mode to 1\n", __func__);
+		silence_mode = 1;
+	}
+#endif
 	memcpy(&mydev, pdev, sizeof(mydev));
 
 	return 0;
@@ -7004,14 +7164,50 @@ err_node:
 	return ret;
 }
 
+#ifdef OPLUS_FEATURE_DISPLAY
+extern int mtkfb_set_backlight_level(unsigned int level);
+#endif
+
 static void mtk_drm_shutdown(struct platform_device *pdev)
 {
 	struct mtk_drm_private *private = platform_get_drvdata(pdev);
 	struct drm_device *drm = private->drm;
+	#ifdef OPLUS_FEATURE_DISPLAY
+	struct drm_crtc *crtc;
+	struct mtk_drm_crtc *mtk_crtc;
+	struct mtk_ddp_comp *output_comp;
+	#endif
 
 	if (drm) {
 		DDPMSG("%s\n", __func__);
 		drm_atomic_helper_shutdown(drm);
+		#ifdef OPLUS_FEATURE_DISPLAY
+		/* only for crtc0 */
+		crtc = list_first_entry(&(drm)->mode_config.crtc_list,
+					typeof(*crtc), head);
+		if (IS_ERR_OR_NULL(crtc)) {
+			DDPPR_ERR("%s failed to find crtc\n", __func__);
+			return ;
+		}
+		DDPMSG("%s crtc0 exit\n", __func__);
+
+		mtk_crtc = to_mtk_crtc(crtc);
+		if (true == mtk_crtc->enabled) {
+			DDPMSG("%s, set main panel backlight 0\n", __func__);
+			mtkfb_set_backlight_level(0);
+
+			output_comp = mtk_ddp_comp_request_output(mtk_crtc);
+			DDPMSG("%s, output_comp = %d\n", __func__, output_comp);
+			if (unlikely(!output_comp)) {
+				DDPPR_ERR("%s: invalid output comp\n", __func__);
+				return ;
+			}
+
+			DDPMSG("%s CONNECTOR_PANEL_DISABLE\n", __func__);
+				mtk_ddp_comp_io_cmd(output_comp, NULL,
+					CONNECTOR_PANEL_SHUTDOWN, NULL);
+		}
+		#endif
 	}
 }
 
@@ -7209,6 +7405,12 @@ static int __init mtk_drm_init(void)
 			goto err;
 		}
 	}
+
+	#ifdef OPLUS_FEATURE_DISPLAY
+	oplus_display_private_api_init();
+	oplus_display_panel_init();
+	#endif /* OPLUS_FEATURE_DISPLAY  */
+
 	DDPINFO("%s-\n", __func__);
 
 	return 0;

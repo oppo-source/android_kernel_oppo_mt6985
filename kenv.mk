@@ -60,7 +60,7 @@ endif
     endif
     endif#BUILD_KERNEL
 
-    BUILT_KERNEL_TARGET := $(KERNEL_ZIMAGE_OUT).bin
+    BUILT_KERNEL_TARGET := $(KERNEL_ZIMAGE_OUT)
     ifneq ($(strip $(TARGET_NO_KERNEL)),true)
     INSTALLED_KERNEL_TARGET := $(PRODUCT_OUT)/kernel
     endif

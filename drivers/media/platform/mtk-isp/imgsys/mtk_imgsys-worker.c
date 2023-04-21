@@ -12,6 +12,10 @@
 #include "mtk_imgsys-worker.h"
 #include "mtk_imgsys-trace.h"
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 int imgsys_queue_init(struct imgsys_queue *que, struct device *dev, char *name)
 {
 	int ret = 0;
@@ -117,7 +121,11 @@ int imgsys_queue_disable(struct imgsys_queue *que)
 {
 	int ret;
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	if ((!que) || IS_ERR(que->task))
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+	if ((!que) || IS_ERR_OR_NULL(que->task))
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		return -1;
 
 	ret = wait_event_interruptible_timeout(que->dis_wq, !atomic_read(&que->nr),
@@ -130,6 +138,7 @@ int imgsys_queue_disable(struct imgsys_queue *que)
 	mutex_lock(&que->task_lock);
 
 	atomic_set(&que->disable, 1);
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	ret = kthread_stop(que->task);
 	if (ret)
 		dev_info(que->dev, "%s: kthread_stop failed %d\n",
@@ -137,6 +146,16 @@ int imgsys_queue_disable(struct imgsys_queue *que)
 
 	put_task_struct(que->task);
 	que->task = NULL;
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+	if (que->task != NULL) {
+		ret = kthread_stop(que->task);
+		if (ret)
+			dev_info(que->dev, "%s: kthread_stop failed %d\n",
+							__func__, ret);
+		put_task_struct(que->task);
+		que->task = NULL;
+	}
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 	dev_info(que->dev, "%s: kthread(%s) queue peak(%d)\n",
 		__func__, que->name, que->peak);

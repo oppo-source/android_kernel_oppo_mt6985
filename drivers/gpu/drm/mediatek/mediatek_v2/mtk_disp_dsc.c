@@ -562,21 +562,41 @@ static void mtk_dsc_config(struct mtk_ddp_comp *comp,
 		DDPINFO("%s, bit_per_channel:%d\n",
 			mtk_dump_comp_str(comp), dsc_params->bit_per_channel);
 		if (dsc_params->bit_per_channel == 10) {
-			//10bpc_to_8bpp_20_slice_h
-			mtk_ddp_write(comp, 0x20001007, DISP_REG_DSC_PPS6, handle);
-			mtk_ddp_write(comp, 0x330F0F06, DISP_REG_DSC_PPS7, handle);
-			mtk_ddp_write(comp, 0x382a1c0e, DISP_REG_DSC_PPS8, handle);
-			mtk_ddp_write(comp, 0x69625446, DISP_REG_DSC_PPS9, handle);
-			mtk_ddp_write(comp, 0x7b797770, DISP_REG_DSC_PPS10, handle);
-			mtk_ddp_write(comp, 0x00007e7d, DISP_REG_DSC_PPS11, handle);
-			mtk_ddp_write(comp, 0x01040900, DISP_REG_DSC_PPS12, handle);
-			mtk_ddp_write(comp, 0xF9450125, DISP_REG_DSC_PPS13, handle);
-			mtk_ddp_write(comp, 0xE967F167, DISP_REG_DSC_PPS14, handle);
-			mtk_ddp_write(comp, 0xE187E167, DISP_REG_DSC_PPS15, handle);
-			mtk_ddp_write(comp, 0xD9C7E1A7, DISP_REG_DSC_PPS16, handle);
-			mtk_ddp_write(comp, 0xD1E9D9C9, DISP_REG_DSC_PPS17, handle);
-			mtk_ddp_write(comp, 0xD20DD1E9, DISP_REG_DSC_PPS18, handle);
-			mtk_ddp_write(comp, 0x0000D230, DISP_REG_DSC_PPS19, handle);
+#ifdef OPLUS_FEATURE_DISPLAY
+			if (dsc_params->pic_height == 2772) {
+				//10bpc_to_8bpp_20_slice_h DSC1.2 rc_10bpc_10bpp.cfg for NT37705
+				mtk_ddp_write(comp, 0x20001007, DISP_REG_DSC_PPS6, handle);
+				mtk_ddp_write(comp, 0x330F0F06, DISP_REG_DSC_PPS7, handle);
+				mtk_ddp_write(comp, 0x382a1c0e, DISP_REG_DSC_PPS8, handle);
+				mtk_ddp_write(comp, 0x69625446, DISP_REG_DSC_PPS9, handle);
+				mtk_ddp_write(comp, 0x7b797770, DISP_REG_DSC_PPS10, handle);
+				mtk_ddp_write(comp, 0x00007e7d, DISP_REG_DSC_PPS11, handle);
+				mtk_ddp_write(comp, 0x01040900, DISP_REG_DSC_PPS12, handle);
+				mtk_ddp_write(comp, 0xF9450125, DISP_REG_DSC_PPS13, handle);
+				mtk_ddp_write(comp, 0xE967F167, DISP_REG_DSC_PPS14, handle);
+				mtk_ddp_write(comp, 0xE187E167, DISP_REG_DSC_PPS15, handle);
+				mtk_ddp_write(comp, 0xD9C8E1A7, DISP_REG_DSC_PPS16, handle);
+				mtk_ddp_write(comp, 0xD9E9D9C9, DISP_REG_DSC_PPS17, handle);
+				mtk_ddp_write(comp, 0xD20CD1E9, DISP_REG_DSC_PPS18, handle);
+				mtk_ddp_write(comp, 0x0000D230, DISP_REG_DSC_PPS19, handle);
+			} else {
+				//10bpc_to_8bpp_20_slice_h
+				mtk_ddp_write(comp, 0x20001007, DISP_REG_DSC_PPS6, handle);
+				mtk_ddp_write(comp, 0x330F0F06, DISP_REG_DSC_PPS7, handle);
+				mtk_ddp_write(comp, 0x382a1c0e, DISP_REG_DSC_PPS8, handle);
+				mtk_ddp_write(comp, 0x69625446, DISP_REG_DSC_PPS9, handle);
+				mtk_ddp_write(comp, 0x7b797770, DISP_REG_DSC_PPS10, handle);
+				mtk_ddp_write(comp, 0x00007e7d, DISP_REG_DSC_PPS11, handle);
+				mtk_ddp_write(comp, 0x01040900, DISP_REG_DSC_PPS12, handle);
+				mtk_ddp_write(comp, 0xF9450125, DISP_REG_DSC_PPS13, handle);
+				mtk_ddp_write(comp, 0xE967F167, DISP_REG_DSC_PPS14, handle);
+				mtk_ddp_write(comp, 0xE187E167, DISP_REG_DSC_PPS15, handle);
+				mtk_ddp_write(comp, 0xD9C7E1A7, DISP_REG_DSC_PPS16, handle);
+				mtk_ddp_write(comp, 0xD1E9D9C9, DISP_REG_DSC_PPS17, handle);
+				mtk_ddp_write(comp, 0xD20DD1E9, DISP_REG_DSC_PPS18, handle);
+				mtk_ddp_write(comp, 0x0000D230, DISP_REG_DSC_PPS19, handle);
+			}
+#endif
 		} else {
 			//8bpc_to_8bpp_20_slice_h
 			mtk_ddp_write(comp, 0x20000c03, DISP_REG_DSC_PPS6, handle);

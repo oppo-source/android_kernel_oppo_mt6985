@@ -62,6 +62,9 @@
 #define MTK_IMGSYS_LOG_LENGTH			256
 
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif
 
 enum imgsys_user_state {
 	DIP_STATE_INIT	= 0,
@@ -349,6 +352,8 @@ struct mtk_imgsys_dev {
 	debug_dump dump;
 	atomic_t imgsys_user_cnt;
 	struct kref init_kref;
+	struct notifier_block pw_notifier;
+	struct completion comp;
 };
 
 /* contained in struct mtk_imgsys_user's done_list */
@@ -735,7 +740,9 @@ struct timeval {
 
 struct swfrm_info_t {
 	uint32_t req_sbuf_goft;
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	void *req_sbuf_kva;
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	int swfrminfo_ridx;
 	int request_fd;
 	int request_no;
