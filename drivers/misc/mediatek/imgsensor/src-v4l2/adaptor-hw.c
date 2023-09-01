@@ -86,6 +86,11 @@ static int set_mclk(struct adaptor_ctx *ctx, void *data, int val)
 	int ret;
 	struct clk *mclk, *mclk_src;
 	unsigned long long idx;
+	#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+	unsigned char payload[PAYLOAD_LENGTH] = {0x00};
+	scnprintf(payload, sizeof(payload), "NULL$$EventField@@%s$$FieldData@@0x=%x$$detailData@@sn=%s",
+		acquireEventField(EXCEP_CLOCK), (CAM_RESERVED_ID << 20 | CAM_MODULE_ID << 12 | EXCEP_CLOCK), ctx->subdrv->name);
+	#endif /* OPLUS_FEATURE_CAMERA_COMMON */
 
 	idx = (unsigned long long)data;
 	mclk = ctx->clk[idx];
@@ -98,6 +103,9 @@ static int set_mclk(struct adaptor_ctx *ctx, void *data, int val)
 		dev_info(ctx->dev,
 			"clk_prepare_enable(%s),ret(%d)(fail)\n",
 			clk_names[idx], ret);
+		#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+		cam_olc_raise_exception(EXCEP_CLOCK, payload);
+		#endif /* OPLUS_FEATURE_CAMERA_COMMON */
 		return ret;
 	}
 #if IMGSENSOR_LOG_MORE
@@ -144,9 +152,24 @@ static int set_reg(struct adaptor_ctx *ctx, void *data, int val)
 {
 	unsigned long long ret, idx;
 	struct regulator *reg;
+	#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+	unsigned char payload[PAYLOAD_LENGTH] = {0x00};
+	#endif  /* OPLUS_FEATURE_CAMERA_COMMON */
 
 	idx = (unsigned long long)data;
 
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	/*Added by rentianzhi@CamDrv, release the hw resource for Explorer AON driver, 20220124*/
+	if (ctx->support_explorer_aon_fl == 0) {
+		// re-get reg everytime due to pmic limitation
+		ctx->regulator[idx] = devm_regulator_get_optional(ctx->dev, reg_names[idx]);
+		if (IS_ERR(ctx->regulator[idx])) {
+	        ctx->regulator[idx] = NULL;
+			dev_dbg(ctx->dev, "no reg %s\n", reg_names[idx]);
+			return -EINVAL;
+		}
+	}
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
 	// re-get reg everytime due to pmic limitation
 	ctx->regulator[idx] = devm_regulator_get_optional(ctx->dev, reg_names[idx]);
 	if (IS_ERR(ctx->regulator[idx])) {
@@ -154,6 +177,7 @@ static int set_reg(struct adaptor_ctx *ctx, void *data, int val)
 		dev_dbg(ctx->dev, "no reg %s\n", reg_names[idx]);
 		return -EINVAL;
 	}
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 	reg = ctx->regulator[idx];
 #if IMGSENSOR_LOG_MORE
@@ -161,9 +185,15 @@ static int set_reg(struct adaptor_ctx *ctx, void *data, int val)
 #endif
 	ret = regulator_set_voltage(reg, val, val);
 	if (ret) {
+		#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		dev_dbg(ctx->dev,
 			"regulator_set_voltage(%s),val(%d),ret(%llu)(fail)\n",
 			reg_names[idx], val, ret);
+		#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		dev_err(ctx->dev,
+			"regulator_set_voltage(%s),val(%d),ret(%llu)(fail)\n",
+			reg_names[idx], val, ret);
+		#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	}
 #if IMGSENSOR_LOG_MORE
 	else
@@ -173,9 +203,21 @@ static int set_reg(struct adaptor_ctx *ctx, void *data, int val)
 #endif
 	ret = regulator_enable(reg);
 	if (ret) {
+		#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		dev_dbg(ctx->dev,
 			"regulator_enable(%s),ret(%llu)(fail)\n",
 			reg_names[idx], ret);
+		#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		dev_err(ctx->dev,
+			"regulator_enable(%s),ret(%llu)(fail)\n",
+			reg_names[idx], ret);
+		#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+		#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+		scnprintf(payload, sizeof(payload), "NULL$$EventField@@%s$$FieldData@@0x%x$$detailData@@sn=%s, reg_names=%s",
+			acquireEventField(EXCEP_VOLTAGE), (CAM_RESERVED_ID << 20 | CAM_MODULE_ID << 12 | EXCEP_VOLTAGE),
+			ctx->subdrv->name, reg_names[idx]);
+		cam_olc_raise_exception(EXCEP_VOLTAGE, payload);
+		#endif /* OPLUS_FEATURE_CAMERA_COMMON */
 		return ret;
 	}
 #if IMGSENSOR_LOG_MORE
@@ -198,13 +240,29 @@ static int unset_reg(struct adaptor_ctx *ctx, void *data, int val)
 #endif
 	ret = regulator_disable(reg);
 	if (ret) {
+		#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		dev_dbg(ctx->dev,
 			"disable(%s),ret(%llu)(fail)\n",
 			reg_names[idx], ret);
+		#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		dev_err(ctx->dev,
+			"disable(%s),ret(%llu)(fail)\n",
+			reg_names[idx], ret);
+		#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		return ret;
 	}
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	/*Added by rentianzhi@CamDrv, release the hw resource for Explorer AON driver, 20220124*/
+	if (ctx->support_explorer_aon_fl == 0) {
+		// always put reg due to pmic limitation
+		devm_regulator_put(ctx->regulator[idx]);
+	}
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
 	// always put reg due to pmic limitation
 	devm_regulator_put(ctx->regulator[idx]);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 #if IMGSENSOR_LOG_MORE
 	dev_info(ctx->dev,
 		"[%s]- disable(%s),ret(%llu)(correct)\n",
@@ -217,6 +275,9 @@ static int set_state(struct adaptor_ctx *ctx, void *data, int val)
 {
 	unsigned long long idx, x;
 	int ret;
+	#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+	unsigned char payload[PAYLOAD_LENGTH] = {0x00};
+	#endif /* OPLUS_FEATURE_CAMERA_COMMON */
 
 	idx = (unsigned long long)data;
 	x = idx + val;
@@ -228,6 +289,12 @@ static int set_state(struct adaptor_ctx *ctx, void *data, int val)
 		dev_info(ctx->dev,
 			"select(%s),ret(%d)(fail)\n",
 			state_names[x], ret);
+		#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+		scnprintf(payload, sizeof(payload), "NULL$$EventField@@%s$$FieldData@@0x%x$$detailData@@sn=%s, state_names=%s",
+			acquireEventField(EXCEP_GPIO), (CAM_RESERVED_ID << 20 | CAM_MODULE_ID << 12 | EXCEP_GPIO),
+			ctx->subdrv->name, state_names[idx]);
+		cam_olc_raise_exception(EXCEP_GPIO, payload);
+		#endif /* OPLUS_FEATURE_CAMERA_COMMON */
 		return ret;
 	}
 #if IMGSENSOR_LOG_MORE
@@ -292,6 +359,142 @@ static int reinit_pinctrl(struct adaptor_ctx *ctx)
 #endif
 	return 0;
 }
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+/*Added by rentianzhi@CamDrv, release the hw resource for Explorer AON driver, 20220124*/
+static int reinit_supply(struct adaptor_ctx *ctx)
+{
+	int i;
+	struct device *dev = ctx->dev;
+	/* supplies */
+	for (i = 0; i < REGULATOR_MAXCNT; i++) {
+		ctx->regulator[i] = devm_regulator_get_optional(
+				dev, reg_names[i]);
+		if (IS_ERR(ctx->regulator[i])) {
+			ctx->regulator[i] = NULL;
+			dev_dbg(dev, "In %s:no reg %s\n", __func__, reg_names[i]);
+		}
+	}
+	return 0;
+}
+
+static int reinit_clk(struct adaptor_ctx *ctx)
+{
+	int i;
+	struct device *dev = ctx->dev;
+	/* clocks */
+	for (i = 0; i < CLK_MAXCNT; i++) {
+		ctx->clk[i] = devm_clk_get(dev, clk_names[i]);
+		if (IS_ERR(ctx->clk[i])) {
+			ctx->clk[i] = NULL;
+			dev_dbg(dev, "In %s:no clk %s\n", __func__, clk_names[i]);
+		}
+	}
+	return 0;
+}
+int aon_hw_power_status = 0;
+int cam_hw_power_status = 0;
+int adaptor_hw_aon_power_on(struct adaptor_ctx *ctx)
+{
+    int i;
+    const struct subdrv_pw_seq_entry *ent;
+    struct adaptor_hw_ops *op;
+
+    dev_info(ctx->dev, "[%s]+\n", __func__);
+    if (cam_hw_power_status == 1) {
+        dev_info(ctx->dev, "[%s] cam already powered skip\n", __func__);
+        return 0;
+    }
+    if (aon_hw_power_status == 1) {
+        dev_info(ctx->dev, "[%s] aon already powered skip\n", __func__);
+        return 0;
+    }
+    aon_hw_power_status = 1;
+
+    /* may be released for mipi switch */
+    if (!ctx->pinctrl)
+        reinit_pinctrl(ctx);
+
+    /*Added by rentianzhi@CamDrv, release the hw resource for Explorer AON driver, 20220124*/
+    if (ctx->support_explorer_aon_fl == 1 && ctx->idx == IMGSENSOR_SENSOR_IDX_SUB) {
+        dev_info(ctx->dev, "In %s:start to reinit supply and clk for front sensor.\n", __func__);
+        /*reinit the supply*/
+        reinit_supply(ctx);
+        /*reinit the clk*/
+        reinit_clk(ctx);
+    }
+
+    for (i = 0; i < ctx->subdrv->aon_pw_seq_cnt; i++) {
+        ent = &ctx->subdrv->aon_pw_seq[i];
+        op = &ctx->hw_ops[ent->id];
+        if (!op->set) {
+            dev_dbg(ctx->dev, "cannot set comp %d val %d\n",
+                ent->id, ent->val);
+            continue;
+        }
+        op->set(ctx, op->data, ent->val);
+        if (ent->delay)
+            mdelay(ent->delay);
+    }
+    dev_info(ctx->dev, "[%s]-\n", __func__);
+    return 0;
+}
+
+int adaptor_hw_aon_power_off(struct adaptor_ctx *ctx)
+{
+    int i;
+    const struct subdrv_pw_seq_entry *ent;
+    struct adaptor_hw_ops *op;
+    dev_info(ctx->dev, "[%s]+\n", __func__);
+    if (cam_hw_power_status == 1) {
+        dev_info(ctx->dev, "[%s] cam already powered skip\n", __func__);
+        return 0;
+    }
+
+    if (aon_hw_power_status == 0) {
+        dev_info(ctx->dev, "[%s] aon already powerdown skip\n", __func__);
+        return 0;
+    }
+    aon_hw_power_status = 0;
+
+    for (i = ctx->subdrv->aon_pw_seq_cnt - 1; i >= 0; i--) {
+        ent = &ctx->subdrv->aon_pw_seq[i];
+        op = &ctx->hw_ops[ent->id];
+        if (!op->unset)
+            continue;
+        if (ent->id == HW_ID_MCLK)
+            continue;
+        op->unset(ctx, op->data, ent->val);
+        //msleep(ent->delay);
+    }
+
+    /*Added by rentianzhi@CamDrv, release the hw resource for Explorer AON driver, 20220124*/
+    if (ctx->support_explorer_aon_fl == 1 && ctx->idx == IMGSENSOR_SENSOR_IDX_SUB) {
+        dev_dbg(ctx->dev, "In adaptor_hw_power_off:Start to release the supply and clk resource for front camera.\n");
+        /* clocks */
+        for (i = 0; i < CLK_MAXCNT; i++) {
+            if (ctx->clk[i] != NULL) {
+                devm_clk_put(ctx->dev, ctx->clk[i]);
+                ctx->clk[i] = NULL;
+                dev_dbg(ctx->dev, "In %s:Release clk:%s ok.\n", __func__, clk_names[i]);
+            }
+        }
+        /* supplies */
+        for (i = 0; i < REGULATOR_MAXCNT; i++) {
+            if (ctx->regulator[i] != NULL) {
+                devm_regulator_put(ctx->regulator[i]);
+                ctx->regulator[i] = NULL;
+                dev_dbg(ctx->dev, "In %s:Release regulator:%s ok.\n", __func__, reg_names[i]);
+            }
+        }
+        /*pinctrl*/
+        devm_pinctrl_put(ctx->pinctrl);
+        ctx->pinctrl = NULL;
+    }
+    dev_info(ctx->dev, "[%s]-\n", __func__);
+    return 0;
+}
+
+#endif
 int do_hw_power_on(struct adaptor_ctx *ctx)
 {
 	int i;
@@ -299,6 +502,15 @@ int do_hw_power_on(struct adaptor_ctx *ctx)
 	struct adaptor_hw_ops *op;
 #if IMGSENSOR_LOG_MORE
 	dev_info(ctx->dev, "[%s]+\n", __func__);
+#endif
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	/*Added by fujiahao@CamDrv, check aon status, 20221110*/
+	mutex_lock(&ctx->hw_mutex);
+	if (aon_hw_power_status == 1) {
+		dev_info(ctx->dev, "[%s] aon already powered powerdown aon\n", __func__);
+		adaptor_hw_aon_power_off(ctx);
+	}
+	cam_hw_power_status = 1;
 #endif
 	if (ctx->sensor_ws) {
 		if (ctx->aov_pm_ops_flag == 0) {
@@ -313,6 +525,16 @@ int do_hw_power_on(struct adaptor_ctx *ctx)
 	/* may be released for mipi switch */
 	if (!ctx->pinctrl)
 		reinit_pinctrl(ctx);
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	/*Added by rentianzhi@CamDrv, release the hw resource for Explorer AON driver, 20220124*/
+	if (ctx->support_explorer_aon_fl == 1 && ctx->idx == IMGSENSOR_SENSOR_IDX_SUB) {
+		dev_info(ctx->dev, "In %s:start to reinit supply and clk for front sensor.\n", __func__);
+		/*reinit the supply*/
+		reinit_supply(ctx);
+		/*reinit the clk*/
+		reinit_clk(ctx);
+	}
+#endif
 
 	op = &ctx->hw_ops[HW_ID_MIPI_SWITCH];
 	if (op->set)
@@ -336,6 +558,11 @@ int do_hw_power_on(struct adaptor_ctx *ctx)
 
 	if (ctx->subdrv->ops->power_on)
 		subdrv_call(ctx, power_on, NULL);
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	/*Added by fujiahao@CamDrv, check aon status, 20221110*/
+	mutex_unlock(&ctx->hw_mutex);
+#endif
 #if IMGSENSOR_LOG_MORE
 	dev_info(ctx->dev, "[%s]-\n", __func__);
 #endif
@@ -369,6 +596,12 @@ int do_hw_power_off(struct adaptor_ctx *ctx)
 #if IMGSENSOR_LOG_MORE
 	dev_info(ctx->dev, "[%s]+\n", __func__);
 #endif
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	/*Added by fujiahao@CamDrv, update cam status, 20221110*/
+	mutex_lock(&ctx->hw_mutex);
+	cam_hw_power_status = 0;
+#endif
+
 	/* call subdrv close function before pwr off */
 	subdrv_call(ctx, close);
 
@@ -409,6 +642,32 @@ int do_hw_power_off(struct adaptor_ctx *ctx)
 		dev_info(ctx->dev, "__pm_relax(fail)\n");
 
 	dev_info(ctx->dev, "[%s]-\n", __func__);
+#endif
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	/*Added by rentianzhi@CamDrv, release the hw resource for Explorer AON driver, 20220124*/
+	if (ctx->support_explorer_aon_fl == 1 && ctx->idx == IMGSENSOR_SENSOR_IDX_SUB) {
+		dev_dbg(ctx->dev, "In adaptor_hw_power_off:Start to release the supply and clk resource for front camera.\n");
+		/* clocks */
+		for (i = 0; i < CLK_MAXCNT; i++) {
+			if (ctx->clk[i] != NULL) {
+				devm_clk_put(ctx->dev, ctx->clk[i]);
+				ctx->clk[i] = NULL;
+				dev_dbg(ctx->dev, "In %s:Release clk:%s ok.\n", __func__, clk_names[i]);
+			}
+		}
+		/* supplies */
+		for (i = 0; i < REGULATOR_MAXCNT; i++) {
+			if (ctx->regulator[i] != NULL) {
+				devm_regulator_put(ctx->regulator[i]);
+				ctx->regulator[i] = NULL;
+				dev_dbg(ctx->dev, "In %s:Release regulator:%s ok.\n", __func__, reg_names[i]);
+			}
+		}
+		/*pinctrl*/
+		devm_pinctrl_put(ctx->pinctrl);
+		ctx->pinctrl = NULL;
+	}
+	mutex_unlock(&ctx->hw_mutex);
 #endif
 	return 0;
 }
@@ -577,6 +836,34 @@ int adaptor_hw_init(struct adaptor_ctx *ctx)
 		devm_pinctrl_put(ctx->pinctrl);
 		ctx->pinctrl = NULL;
 	}
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	/*Added by rentianzhi@CamDrv, release the hw resource for Explorer AON driver, 20220124*/
+	if (ctx->support_explorer_aon_fl == 1 && ctx->idx == IMGSENSOR_SENSOR_IDX_SUB) {
+		dev_dbg(ctx->dev, "In adaptor_hw_power_off:Start to release the supply and clk resource for front camera.\n");
+		/* clocks */
+		for (i = 0; i < CLK_MAXCNT; i++) {
+			if (ctx->clk[i] != NULL) {
+				devm_clk_put(ctx->dev, ctx->clk[i]);
+				ctx->clk[i] = NULL;
+				dev_dbg(ctx->dev, "In %s:Release clk:%s ok.\n", __func__, clk_names[i]);
+			}
+		}
+		/* supplies */
+		for (i = 0; i < REGULATOR_MAXCNT; i++) {
+			if (ctx->regulator[i] != NULL) {
+				devm_regulator_put(ctx->regulator[i]);
+				ctx->regulator[i] = NULL;
+				dev_dbg(ctx->dev, "In %s:Release regulator:%s ok.\n", __func__, reg_names[i]);
+			}
+		}
+		/*pinctrl*/
+		devm_pinctrl_put(ctx->pinctrl);
+		ctx->pinctrl = NULL;
+	}
+	mutex_init(&ctx->hw_mutex);
+#endif
+
 #if IMGSENSOR_LOG_MORE
 	dev_info(ctx->dev, "[%s]-\n", __func__);
 #endif

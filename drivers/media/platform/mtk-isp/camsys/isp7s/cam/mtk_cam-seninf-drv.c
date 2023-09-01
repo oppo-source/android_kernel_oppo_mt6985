@@ -2021,6 +2021,9 @@ int mtk_cam_seninf_check_timeout(struct v4l2_subdev *sd, u64 time_after_sof)
 	struct v4l2_subdev *sensor_sd = ctx->sensor_sd;
 	struct v4l2_ctrl *ctrl;
 
+	#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+	unsigned char payload[PAYLOAD_LENGTH] = {0x00};
+	#endif
 	ctrl = v4l2_ctrl_find(sensor_sd->ctrl_handler, V4L2_CID_MTK_SOF_TIMEOUT_VALUE);
 	if (!ctrl) {
 		dev_info(ctx->dev, "no timeout value in subdev %s\n", sd->name);
@@ -2043,6 +2046,17 @@ int mtk_cam_seninf_check_timeout(struct v4l2_subdev *sd, u64 time_after_sof)
 		ret,
 		SOF_TIMEOUT_RATIO,
 		val);
+
+	#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+	if (ret == -1) {
+		scnprintf(payload, sizeof(payload),
+			"NULL$$EventField@@%s$$FieldData@@0x%x$$detailData@@subdev=%s, time_after_sof=%llu, frame_time=%llu",
+			acquireEventField(EXCEP_SOF_TIMEOUT), (CAM_RESERVED_ID << 20 | CAM_MODULE_ID << 12 | EXCEP_SOF_TIMEOUT),
+			sd->name, time_after_sof, frame_time);
+		cam_olc_raise_exception(EXCEP_SOF_TIMEOUT, payload);
+	}
+	#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 	return ret;
 }
 

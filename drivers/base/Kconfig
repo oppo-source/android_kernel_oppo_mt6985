@@ -169,6 +169,9 @@ source "drivers/base/test/Kconfig"
 config SYS_HYPERVISOR
 	bool
 	default n
+#ifdef OPLUS_FEATURE_TP_BASIC
+source "drivers/base/kernelFwUpdate/Kconfig"
+#endif /*OPLUS_FEATURE_TP_BASIC*/
 
 config GENERIC_CPU_DEVICES
 	bool

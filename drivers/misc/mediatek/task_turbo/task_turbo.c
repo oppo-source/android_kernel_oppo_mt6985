@@ -28,6 +28,9 @@
 #include <trace/hooks/sysrqcrash.h>
 #include <trace/hooks/cgroup.h>
 #include <trace/hooks/sys.h>
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+#include <../kernel/oplus_cpu/sched/sched_assist/sa_fair.h>
+#endif
 
 #include <task_turbo.h>
 
@@ -148,6 +151,18 @@ static inline unsigned long cpu_util(int cpu);
 static inline unsigned long task_util(struct task_struct *p);
 static inline unsigned long _task_util_est(struct task_struct *p);
 
+#if IS_ENABLED(CONFIG_MTK_SCHEDULER)
+extern bool sysctl_util_est;
+#endif
+
+bool is_util_est_enable(void)
+{
+#if IS_ENABLED(CONFIG_MTK_SCHEDULER)
+	return sysctl_util_est;
+#else
+	return true;
+#endif
+}
 
 static void probe_android_rvh_prepare_prio_fork(void *ignore, struct task_struct *p)
 {
@@ -277,6 +292,12 @@ static void probe_android_vh_alter_rwsem_list_add(void *ignore, struct rwsem_wai
 							struct rw_semaphore *sem,
 							bool *already_on_list)
 {
+#if IS_ENABLED(CONFIG_OPLUS_LOCKING_STRATEGY)
+	oplus_android_vh_alter_rwsem_list_add(NULL, waiter, sem, already_on_list);
+	if (*already_on_list)
+		return;
+#endif
+
 	rwsem_list_add(waiter->task, &waiter->list, &sem->wait_list);
 	*already_on_list = true;
 }
@@ -315,6 +336,7 @@ static void probe_android_vh_binder_restore_priority(void *ignore,
 		binder_stop_turbo_inherit(cur);
 }
 
+#if !IS_ENABLED(CONFIG_OPLUS_LOCKING_STRATEGY)
 static void probe_android_vh_alter_futex_plist_add(void *ignore, struct plist_node *q_list,
 						struct plist_head *hb_chain, bool *already_on_hb)
 {
@@ -346,6 +368,7 @@ static void probe_android_vh_alter_futex_plist_add(void *ignore, struct plist_no
 
 	*already_on_hb = false;
 }
+#endif
 
 static void probe_android_rvh_select_task_rq_fair(void *ignore, struct task_struct *p,
 							int prev_cpu, int sd_flag,
@@ -438,7 +461,7 @@ static unsigned long cpu_util_without(int cpu, struct task_struct *p)
 	 * covered by the following code when estimated utilization is
 	 * enabled.
 	 */
-	if (sched_feat(UTIL_EST)) {
+	if (sched_feat(UTIL_EST) && is_util_est_enable()) {
 		unsigned int estimated =
 			READ_ONCE(cfs_rq->avg.util_est.enqueued);
 
@@ -481,7 +504,7 @@ static inline unsigned long cpu_util(int cpu)
 	cfs_rq = &cpu_rq(cpu)->cfs;
 	util = READ_ONCE(cfs_rq->avg.util_avg);
 
-	if (sched_feat(UTIL_EST))
+	if (sched_feat(UTIL_EST) && is_util_est_enable())
 		util = max(util, READ_ONCE(cfs_rq->avg.util_est.enqueued));
 
 	return min_t(unsigned long, util, capacity_orig_of(cpu));
@@ -527,6 +550,16 @@ int find_best_turbo_cpu(struct task_struct *p)
 			    !cpumask_test_cpu(iter_cpu, tsk_cpus_ptr) ||
 			    !cpu_active(iter_cpu))
 				continue;
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+			/*
+			 * TODO: If turbo task is ux task, should we add more conditions
+			 */
+			/*
+			if (should_ux_task_skip_cpu(p, iter_cpu))
+				continue;
+			*/
+#endif
 
 			/*
 			 * favor tasks that prefer idle cpus
@@ -1421,12 +1454,14 @@ static int __init init_task_turbo(void)
 		goto failed;
 	}
 
+#if !IS_ENABLED(CONFIG_OPLUS_LOCKING_STRATEGY)
 	ret = register_trace_android_vh_alter_futex_plist_add(
 			probe_android_vh_alter_futex_plist_add, NULL);
 	if (ret) {
 		ret_erri_line = __LINE__;
 		goto failed;
 	}
+#endif
 
 	ret = register_trace_android_rvh_select_task_rq_fair(
 			probe_android_rvh_select_task_rq_fair, NULL);

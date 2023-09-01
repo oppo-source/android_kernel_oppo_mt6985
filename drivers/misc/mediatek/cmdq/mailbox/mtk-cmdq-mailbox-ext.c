@@ -27,6 +27,10 @@
 
 #include <iommu_debug.h>
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 #if IS_ENABLED(CONFIG_MTK_CMDQ_MBOX_EXT)
 #include "cmdq-util.h"
 struct cmdq_util_controller_fp *cmdq_util_controller;
@@ -128,6 +132,9 @@ EXPORT_SYMBOL(gce_in_vcp);
 
 bool cpr_not_support_cookie;
 EXPORT_SYMBOL(cpr_not_support_cookie);
+
+bool error_irq_no_reboot;
+EXPORT_SYMBOL(error_irq_no_reboot);
 
 bool append_by_event;
 EXPORT_SYMBOL(append_by_event);
@@ -242,6 +249,7 @@ struct cmdq {
 	atomic_t		usage;
 	struct workqueue_struct *timeout_wq;
 	spinlock_t		lock;
+	spinlock_t		event_lock;
 	u32			token_cnt;
 	u16			*tokens;
 #if IS_ENABLED(CONFIG_CMDQ_MMPROFILE_SUPPORT)
@@ -255,6 +263,7 @@ struct cmdq {
 	struct cmdq_client	*prebuilt_clt;
 	struct cmdq_client	*hw_trace_clt;
 	struct mutex mbox_mutex;
+	u8			irq_long_times;
 };
 
 struct gce_plat {
@@ -270,6 +279,14 @@ struct gce_plat {
 #endif
 
 static struct cmdq *g_cmdq[2];
+
+u8 cmdq_get_irq_long_times(void *chan)
+{
+	struct cmdq *cmdq = container_of(((struct mbox_chan *)chan)->mbox,
+		typeof(*cmdq), mbox);
+	return cmdq->irq_long_times;
+}
+EXPORT_SYMBOL(cmdq_get_irq_long_times);
 
 void cmdq_dump_usage(void)
 {
@@ -397,6 +414,23 @@ static int cmdq_core_reset(struct cmdq *cmdq)
 	writel(CMDQ_THR_DO_HARD_RESET, cmdq->base + CMDQ_CORE_REST);
 	writel(0, cmdq->base + CMDQ_CORE_REST);
 	return 0;
+}
+
+static void cmdq_task_hw_trace_check(struct cmdq_task *task)
+{
+	if (!cmdq_hw_trace)
+		return;
+
+	if (cmdq_util_is_secure_client(task->pkt->cl))
+		return;
+
+	if (!cmdq_get_event(task->thread->chan, CMDQ_TOKEN_HW_TRACE_LOCK)) {
+		cmdq_err("event %d set:%d, event %d set:%d",
+			CMDQ_TOKEN_HW_TRACE_WAIT, CMDQ_TOKEN_HW_TRACE_LOCK,
+			cmdq_get_event(task->thread->chan, CMDQ_TOKEN_HW_TRACE_WAIT),
+			cmdq_get_event(task->thread->chan, CMDQ_TOKEN_HW_TRACE_LOCK));
+		cmdq_set_event(task->thread->chan, CMDQ_TOKEN_HW_TRACE_LOCK);
+	}
 }
 
 static int cmdq_thread_suspend(struct cmdq *cmdq, struct cmdq_thread *thread)
@@ -1038,10 +1072,11 @@ static void cmdq_thread_irq_handler(struct cmdq *cmdq,
 	dma_addr_t curr_pa, task_end_pa;
 	s32 err = 0;
 	unsigned long flags;
+	u64 debug_end[4] = {0};
+	u32 debug_cnt = 0;
 #if IS_ENABLED(CONFIG_MTK_IRQ_MONITOR_DEBUG)
 	u64 start = sched_clock(), end[4];
 	u32 end_cnt = 0;
-	static u8 time;
 #endif
 
 	if (atomic_read(&cmdq->usage) <= 0) {
@@ -1161,14 +1196,20 @@ static void cmdq_thread_irq_handler(struct cmdq *cmdq,
 					"remove task that not ending pkt:0x%p %pa to %pa",
 					curr_task->pkt, &curr_pa, &task_end_pa);
 			}
+			debug_cnt = 0;
+			debug_end[debug_cnt++] = sched_clock();
 			cmdq_task_exec_done(task, 0);
+			debug_end[debug_cnt++] = sched_clock();
 			spin_lock_irqsave(&cmdq->irq_removes_lock, flags);
+			debug_end[debug_cnt++] = sched_clock();
 			list_add_tail(&task->list_entry, &cmdq->irq_removes);
+			debug_end[debug_cnt++] = sched_clock();
 			spin_unlock_irqrestore(&cmdq->irq_removes_lock, flags);
 		} else if (err) {
 			cmdq_err("pkt:0x%p thread:%u err:%d",
 				curr_task->pkt, thread->idx, err);
 			cmdq_buf_dump_schedule(task, false, curr_pa);
+			cmdq_task_hw_trace_check(task);
 			cmdq_task_exec_done(task, err);
 			cmdq_task_handle_error(curr_task);
 			spin_lock_irqsave(&cmdq->irq_removes_lock, flags);
@@ -1196,13 +1237,14 @@ static void cmdq_thread_irq_handler(struct cmdq *cmdq,
 	}
 #if IS_ENABLED(CONFIG_MTK_IRQ_MONITOR_DEBUG)
 	end[end_cnt] = sched_clock();
-	if (end[end_cnt] - start >= 1000000 && !time) /* 1ms */
+	if (end[end_cnt] - start >= 1000000 && !cmdq->irq_long_times) /* 1ms */
 		cmdq_util_err(
-			"IRQ_LONG:%llu reg:%llu loop:%llu list:%llu dis:%llu",
+			"IRQ_LONG:%llu reg:%llu loop:%llu list:%llu dis:%llu done:%llu lock:%llu addlist:%llu",
 			end[end_cnt] - start, end[0] - start,
-			end[1] - end[0], end[2] - end[1], end[3] - end[2]);
-	if (end[end_cnt] - start >= 1000000)
-		time += 1;
+			end[1] - end[0], end[2] - end[1], end[3] - end[2],
+			debug_end[1] - debug_end[0],
+			debug_end[2] - debug_end[1],
+			debug_end[3] - debug_end[2]);
 #endif
 }
 
@@ -1216,7 +1258,6 @@ static irqreturn_t cmdq_irq_handler(int irq, void *dev)
 #if IS_ENABLED(CONFIG_MTK_IRQ_MONITOR_DEBUG)
 	u64 start = sched_clock(), end[4];
 	u32 end_cnt = 0;
-	static u8 time;
 #endif
 
 	if (atomic_read(&cmdq->usage) == -1)
@@ -1279,7 +1320,7 @@ static irqreturn_t cmdq_irq_handler(int irq, void *dev)
 	wake_up_interruptible(&cmdq->err_irq_wq);
 #if IS_ENABLED(CONFIG_MTK_IRQ_MONITOR_DEBUG)
 	end[end_cnt] = sched_clock();
-	if (end[end_cnt] - start >= 5000000 && !time) { /* 5ms */
+	if (end[end_cnt] - start >= 5000000 && !cmdq->irq_long_times) { /* 5ms */
 		cmdq_util_err(
 			"IRQ_LONG:%llu atomic:%llu readl:%llu bit:%llu wakeup:%llu",
 			end[end_cnt] - start, end[0] - start,
@@ -1308,8 +1349,8 @@ static irqreturn_t cmdq_irq_handler(int irq, void *dev)
 		}
 	}
 
-	if (end[end_cnt] - start >= 1000000)
-		time += 1;
+	if (end[end_cnt] - start >= 5000000)
+		cmdq->irq_long_times += 1;
 #endif
 	return secure_irq ? IRQ_NONE : IRQ_HANDLED;
 }
@@ -1458,6 +1499,7 @@ static void cmdq_thread_handle_timeout_work(struct work_struct *work_item)
 		task = list_first_entry_or_null(&thread->task_busy_list,
 			struct cmdq_task, list_entry);
 		if (timeout_task == task) {
+			cmdq_task_hw_trace_check(task);
 			cmdq_task_exec_done(task, -ETIMEDOUT);
 			kfree(task);
 		} else {
@@ -1967,6 +2009,7 @@ static void cmdq_mbox_thread_stop(struct cmdq_thread *thread)
 		if (timeout_task && (timeout_task == task))
 			continue;
 
+		cmdq_task_hw_trace_check(task);
 		cmdq_task_exec_done(task, -ECONNABORTED);
 		kfree(task);
 	}
@@ -2299,6 +2342,9 @@ static int cmdq_probe(struct platform_device *pdev)
 	if (of_property_read_bool(dev->of_node, "cpr-not-support-cookie"))
 		cpr_not_support_cookie = true;
 
+	if (of_property_read_bool(dev->of_node, "error-irq-no-reboot"))
+		error_irq_no_reboot = true;
+
 	if (of_property_read_bool(dev->of_node, "append-by-event"))
 		append_by_event = true;
 
@@ -2397,6 +2443,7 @@ static int cmdq_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, cmdq);
 
 	spin_lock_init(&cmdq->lock);
+	spin_lock_init(&cmdq->event_lock);
 
 	cmdq_mmp_init();
 
@@ -2453,6 +2500,7 @@ static const struct of_device_id cmdq_of_ids[] = {
 	{.compatible = "mediatek,mt6855-gce", .data = (void *)&gce_plat_v5},
 	{.compatible = "mediatek,mt6789-gce", .data = (void *)&gce_plat_v4},
 	{.compatible = "mediatek,mt6985-gce", .data = (void *)&gce_plat_v5},
+	{.compatible = "mediatek,mt6835-gce", .data = (void *)&gce_plat_v5},
 	{}
 };
 
@@ -3030,8 +3078,11 @@ void cmdq_set_event(void *chan, u16 event_id)
 {
 	struct cmdq *cmdq = container_of(((struct mbox_chan *)chan)->mbox,
 		typeof(*cmdq), mbox);
+	unsigned long flags;
 
+	spin_lock_irqsave(&cmdq->event_lock, flags);
 	writel((1L << 16) | event_id, cmdq->base + CMDQ_SYNC_TOKEN_UPD);
+	spin_unlock_irqrestore(&cmdq->event_lock, flags);
 }
 EXPORT_SYMBOL(cmdq_set_event);
 
@@ -3039,8 +3090,11 @@ void cmdq_clear_event(void *chan, u16 event_id)
 {
 	struct cmdq *cmdq = container_of(((struct mbox_chan *)chan)->mbox,
 		typeof(*cmdq), mbox);
+	unsigned long flags;
 
+	spin_lock_irqsave(&cmdq->event_lock, flags);
 	writel(event_id, cmdq->base + CMDQ_SYNC_TOKEN_UPD);
+	spin_unlock_irqrestore(&cmdq->event_lock, flags);
 }
 EXPORT_SYMBOL(cmdq_clear_event);
 
@@ -3048,9 +3102,14 @@ u32 cmdq_get_event(void *chan, u16 event_id)
 {
 	struct cmdq *cmdq = container_of(((struct mbox_chan *)chan)->mbox,
 		typeof(*cmdq), mbox);
+	u32 event_val = 0;
+	unsigned long flags;
 
+	spin_lock_irqsave(&cmdq->event_lock, flags);
 	writel(0x3FF & event_id, cmdq->base + CMDQ_SYNC_TOKEN_ID);
-	return readl(cmdq->base + CMDQ_SYNC_TOKEN_VAL);
+	event_val = readl(cmdq->base + CMDQ_SYNC_TOKEN_VAL);
+	spin_unlock_irqrestore(&cmdq->event_lock, flags);
+	return event_val;
 }
 EXPORT_SYMBOL(cmdq_get_event);
 

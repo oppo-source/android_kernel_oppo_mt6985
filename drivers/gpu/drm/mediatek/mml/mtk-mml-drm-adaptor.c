@@ -56,6 +56,10 @@ struct mml_drm_ctx {
 	bool disp_vdo;
 	bool racing_begin;
 	void (*submit_cb)(void *cb_param);
+	void (*ddren_cb)(struct cmdq_pkt *pkt, bool enable, void *ddren_param);
+	void *ddren_param;
+	void (*dispen_cb)(bool enable, void *dispen_param);
+	void *dispen_param;
 	struct mml_tile_cache tile_cache[MML_PIPE_CNT];
 };
 
@@ -762,8 +766,8 @@ s32 mml_drm_submit(struct mml_drm_ctx *ctx, struct mml_submit *submit,
 	void *cb_param)
 {
 	struct mml_frame_config *cfg;
-	struct mml_task *task;
-	s32 result;
+	struct mml_task *task = NULL;
+	s32 result = -EINVAL;
 	u32 i;
 	struct fence_data fence = {0};
 
@@ -927,7 +931,7 @@ s32 mml_drm_submit(struct mml_drm_ctx *ctx, struct mml_submit *submit,
 			      &submit->buffer.src,
 			      "mml_rdma");
 	if (result) {
-		mml_err("[drm]%s get dma buf fail", __func__);
+		mml_err("[drm]%s get src dma buf fail", __func__);
 		goto err_buf_exit;
 	}
 
@@ -947,7 +951,7 @@ s32 mml_drm_submit(struct mml_drm_ctx *ctx, struct mml_submit *submit,
 				      &submit->buffer.dest[i],
 				      "mml_wrot");
 		if (result) {
-			mml_err("[drm]%s get dma buf fail", __func__);
+			mml_err("[drm]%s get dest %u dma buf fail", __func__, i);
 			goto err_buf_exit;
 		}
 	}
@@ -990,7 +994,29 @@ err_unlock_exit:
 	mutex_unlock(&ctx->config_mutex);
 err_buf_exit:
 	mml_trace_end();
-	mml_log("%s fail result %d", __func__, result);
+	mml_log("%s fail result %d task %p", __func__, result, task);
+	if (task) {
+		bool is_init_state = task->state == MML_TASK_INITIAL;
+
+		mutex_lock(&ctx->config_mutex);
+		list_del_init(&task->entry);
+		cfg->await_task_cnt--;
+
+		if (is_init_state) {
+			mml_log("dec config %p and del", cfg);
+			list_del_init(&cfg->entry);
+			ctx->config_cnt--;
+			/* revert racing ref count decrease after done */
+			if (cfg->info.mode == MML_MODE_RACING)
+				atomic_dec(&ctx->racing_cnt);
+		} else
+			mml_log("dec config %p", cfg);
+		mutex_unlock(&ctx->config_mutex);
+		kref_put(&task->ref, task_move_to_destroy);
+
+		if (is_init_state)
+			cfg->cfg_ops->put(cfg);
+	}
 	return result;
 }
 EXPORT_SYMBOL_GPL(mml_drm_submit);
@@ -1157,6 +1183,34 @@ static void kt_setsched(void *adaptor_ctx)
 	ctx->kt_priority = true;
 }
 
+static void task_ddren(struct mml_task *task, struct cmdq_pkt *pkt, bool enable)
+{
+	struct mml_drm_ctx *ctx = task->ctx;
+
+	if (!ctx->ddren_cb)
+		return;
+
+	/* no need ddren for srt case */
+	if (task->config->info.mode == MML_MODE_MML_DECOUPLE)
+		return;
+
+	ctx->ddren_cb(pkt, enable, ctx->ddren_param);
+}
+
+static void task_dispen(struct mml_task *task, bool enable)
+{
+	struct mml_drm_ctx *ctx = task->ctx;
+
+	if (!ctx->dispen_cb)
+		return;
+
+	/* no need ddren so no dispen */
+	if (task->config->info.mode == MML_MODE_MML_DECOUPLE)
+		return;
+
+	ctx->dispen_cb(enable, ctx->dispen_param);
+}
+
 static const struct mml_task_ops drm_task_ops = {
 	.queue = task_queue,
 	.submit_done = task_submit_done,
@@ -1164,6 +1218,8 @@ static const struct mml_task_ops drm_task_ops = {
 	.dup_task = dup_task,
 	.get_tile_cache = task_get_tile_cache,
 	.kt_setsched = kt_setsched,
+	.ddren = task_ddren,
+	.dispen = task_dispen,
 };
 
 static void config_get(struct mml_frame_config *cfg)
@@ -1210,6 +1266,10 @@ static struct mml_drm_ctx *drm_ctx_create(struct mml_dev *mml,
 	ctx->disp_dual = disp->dual;
 	ctx->disp_vdo = disp->vdo_mode;
 	ctx->submit_cb = disp->submit_cb;
+	ctx->ddren_cb = disp->ddren_cb;
+	ctx->ddren_param = disp->ddren_param;
+	ctx->dispen_cb = disp->dispen_cb;
+	ctx->dispen_param = disp->dispen_param;
 	ctx->panel_pixel = MML_DEFAULT_PANEL_PX;
 	ctx->wq_config[0] = alloc_ordered_workqueue("mml_work0", WORK_CPU_UNBOUND | WQ_HIGHPRI, 0);
 	ctx->wq_config[1] = alloc_ordered_workqueue("mml_work1", WORK_CPU_UNBOUND | WQ_HIGHPRI, 0);
@@ -1266,6 +1326,7 @@ done:
 	mutex_unlock(&ctx->config_mutex);
 	return idle;
 }
+EXPORT_SYMBOL_GPL(mml_drm_ctx_idle);
 
 static void drm_ctx_release(struct mml_drm_ctx *ctx)
 {
@@ -1303,6 +1364,7 @@ void mml_drm_put_context(struct mml_drm_ctx *ctx)
 	if (IS_ERR_OR_NULL(ctx))
 		return;
 	mml_log("[drm]%s", __func__);
+	mml_sys_put_dle_ctx(ctx->mml);
 	mml_dev_put_drm_ctx(ctx->mml, drm_ctx_release);
 }
 EXPORT_SYMBOL_GPL(mml_drm_put_context);
@@ -1465,17 +1527,17 @@ void mml_drm_split_info(struct mml_submit *submit, struct mml_submit *submit_pq)
 	} else {
 		dest->compose.left = 0;
 		dest->compose.top = 0;
-		dest->compose.width = dest->crop.r.height;
+		dest->compose.width = dest->crop.r.height; /* even or odd */
 		dest->compose.height = dest->crop.r.width;
 
 		if (MML_FMT_H_SUBSAMPLE(dest->data.format)) {
-			mml_check_boundary_w(&info->src, dest, lrtb);
+			mml_check_boundary_w(&info->src, dest, lrtb); /* (wrot) align to even */
 			mml_check_boundary_h(&info->src, dest, lrtb);
 		} else if (MML_FMT_V_SUBSAMPLE(dest->data.format)) {
 			mml_check_boundary_w(&info->src, dest, lrtb);
 		}
 
-		dest->data.width = dest->crop.r.height;
+		dest->data.width = dest->crop.r.height; /* even */
 		dest->data.height = dest->crop.r.width;
 	}
 
@@ -1532,9 +1594,28 @@ void mml_drm_split_info(struct mml_submit *submit, struct mml_submit *submit_pq)
 		dest->data.format, dest->data.width);
 	dest->data.uv_stride = mml_color_get_min_uv_stride(
 		dest->data.format, dest->data.width);
-	memset(&dest->pq_config, 0, sizeof(dest->pq_config));
 
 	info_pq->src = dest->data;
+	/* for better wrot burst 16 bytes performance,
+	 * always align output width to 16 pixel
+	 */
+	if (dest->data.y_stride & 0xf &&
+		(dest->rotate == MML_ROT_90 || dest->rotate == MML_ROT_270)) {
+		u32 align_w = align_up(dest->data.width, 16);
+
+		dest->data.y_stride = mml_color_get_min_y_stride(
+			dest->data.format, align_w);
+		dest->compose.left = align_w - dest->data.width;
+		/* same as
+		 * dest->compose.left + dest->compose.width + info_pq->dest[0].crop.r.left
+		 */
+		info_pq->src.width = align_w;
+		info_pq->src.y_stride = dest->data.y_stride;
+	}
+
+	memset(&dest->pq_config, 0, sizeof(dest->pq_config));
+
+	info_pq->dest[0].crop.r.left += dest->compose.left;
 	info_pq->dest[0].crop.r.width = dest->compose.width;
 	info_pq->dest[0].crop.r.height = dest->compose.height;
 	info_pq->dest[0].rotate = 0;

@@ -111,9 +111,13 @@ static int vcorefs_hold(struct act_arg_obj *arg)
 {
 	USB_BOOST_DBG("\n");
 
-	/* disable dram boost */
-	/* if (usb_icc_path) */
-	/*	icc_set_bw(usb_icc_path, 0, peak_bw); */
+	/* enable dram boost */
+	if (usb_icc_path) {
+		struct device_node *np = gdev->of_node;
+
+		if (of_device_is_compatible(np, "mediatek,mt6835-usb_boost"))
+			icc_set_bw(usb_icc_path, 0, peak_bw);
+	}
 
 	return 0;
 }
@@ -123,8 +127,12 @@ static int vcorefs_release(struct act_arg_obj *arg)
 	USB_BOOST_DBG("\n");
 
 	/* disable dram boost */
-	/* if (usb_icc_path) */
-	/*	icc_set_bw(usb_icc_path, 0, 0); */
+	if (usb_icc_path) {
+		struct device_node *np = gdev->of_node;
+
+		if (of_device_is_compatible(np, "mediatek,mt6835-usb_boost"))
+			icc_set_bw(usb_icc_path, 0, 0);
+	}
 
 	return 0;
 }
@@ -290,6 +298,19 @@ int audio_freq_hold(void)
 			if (!ret)
 				USB_BOOST_NOTICE("%s: fail to update freq constraint (policy:%d)\n",
 					__func__, req_policy->policy->cpu);
+		}
+	}
+
+	if (of_device_is_compatible(np, "mediatek,mt6835-usb_boost")) {
+		device_property_read_u32(gdev, "small-core", &(cpu_freq_audio[0]));
+		device_property_read_u32(gdev, "big-core", &(cpu_freq_audio[1]));
+		USB_BOOST_NOTICE("%s: request cpu freq(%d) (%d)\n", __func__,
+			cpu_freq_audio[0], cpu_freq_audio[1]);
+		list_for_each_entry(req_policy, &usb_policy_list, list) {
+			if (req_policy->policy->cpu == 0 && cpu_freq_audio[0] > 0)
+				freq_qos_update_request(&req_policy->qos_req, cpu_freq_audio[0]);
+			if (req_policy->policy->cpu == 6 && cpu_freq_audio[1] > 0)
+				freq_qos_update_request(&req_policy->qos_req, cpu_freq_audio[1]);
 		}
 	}
 

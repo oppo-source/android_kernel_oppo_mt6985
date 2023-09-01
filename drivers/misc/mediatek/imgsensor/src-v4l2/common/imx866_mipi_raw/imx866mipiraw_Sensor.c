@@ -855,7 +855,9 @@ static void set_multi_shutter_frame_length(struct subdrv_ctx *ctx,
 	kal_uint32 calc_fl = 0;
 	kal_uint32 calc_fl2 = 0;
 	kal_uint32 calc_fl3 = 0;
-	kal_uint16 le, me, se;
+	kal_uint16 le = 0;
+	kal_uint16 me = 0;
+	kal_uint16 se = 0;
 	kal_uint32 fineIntegTime = fine_integ_line_table[ctx->current_scenario_id];
 	kal_uint32 readoutLength = ctx->readout_length;
 	kal_uint32 readMargin = ctx->read_margin;
@@ -921,6 +923,8 @@ static void set_multi_shutter_frame_length(struct subdrv_ctx *ctx,
 		le = shutters[0];
 		me = 0;
 		se = 0;
+		break;
+	default:
 		break;
 	}
 

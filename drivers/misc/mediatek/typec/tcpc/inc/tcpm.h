@@ -140,8 +140,19 @@ enum {
 	TCP_NOTIFY_CABLE_TYPE,
 	TCP_NOTIFY_TYPEC_OTP,
 	TCP_NOTIFY_PLUG_OUT,
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for uvlo */
 	TCP_NOTIFY_WD0_STATE,
 	TCP_NOTIFY_MISC_END = TCP_NOTIFY_WD0_STATE,
+#else
+	TCP_NOTIFY_SWITCH_GET_STATE,
+	TCP_NOTIFY_SWITCH_SET_STATE,
+	TCP_NOTIFY_WD0_STATE,
+	TCP_NOTIFY_CHRDET_STATE,
+	TCP_NOTIFY_BC12_COMPLETE_STATE,
+	TCP_NOTIFY_HVDCP_DETECT_DN,
+	TCP_NOTIFY_MISC_END = TCP_NOTIFY_HVDCP_DETECT_DN,
+#endif
 };
 
 struct tcp_ny_pd_state {
@@ -314,6 +325,22 @@ struct tcp_ny_cable_type {
 	enum tcpc_cable_type type;
 };
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+struct tcp_ny_switch_set_status {
+	bool	 state;		/* 0: DP/DM state;  1: fastchg state */
+	bool 	(*pfunc)(int);	/* recevier call the pfunc to ack.*/
+};
+
+struct tcp_ny_switch_get_status {
+	bool	(*pfunc)(int);  /*recevier call the pfunc to ack.
+				* 0: default DP/DM state
+				* 1: fastchg state
+				* 2: audio state
+				* 3: unknow state
+				*/
+};
+#endif
+
 struct tcp_ny_typec_otp {
 	bool otp;
 };
@@ -321,6 +348,21 @@ struct tcp_ny_typec_otp {
 struct tcp_ny_wd0_state {
 	bool wd0;
 };
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for uvlo */
+struct tcp_ny_chrdet_state {
+	bool chrdet;
+};
+
+struct tcp_ny_bc12_complete_state {
+	bool bc12_complete;
+};
+
+struct tcp_ny_hvdcp_detect_dn {
+	bool hvdcp_detect_dn;
+};
+#endif
 
 struct tcp_notify {
 	union {
@@ -343,6 +385,14 @@ struct tcp_notify {
 		struct tcp_ny_cable_type cable_type;
 		struct tcp_ny_typec_otp typec_otp;
 		struct tcp_ny_wd0_state wd0_state;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for uvlo */
+		struct tcp_ny_switch_set_status switch_set_status;
+		struct tcp_ny_switch_get_status switch_get_status;
+		struct tcp_ny_chrdet_state chrdet_state;
+		struct tcp_ny_bc12_complete_state bc12_complete_state;
+		struct tcp_ny_hvdcp_detect_dn hvdcp_detect;
+#endif
 	};
 };
 

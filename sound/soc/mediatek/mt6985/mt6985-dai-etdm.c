@@ -512,20 +512,26 @@ static const struct snd_kcontrol_new mtk_etdm_playback_ch1_mix[] = {
 	SOC_DAPM_SINGLE_AUTODISABLE("DL11_CH1", AFE_CONN62_2,  I_DL11_CH1, 1, 0),
 	SOC_DAPM_SINGLE_AUTODISABLE("ADDA_UL_CH1", AFE_CONN62,  I_ADDA_UL_CH1, 1, 0),
 	SOC_DAPM_SINGLE_AUTODISABLE("PCM_2_CAP_CH1", AFE_CONN62,  I_PCM_2_CAP_CH1, 1, 0),
+//#ifdef OPLUS_ARCH_EXTENDS
+	SOC_DAPM_SINGLE_AUTODISABLE("DL7_CH1", AFE_CONN62_1,  I_DL7_CH1, 1, 0),
+//#endif
 };
 static const struct snd_kcontrol_new mtk_etdm_playback_ch2_mix[] = {
 	SOC_DAPM_SINGLE_AUTODISABLE("DL11_CH2", AFE_CONN63_2,  I_DL11_CH2, 1, 0),
-	SOC_DAPM_SINGLE_AUTODISABLE("ADDA_UL_CH1", AFE_CONN63,  I_ADDA_UL_CH2, 1, 0),
+	SOC_DAPM_SINGLE_AUTODISABLE("ADDA_UL_CH2", AFE_CONN63,  I_ADDA_UL_CH2, 1, 0),
 	SOC_DAPM_SINGLE_AUTODISABLE("PCM_2_CAP_CH1", AFE_CONN63,  I_PCM_2_CAP_CH1, 1, 0),
+//#ifdef OPLUS_ARCH_EXTENDS
+	SOC_DAPM_SINGLE_AUTODISABLE("DL7_CH2", AFE_CONN63_1,  I_DL7_CH2, 1, 0),
+//#endif
 };
 static const struct snd_kcontrol_new mtk_etdm_playback_ch3_mix[] = {
 	SOC_DAPM_SINGLE_AUTODISABLE("DL11_CH3", AFE_CONN64_2,  I_DL11_CH3, 1, 0),
-	SOC_DAPM_SINGLE_AUTODISABLE("ADDA_UL_CH1", AFE_CONN62,  I_ADDA_UL_CH1, 1, 0),
+	SOC_DAPM_SINGLE_AUTODISABLE("ADDA_UL_CH1", AFE_CONN64,  I_ADDA_UL_CH1, 1, 0),
 	SOC_DAPM_SINGLE_AUTODISABLE("PCM_2_CAP_CH1", AFE_CONN64,  I_PCM_2_CAP_CH1, 1, 0),
 };
 static const struct snd_kcontrol_new mtk_etdm_playback_ch4_mix[] = {
 	SOC_DAPM_SINGLE_AUTODISABLE("DL11_CH4", AFE_CONN65_2,  I_DL11_CH4, 1, 0),
-	SOC_DAPM_SINGLE_AUTODISABLE("ADDA_UL_CH2", AFE_CONN63,  I_ADDA_UL_CH2, 1, 0),
+	SOC_DAPM_SINGLE_AUTODISABLE("ADDA_UL_CH2", AFE_CONN65,  I_ADDA_UL_CH2, 1, 0),
 	SOC_DAPM_SINGLE_AUTODISABLE("PCM_2_CAP_CH1", AFE_CONN65,  I_PCM_2_CAP_CH1, 1, 0),
 };
 static const struct snd_kcontrol_new mtk_etdm_playback_ch5_mix[] = {
@@ -701,6 +707,35 @@ static int mtk_mclk_en_event(struct snd_soc_dapm_widget *w,
 
 	return 0;
 }
+/*
+static int mtk_apll_event(struct snd_soc_dapm_widget *w,
+			  struct snd_kcontrol *kcontrol,
+			  int event)
+{
+	struct snd_soc_component *cmpnt = snd_soc_dapm_to_component(w->dapm);
+	struct mtk_base_afe *afe = snd_soc_component_get_drvdata(cmpnt);
+
+	dev_info(cmpnt->dev, "####%s(), name %s, event 0x%x\n",
+		 __func__, w->name, event);
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		if (strcmp(w->name, APLL1_W_NAME) == 0)
+			mt6985_apll1_enable(afe);
+		else
+			mt6985_apll2_enable(afe);
+		break;
+	case SND_SOC_DAPM_POST_PMD:
+		if (strcmp(w->name, APLL1_W_NAME) == 0)
+			mt6985_apll1_disable(afe);
+		else
+			mt6985_apll2_disable(afe);
+		break;
+	default:
+		break;
+	}
+	return 0;
+}
+*/
 
 static int mtk_afe_etdm_apll_connect(struct snd_soc_dapm_widget *source,
 				     struct snd_soc_dapm_widget *sink)
@@ -724,7 +759,37 @@ static int mtk_afe_etdm_apll_connect(struct snd_soc_dapm_widget *source,
 	return (apll == cur_apll) ? 1 : 0;
 }
 
-static int mtk_etdm_en_event(struct snd_soc_dapm_widget *w,
+static int mtk_etdm_out_en_event(struct snd_soc_dapm_widget *w,
+			    struct snd_kcontrol *kcontrol,
+			    int event)
+{
+	struct snd_soc_component *cmpnt = snd_soc_dapm_to_component(w->dapm);
+	struct mtk_base_afe *afe = snd_soc_component_get_drvdata(cmpnt);
+
+	dev_info(cmpnt->dev, "%s(), name %s, event 0x%x\n",
+		 __func__, w->name, event);
+
+	switch (event) {
+	case SND_SOC_DAPM_PRE_PMU:
+		//#ifndef OPLUS_ARCH_EXTENDS
+		//mt6985_afe_gpio_request(afe, true, MT6985_DAI_ETDMIN, 0);
+		//#endif
+		mt6985_afe_gpio_request(afe, true, MT6985_DAI_ETDMOUT, 0);
+		break;
+	case SND_SOC_DAPM_POST_PMD:
+		//#ifndef OPLUS_ARCH_EXTENDS
+		//mt6985_afe_gpio_request(afe, false, MT6985_DAI_ETDMIN, 0);
+		//#endif
+		mt6985_afe_gpio_request(afe, false, MT6985_DAI_ETDMOUT, 0);
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static int mtk_etdm_in_en_event(struct snd_soc_dapm_widget *w,
 			    struct snd_kcontrol *kcontrol,
 			    int event)
 {
@@ -737,11 +802,15 @@ static int mtk_etdm_en_event(struct snd_soc_dapm_widget *w,
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
 		mt6985_afe_gpio_request(afe, true, MT6985_DAI_ETDMIN, 0);
-		mt6985_afe_gpio_request(afe, true, MT6985_DAI_ETDMOUT, 0);
+		//#ifndef OPLUS_ARCH_EXTENDS
+		//mt6985_afe_gpio_request(afe, true, MT6985_DAI_ETDMOUT, 0);
+		//#endif
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		mt6985_afe_gpio_request(afe, false, MT6985_DAI_ETDMIN, 0);
-		mt6985_afe_gpio_request(afe, false, MT6985_DAI_ETDMOUT, 0);
+		//#ifndef OPLUS_ARCH_EXTENDS
+		//mt6985_afe_gpio_request(afe, false, MT6985_DAI_ETDMOUT, 0);
+		//#endif
 		break;
 	default:
 		break;
@@ -767,6 +836,31 @@ static const struct snd_kcontrol_new mtk_dai_etdm_controls[] = {
 	SOC_ENUM_EXT("ETDM_OUT1_CH_NUM", etdm_ch_num_map_enum,
 		     etdm_ch_num_get, etdm_ch_num_put),
 };
+
+/* dai component */
+/* etdm virtual mux to output widget */
+static const char * const etdm_mux_map[] = {
+	"Normal", "Dummy_Widget",
+};
+
+static int etdm_mux_map_value[] = {
+	0, 1,
+};
+
+static SOC_VALUE_ENUM_SINGLE_AUTODISABLE_DECL(etdm_mux_map_enum,
+					      SND_SOC_NOPM,
+					      0,
+					      1,
+					      etdm_mux_map,
+					      etdm_mux_map_value);
+
+static const struct snd_kcontrol_new etdm_in_mux_control =
+	SOC_DAPM_ENUM("ETDM In Select", etdm_mux_map_enum);
+
+
+static const struct snd_kcontrol_new etdm_out_mux_control =
+	SOC_DAPM_ENUM("ETDM Out Select", etdm_mux_map_enum);
+
 
 static const struct snd_soc_dapm_widget mtk_dai_etdm_widgets[] = {
 	/* inter-connections */
@@ -839,11 +933,33 @@ static const struct snd_soc_dapm_widget mtk_dai_etdm_widgets[] = {
 				  mtk_mclk_en_event,
 				  SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
 
+	/* apll 
+	SND_SOC_DAPM_SUPPLY_S(APLL1_W_NAME, SUPPLY_SEQ_APLL,
+			      SND_SOC_NOPM, 0, 0,
+			      mtk_apll_event,
+			      SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+	SND_SOC_DAPM_SUPPLY_S(APLL2_W_NAME, SUPPLY_SEQ_APLL,
+			      SND_SOC_NOPM, 0, 0,
+			      mtk_apll_event,
+			      SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),*/
+	SND_SOC_DAPM_CLOCK_SUPPLY("aud_tdm_clk"),
+
+
 	/* etdm en*/
-	SND_SOC_DAPM_SUPPLY_S("ETDM_EN", SUPPLY_SEQ_ETDM_EN,
+	SND_SOC_DAPM_SUPPLY_S("ETDM_OUT_EN", SUPPLY_SEQ_ETDM_EN,
 				  ETDM_OUT1_CON0, REG_ETDM_OUT_EN_SFT, 0,
-				  mtk_etdm_en_event,
+				  mtk_etdm_out_en_event,
 				  SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+
+	SND_SOC_DAPM_SUPPLY_S("ETDM_IN_EN", SUPPLY_SEQ_ETDM_EN,
+			  ETDM_IN1_CON0, REG_ETDM_IN_EN_SFT, 0,
+			  mtk_etdm_in_en_event,
+			  SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+
+	SND_SOC_DAPM_MUX("ETDM_In_Mux",
+			 SND_SOC_NOPM, 0, 0, &etdm_in_mux_control),
+	SND_SOC_DAPM_MUX("ETDM_Out_Mux",
+			 SND_SOC_NOPM, 0, 0, &etdm_out_mux_control),
 
 	/* endpoint */
 	SND_SOC_DAPM_INPUT("ETDM_INPUT"),
@@ -863,6 +979,11 @@ static const struct snd_soc_dapm_route mtk_dai_etdm_routes[] = {
 	{"ETDM_OUT_CH7", "DL11_CH1", "DL11"},
 	{"ETDM_OUT_CH8", "DL11_CH2", "DL11"},
 
+//#ifdef OPLUS_ARCH_EXTENDS
+	{"ETDM_OUT_CH1", "DL7_CH1", "DL7"},
+	{"ETDM_OUT_CH2", "DL7_CH2", "DL7"},
+//#endif
+
 	{"ETDM Playback", NULL, "ETDM_OUT_CH1"},
 	{"ETDM Playback", NULL, "ETDM_OUT_CH2"},
 	{"ETDM Playback", NULL, "ETDM_OUT_CH3"},
@@ -872,16 +993,16 @@ static const struct snd_soc_dapm_route mtk_dai_etdm_routes[] = {
 	{"ETDM Playback", NULL, "ETDM_OUT_CH7"},
 	{"ETDM Playback", NULL, "ETDM_OUT_CH8"},
 
-	{"ETDM_OUTPUT", NULL, "ETDM Playback"},
-	{"ETDM Capture", NULL, "ETDM_INPUT"},
+	//{"ETDM_OUTPUT", NULL, "ETDM Playback"},
+	//{"ETDM Capture", NULL, "ETDM_INPUT"},
 
 	{"ETDM Playback", NULL, "aud_tdm_clk"},
-	{"ETDM Playback", NULL, "ETDM_EN"},
+	{"ETDM Playback", NULL, "ETDM_OUT_EN"},
 	{"ETDM Playback", NULL, APLL1_W_NAME, mtk_afe_etdm_apll_connect},
 	{"ETDM Playback", NULL, APLL2_W_NAME, mtk_afe_etdm_apll_connect},
 
 	{"ETDM Capture", NULL, "aud_tdm_clk"},
-	{"ETDM Capture", NULL, "ETDM_EN"},
+	{"ETDM Capture", NULL, "ETDM_IN_EN"},
 	{"ETDM Capture", NULL, APLL1_W_NAME, mtk_afe_etdm_apll_connect},
 	{"ETDM Capture", NULL, APLL2_W_NAME, mtk_afe_etdm_apll_connect},
 
@@ -902,6 +1023,12 @@ static const struct snd_soc_dapm_route mtk_dai_etdm_routes[] = {
 	{"ETDM Playback", NULL, "ETDM_OUT_CH6_TINYCONN_MUX"},
 	{"ETDM Playback", NULL, "ETDM_OUT_CH7_TINYCONN_MUX"},
 	{"ETDM Playback", NULL, "ETDM_OUT_CH8_TINYCONN_MUX"},
+
+	{"ETDM Capture", NULL, "ETDM_In_Mux"},
+	{"ETDM_In_Mux", "Dummy_Widget", "ETDM_INPUT"},
+
+	{"ETDM_Out_Mux", "Dummy_Widget", "ETDM Playback"},
+	{"ETDM_OUTPUT", NULL, "ETDM_Out_Mux"},
 };
 
 /* dai ops */
@@ -927,14 +1054,17 @@ static int mtk_dai_etdm_hw_params(struct snd_pcm_substream *substream,
 		dev_info(afe->dev, "%s(), channels(%d) not even\n", __func__, channels);
 
 	if (etdm_id == MT6985_DAI_ETDMIN) {
-		/* ---etdm in --- */
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON0,
+                   REG_SYNC_MODE_MASK_SFT,
+                   0x1 << REG_SYNC_MODE_SFT);
+        /* ---etdm in --- */
 		regmap_update_bits(afe->regmap, ETDM_IN1_CON1,
 				   REG_INITIAL_COUNT_MASK_SFT,
 				   0x5 << REG_INITIAL_COUNT_SFT);
 		/* 3: pad top 5: no pad top */
 		regmap_update_bits(afe->regmap, ETDM_IN1_CON1,
 				   REG_INITIAL_POINT_MASK_SFT,
-				   0x3 << REG_INITIAL_POINT_SFT);
+				   0x4 << REG_INITIAL_POINT_SFT);
 		regmap_update_bits(afe->regmap, ETDM_IN1_CON1,
 				   REG_LRCK_RESET_MASK_SFT,
 				   0x1 << REG_LRCK_RESET_SFT);
@@ -970,7 +1100,7 @@ static int mtk_dai_etdm_hw_params(struct snd_pcm_substream *substream,
 
 		/* 5:  TDM Mode */
 		regmap_update_bits(afe->regmap, ETDM_IN1_CON0,
-				   REG_FMT_MASK_SFT, 0x5 << REG_FMT_SFT);
+				   REG_FMT_MASK_SFT, 0x0 << REG_FMT_SFT);
 
 		/* APLL */
 		regmap_update_bits(afe->regmap, ETDM_IN1_CON0,
@@ -1005,7 +1135,7 @@ static int mtk_dai_etdm_hw_params(struct snd_pcm_substream *substream,
 				   get_etdm_inconn_rate(rate) << INTERCONN_OUT_EN_SEL_SFT);
 		/* 5:  TDM Mode */
 		regmap_update_bits(afe->regmap, ETDM_OUT1_CON0,
-				   REG_FMT_MASK_SFT, 0x5 << REG_FMT_SFT);
+				   REG_FMT_MASK_SFT, 0x0 << REG_FMT_SFT);
 
 		/* APLL */
 		regmap_update_bits(afe->regmap, ETDM_OUT1_CON0,
@@ -1063,7 +1193,7 @@ static int mtk_dai_etdm_trigger(struct snd_pcm_substream *substream,
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
 	case SNDRV_PCM_TRIGGER_RESUME:
-		/* enable etdm in/out */
+		/* enable etdm in/out
 		if (dai->id == MT6985_DAI_ETDMIN) {
 			mt6985_afe_gpio_request(afe, true, MT6985_DAI_ETDMIN, 0);
 			mt6985_afe_gpio_request(afe, true, MT6985_DAI_ETDMOUT, 0);
@@ -1075,11 +1205,11 @@ static int mtk_dai_etdm_trigger(struct snd_pcm_substream *substream,
 			regmap_update_bits(afe->regmap, ETDM_OUT1_CON0,
 					   REG_ETDM_OUT_EN_MASK_SFT,
 					   0x1 << REG_ETDM_OUT_EN_SFT);
-		}
+		}*/
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
-		/* disable etdm in/out */
+		/* disable etdm in/out
 		if (dai->id == MT6985_DAI_ETDMIN) {
 			regmap_update_bits(afe->regmap, ETDM_IN1_CON0,
 					   REG_ETDM_IN_EN_MASK_SFT,
@@ -1091,7 +1221,7 @@ static int mtk_dai_etdm_trigger(struct snd_pcm_substream *substream,
 					   REG_ETDM_OUT_EN_MASK_SFT,
 					   0x0 << REG_ETDM_OUT_EN_SFT);
 			mt6985_afe_gpio_request(afe, false, MT6985_DAI_ETDMOUT, 0);
-		}
+		}*/
 		break;
 	default:
 		return -EINVAL;
@@ -1191,6 +1321,145 @@ static int etdm_parse_dt(struct mtk_base_afe *afe)
 	return 0;
 }
 
+void etdm_config_init(struct mtk_base_afe *afe)
+{
+
+	{
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON0,
+				   REG_SYNC_MODE_MASK_SFT,
+				   0x1 << REG_SYNC_MODE_SFT);
+		/* ---etdm in --- */
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON1,
+				   REG_INITIAL_COUNT_MASK_SFT,
+				   0x5 << REG_INITIAL_COUNT_SFT);
+		/* 3: pad top 5: no pad top */
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON1,
+				   REG_INITIAL_POINT_MASK_SFT,
+				   0x4 << REG_INITIAL_POINT_SFT);
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON1,
+				   REG_LRCK_RESET_MASK_SFT,
+				   0x1 << REG_LRCK_RESET_SFT);
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON2,
+				   REG_CLOCK_SOURCE_SEL_MASK_SFT,
+				   ETDM_CLK_SOURCE_APLL << REG_CLOCK_SOURCE_SEL_SFT);
+		/* 0: manual 1: auto */
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON2,
+				   REG_CK_EN_SEL_AUTO_MASK_SFT,
+				   0x1 << REG_CK_EN_SEL_AUTO_SFT);
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON3,
+				   REG_FS_TIMING_SEL_MASK_SFT,
+				   get_etdm_rate(48000) << REG_FS_TIMING_SEL_SFT);
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON4,
+				   REG_RELATCH_1X_EN_SEL_MASK_SFT,
+				   get_etdm_inconn_rate(48000) << REG_RELATCH_1X_EN_SEL_SFT);
+
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON8,
+				   REG_ETDM_USE_AFIFO_MASK_SFT,
+				   0x0 << REG_ETDM_USE_AFIFO_SFT);
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON8,
+				   REG_AFIFO_MODE_MASK_SFT,
+				   0x0 << REG_AFIFO_MODE_SFT);
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON9,
+				   REG_ALMOST_END_CH_COUNT_MASK_SFT,
+				   0x0 << REG_ALMOST_END_CH_COUNT_SFT);
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON9,
+				   REG_ALMOST_END_BIT_COUNT_MASK_SFT,
+				   0x0 << REG_ALMOST_END_BIT_COUNT_SFT);
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON9,
+				   REG_OUT2_LATCH_TIME_MASK_SFT,
+				   0x6 << REG_OUT2_LATCH_TIME_SFT);
+
+		/* 5:  TDM Mode */
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON0,
+				   REG_FMT_MASK_SFT, 0x0 << REG_FMT_SFT);
+
+		/* APLL */
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON0,
+				   REG_RELATCH_1X_EN_SEL_DOMAIN_MASK_SFT,
+				   ETDM_RELATCH_SEL_APLL
+				   << REG_RELATCH_1X_EN_SEL_DOMAIN_SFT);
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON0,
+				   REG_BIT_LENGTH_MASK_SFT,
+				   get_etdm_lrck_width(SNDRV_PCM_FORMAT_S32_LE) << REG_BIT_LENGTH_SFT);
+		regmap_update_bits(afe->regmap, ETDM_IN1_CON0,
+				   REG_WORD_LENGTH_MASK_SFT,
+				   get_etdm_wlen(SNDRV_PCM_FORMAT_S32_LE) << REG_WORD_LENGTH_SFT);
+	}
+	{
+		/* ---etdm out --- */
+		regmap_update_bits(afe->regmap, ETDM_OUT1_CON1,
+				   REG_INITIAL_COUNT_MASK_SFT,
+				   0x5 << REG_INITIAL_COUNT_SFT);
+		regmap_update_bits(afe->regmap, ETDM_OUT1_CON1,
+				   REG_INITIAL_POINT_MASK_SFT,
+				   0x6 << REG_INITIAL_POINT_SFT);
+		regmap_update_bits(afe->regmap, ETDM_OUT1_CON1,
+				   REG_LRCK_RESET_MASK_SFT,
+				   0x1 << REG_LRCK_RESET_SFT);
+		regmap_update_bits(afe->regmap, ETDM_OUT1_CON4,
+				   OUT_REG_FS_TIMING_SEL_MASK_SFT,
+				   get_etdm_rate(48000) << OUT_REG_FS_TIMING_SEL_SFT);
+		regmap_update_bits(afe->regmap, ETDM_OUT1_CON4,
+				   OUT_REG_CLOCK_SOURCE_SEL_MASK_SFT,
+				   ETDM_CLK_SOURCE_APLL << OUT_REG_CLOCK_SOURCE_SEL_SFT);
+		regmap_update_bits(afe->regmap, ETDM_OUT1_CON4,
+				   INTERCONN_OUT_EN_SEL_MASK_SFT,
+				   get_etdm_inconn_rate(48000) << INTERCONN_OUT_EN_SEL_SFT);
+		/* 5:  TDM Mode */
+		regmap_update_bits(afe->regmap, ETDM_OUT1_CON0,
+				   REG_FMT_MASK_SFT, 0x0 << REG_FMT_SFT);
+
+		/* APLL */
+		regmap_update_bits(afe->regmap, ETDM_OUT1_CON0,
+				   REG_RELATCH_1X_EN_SEL_DOMAIN_MASK_SFT,
+				   ETDM_RELATCH_SEL_APLL
+				   << REG_RELATCH_1X_EN_SEL_DOMAIN_SFT);
+		regmap_update_bits(afe->regmap, ETDM_OUT1_CON0,
+				   REG_BIT_LENGTH_MASK_SFT,
+				   get_etdm_lrck_width(SNDRV_PCM_FORMAT_S24_LE) << REG_BIT_LENGTH_SFT);
+		regmap_update_bits(afe->regmap, ETDM_OUT1_CON0,
+				   REG_WORD_LENGTH_MASK_SFT,
+				   get_etdm_wlen(SNDRV_PCM_FORMAT_S24_LE) << REG_WORD_LENGTH_SFT);
+	}
+	{
+		/* ---etdm cowork in--- */
+		regmap_update_bits(afe->regmap, ETDM_0_3_COWORK_CON0,
+				   ETDM_IN0_SLAVE_SEL_MASK_SFT,
+				   ETDM_SLAVE_SEL_ETDMOUT0_MASTER
+				   << ETDM_IN0_SLAVE_SEL_SFT);
+		regmap_update_bits(afe->regmap, ETDM_0_3_COWORK_CON1,
+				   ETDM_IN1_SLAVE_SEL_MASK_SFT,
+				   ETDM_SLAVE_SEL_ETDMOUT1_MASTER
+				   << ETDM_IN1_SLAVE_SEL_SFT);
+	}
+	{
+		/* ---etdm cowork out--- */
+		regmap_update_bits(afe->regmap, ETDM_0_3_COWORK_CON0,
+				   ETDM_OUT0_SLAVE_SEL_MASK_SFT,
+				   ETDM_SLAVE_SEL_ETDMIN0_MASTER
+				   << ETDM_OUT0_SLAVE_SEL_SFT);
+		regmap_update_bits(afe->regmap, ETDM_0_3_COWORK_CON0,
+				   ETDM_OUT1_SLAVE_SEL_MASK_SFT,
+				   ETDM_SLAVE_SEL_ETDMIN1_MASTER
+				   << ETDM_OUT1_SLAVE_SEL_SFT);
+	}
+	{
+		/* INTERCONN mux in*/
+		regmap_update_bits(afe->regmap, ETDM_0_3_COWORK_CON1,
+				   ETDM_IN0_INTERCONN_MUX_SEL_MASK_SFT,
+				   0x0 << ETDM_IN0_INTERCONN_MUX_SEL_SFT);//24
+	}
+	{
+		/* INTERCONN mux out*/
+		regmap_update_bits(afe->regmap, ETDM_0_3_COWORK_CON1,
+				   ETDM_OUT0_INTERCONN_MUX_SEL_MASK_SFT,
+				   0x1 << ETDM_OUT0_INTERCONN_MUX_SEL_SFT);//25
+	}
+	return ;
+
+}
+
+
 int init_etdm_priv_data(struct mtk_base_afe *afe)
 {
 	int i;
@@ -1244,6 +1513,8 @@ int mt6985_dai_etdm_register(struct mtk_base_afe *afe)
 		dev_info(afe->dev, "%s() fail to parse dts: %d\n", __func__, ret);
 		return ret;
 	}
+
+	etdm_config_init(afe);
 
 	return 0;
 }

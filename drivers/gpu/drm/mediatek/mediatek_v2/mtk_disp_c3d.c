@@ -22,6 +22,10 @@
 static bool gPktReused[HW_ENGINE_NUM];
 static struct cmdq_reuse reuse_c3d0[4913 * 2], reuse_c3d1[4913 * 2];
 
+#ifdef OPLUS_FEATURE_DISPLAY
+extern bool g_c3d_probe_ready;
+#endif
+
 struct DISP_C3D_REG_17BIN {
 	unsigned int lut3d_reg[C3D_3DLUT_SIZE_17BIN];
 };
@@ -34,15 +38,11 @@ static struct DISP_C3D_REG_17BIN g_c3d_reg_17bin;
 static struct DISP_C3D_REG_9BIN g_c3d_reg_9bin;
 static unsigned int g_c3d_sram_cfg[DISP_C3D_SRAM_SIZE_17BIN] = { 0 };
 static unsigned int g_c3d_sram_cfg_9bin[DISP_C3D_SRAM_SIZE_9BIN] = { 0 };
-static unsigned int g_c3d_lut1d[HW_ENGINE_NUM][DISP_C3D_1DLUT_SIZE] = {
-	{0, 256, 512, 768, 1024, 1280, 1536, 1792,
+static unsigned int g_c3d_lut1d[DISP_C3D_1DLUT_SIZE] = {
+	0, 256, 512, 768, 1024, 1280, 1536, 1792,
 	2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840,
 	4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680,
-	8192, 9216, 10240, 11264, 12288, 13312, 14336, 15360},
-	{0, 256, 512, 768, 1024, 1280, 1536, 1792,
-	2048, 2304, 2560, 2816, 3072, 3328, 3584, 3840,
-	4096, 4608, 5120, 5632, 6144, 6656, 7168, 7680,
-	8192, 9216, 10240, 11264, 12288, 13312, 14336, 15360}
+	8192, 9216, 10240, 11264, 12288, 13312, 14336, 15360
 };
 
 static struct DISP_C3D_LUT c3dIocData;
@@ -68,8 +68,7 @@ static struct mtk_ddp_comp *c3d1_default_comp;
 
 static atomic_t g_c3d_is_clock_on[HW_ENGINE_NUM] = {
 			ATOMIC_INIT(0), ATOMIC_INIT(0) };
-static atomic_t g_c3d_force_relay[HW_ENGINE_NUM] = {
-			ATOMIC_INIT(0), ATOMIC_INIT(0) };
+static atomic_t g_c3d_force_relay = ATOMIC_INIT(0);
 //static atomic_t g_c3d_lut_set = ATOMIC_INIT(0);
 static atomic_t g_c3d_sram_hw_init[HW_ENGINE_NUM] = {
 			ATOMIC_INIT(0), ATOMIC_INIT(0) };
@@ -118,6 +117,17 @@ struct mtk_disp_c3d {
 	const struct mtk_disp_c3d_data *data;
 };
 static struct mtk_disp_c3d *g_c3d_data;
+
+struct mtk_disp_c3d_tile_overhead {
+	unsigned int left_in_width;
+	unsigned int left_overhead;
+	unsigned int left_comp_overhead;
+	unsigned int right_in_width;
+	unsigned int right_overhead;
+	unsigned int right_comp_overhead;
+};
+
+struct mtk_disp_c3d_tile_overhead c3d_tile_overhead = { 0 };
 
 static bool debug_flow_log;
 #define C3DFLOW_LOG(fmt, arg...) do { \
@@ -286,12 +296,14 @@ static bool disp_c3d_write_sram(struct mtk_ddp_comp *comp, int cmd_type)
 	case C3D_USERSPACE:
 	case C3D_FIRST_ENABLE:
 		cmdq_pkt_flush(cmdq_handle);
+		cmdq_mbox_stop(client);
 		cmdq_mbox_disable(client->chan);
 		break;
 
 	case C3D_PREPARE:
 		cmdq_pkt_refinalize(cmdq_handle);
 		cmdq_pkt_flush(cmdq_handle);
+		cmdq_mbox_stop(client);
 		cmdq_mbox_disable(client->chan);
 		break;
 	}
@@ -431,6 +443,16 @@ void disp_c3d_flip_sram(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle,
 	const char *caller)
 {
 	u32 sram_apb = 0, sram_int = 0, sram_cfg;
+	unsigned int read_value = 0;
+
+	read_value = readl(comp->regs + C3D_SRAM_CFG);
+	sram_apb = (read_value >> 5) & 0x1;
+	sram_int = (read_value >> 6) & 0x1;
+
+	if ((sram_apb == sram_int) && (sram_int == 0)) {
+		pr_notice("%s: sram_apb == sram_int, skip flip!", __func__);
+		return;
+	}
 
 	if (atomic_cmpxchg(&g_c3d_force_sram_apb[index_of_c3d(comp->id)], 0, 1) == 0) {
 		sram_apb = 0;
@@ -537,6 +559,11 @@ static void disp_c3d_update_sram(struct mtk_ddp_comp *comp,
 	else
 		disp_c3d_config_sram(comp, &c3d1_sram_pkt);
 
+	if (comp->id == DDP_COMPONENT_C3D0 && !(comp->mtk_crtc->is_dual_pipe)) {
+		disp_c3d_config_sram(comp, &c3d1_sram_pkt);
+		C3DFLOW_LOG("%s: sing pipe config comp_c3d1 pkt\n", __func__);
+	}
+
 	disp_c3d_write_sram(comp, C3D_USERSPACE);
 }
 
@@ -622,6 +649,20 @@ int mtk_drm_ioctl_c3d_eventctl(struct drm_device *dev, void *data,
 	return ret;
 }
 
+static bool is_doze_active(void)
+{
+	struct drm_crtc *crtc;
+	struct mtk_crtc_state *mtk_state;
+
+	if (!default_comp)
+		return false;
+	crtc = &default_comp->mtk_crtc->base;
+	mtk_state = to_mtk_crtc_state(crtc->state);
+	if (mtk_state->prop_val[CRTC_PROP_DOZE_ACTIVE])
+		return true;
+	return false;
+}
+
 int mtk_drm_ioctl_c3d_set_lut(struct drm_device *dev, void *data,
 			struct drm_file *file_priv)
 {
@@ -632,9 +673,18 @@ int mtk_drm_ioctl_c3d_set_lut(struct drm_device *dev, void *data,
 	struct drm_crtc *crtc = private->crtc[0];
 	struct mtk_drm_crtc *mtk_crtc = to_mtk_crtc(crtc);
 
+	if (is_doze_active()) {
+		pr_notice("%s, in doze state\n", __func__);
+		return 0;
+	}
 	gSkipUpdateSram = false;
 
 	C3DAPI_LOG("line: %d\n", __LINE__);
+
+	if (is_doze_active()) {
+		pr_notice("%s, in doze state\n", __func__);
+		return 0;
+	}
 
 	memcpy(&c3dIocData, (struct DISP_C3D_LUT *)data,
 				sizeof(struct DISP_C3D_LUT));
@@ -696,13 +746,14 @@ int mtk_drm_ioctl_c3d_set_lut(struct drm_device *dev, void *data,
 
 	mutex_unlock(&g_c3d_power_lock);
 
+	if (gSkipUpdateSram) {
+		pr_notice("%s, gSkipUpdateSram %d return\n", __func__, gSkipUpdateSram);
+		return -EFAULT;
+	}
 
 	ret = mtk_crtc_user_cmd(crtc, comp, SET_C3DLUT, data);
 
-	mtk_crtc_check_trigger(comp->mtk_crtc, true, false);
-
-	if (gSkipUpdateSram)
-		ret = -EFAULT;
+	mtk_crtc_check_trigger(comp->mtk_crtc, true, true);
 
 	return ret;
 }
@@ -719,7 +770,7 @@ int mtk_drm_ioctl_bypass_c3d(struct drm_device *dev, void *data,
 
 	ret = mtk_crtc_user_cmd(crtc, comp, BYPASS_C3D, data);
 
-	mtk_crtc_check_trigger(comp->mtk_crtc, true, false);
+	mtk_crtc_check_trigger(comp->mtk_crtc, true, true);
 	return ret;
 }
 
@@ -750,7 +801,7 @@ static int disp_c3d_set_1dlut(struct mtk_ddp_comp *comp,
 	if (lock)
 		mutex_lock(&g_c3d_global_lock);
 
-	lut1d = &g_c3d_lut1d[id][0];
+	lut1d = &g_c3d_lut1d[0];
 	if (lut1d == NULL) {
 		pr_notice("%s: table [%d] not initialized, use default config\n", __func__, id);
 		ret = -EFAULT;
@@ -833,8 +884,8 @@ static int disp_c3d_write_1dlut_to_reg(struct mtk_ddp_comp *comp,
 		if (id >= 0 && id < HW_ENGINE_NUM) {
 			mutex_lock(&g_c3d_global_lock);
 			if (!gHasSet1DLut[id] ||
-				memcmp(&g_c3d_lut1d[id][0], c3d_lut1d, sizeof(g_c3d_lut1d[id]))) {
-				memcpy(&g_c3d_lut1d[id][0], c3d_lut1d, sizeof(g_c3d_lut1d[id]));
+				memcmp(&g_c3d_lut1d[0], c3d_lut1d, sizeof(g_c3d_lut1d))) {
+				memcpy(&g_c3d_lut1d[0], c3d_lut1d, sizeof(g_c3d_lut1d));
 				ret = disp_c3d_set_1dlut(comp, handle, 0);
 			}
 			mutex_unlock(&g_c3d_global_lock);
@@ -850,7 +901,7 @@ static int disp_c3d_write_1dlut_to_reg(struct mtk_ddp_comp *comp,
 static int disp_c3d_write_lut_to_reg(struct mtk_ddp_comp *comp,
 	struct cmdq_pkt *handle, const struct DISP_C3D_LUT *c3d_lut)
 {
-	if (atomic_read(&g_c3d_force_relay[index_of_c3d(comp->id)]) == 1) {
+	if (atomic_read(&g_c3d_force_relay) == 1) {
 		// Set reply mode
 		DDPINFO("g_c3d_force_relay\n");
 		cmdq_pkt_write(handle, comp->cmdq_base,
@@ -902,11 +953,11 @@ static void mtk_disp_c3d_bypass(struct mtk_ddp_comp *comp, int bypass,
 	if (bypass == 1) {
 		cmdq_pkt_write(handle, comp->cmdq_base,
 				comp->regs_pa + C3D_CFG, 0x1, 0x1);
-		atomic_set(&g_c3d_force_relay[index_of_c3d(comp->id)], 0x1);
+		atomic_set(&g_c3d_force_relay, 0x1);
 	} else {
 		cmdq_pkt_write(handle, comp->cmdq_base,
 				comp->regs_pa + C3D_CFG, 0x0, 0x1);
-		atomic_set(&g_c3d_force_relay[index_of_c3d(comp->id)], 0x0);
+		atomic_set(&g_c3d_force_relay, 0x0);
 	}
 }
 
@@ -945,6 +996,36 @@ static int mtk_disp_c3d_user_cmd(struct mtk_ddp_comp *comp, struct cmdq_pkt *han
 	return 0;
 }
 
+static void mtk_disp_c3d_config_overhead(struct mtk_ddp_comp *comp,
+	struct mtk_ddp_config *cfg)
+{
+	DDPINFO("line: %d\n", __LINE__);
+
+	if (cfg->tile_overhead.is_support) {
+		/*set component overhead*/
+		if (comp->id == DDP_COMPONENT_C3D0) {
+			c3d_tile_overhead.left_comp_overhead = 0;
+			/*add component overhead on total overhead*/
+			cfg->tile_overhead.left_overhead += c3d_tile_overhead.left_comp_overhead;
+			cfg->tile_overhead.left_in_width += c3d_tile_overhead.left_comp_overhead;
+			/*copy from total overhead info*/
+			c3d_tile_overhead.left_in_width = cfg->tile_overhead.left_in_width;
+			c3d_tile_overhead.left_overhead = cfg->tile_overhead.left_overhead;
+		}
+		if (comp->id == DDP_COMPONENT_C3D1) {
+			c3d_tile_overhead.right_comp_overhead = 0;
+			/*add component overhead on total overhead*/
+			cfg->tile_overhead.right_overhead += c3d_tile_overhead.right_comp_overhead;
+			cfg->tile_overhead.right_in_width += c3d_tile_overhead.right_comp_overhead;
+			/*copy from total overhead info*/
+			c3d_tile_overhead.right_in_width = cfg->tile_overhead.right_in_width;
+			c3d_tile_overhead.right_overhead = cfg->tile_overhead.right_overhead;
+		}
+	}
+
+}
+
+
 static void mtk_disp_c3d_config(struct mtk_ddp_comp *comp,
 	struct mtk_ddp_config *cfg, struct cmdq_pkt *handle)
 {
@@ -952,12 +1033,18 @@ static void mtk_disp_c3d_config(struct mtk_ddp_comp *comp,
 
 	C3DFLOW_LOG("line: %d\n", __LINE__);
 
-	if (comp->mtk_crtc->is_dual_pipe) {
+	if (comp->mtk_crtc->is_dual_pipe)
 		isDualPQ = true;
-		width = cfg->w/2;
-	} else {
+	else
 		isDualPQ = false;
-		width = cfg->w;
+
+	if (comp->mtk_crtc->is_dual_pipe && cfg->tile_overhead.is_support)
+		width = c3d_tile_overhead.left_in_width;
+	else {
+		if (comp->mtk_crtc->is_dual_pipe)
+			width = cfg->w / 2;
+		else
+			width = cfg->w;
 	}
 
 	cmdq_pkt_write(handle, comp->cmdq_base,
@@ -970,7 +1057,7 @@ static void mtk_disp_c3d_start(struct mtk_ddp_comp *comp, struct cmdq_pkt *handl
 	C3DFLOW_LOG("line: %d\n", __LINE__);
 	cmdq_pkt_write(handle, comp->cmdq_base, comp->regs_pa + C3D_EN, 0x1, ~0);
 
-	if (atomic_read(&g_c3d_force_relay[index_of_c3d(comp->id)]) == 1) {
+	if (atomic_read(&g_c3d_force_relay) == 1) {
 		// Set reply mode
 		DDPINFO("g_c3d_force_relay\n");
 		cmdq_pkt_write(handle, comp->cmdq_base,
@@ -1024,6 +1111,7 @@ static void mtk_disp_c3d_prepare(struct mtk_ddp_comp *comp)
 static void mtk_disp_c3d_unprepare(struct mtk_ddp_comp *comp)
 {
 	unsigned long flags;
+
 	gHasSet1DLut[index_of_c3d(comp->id)] = false;
 
 	C3DFLOW_LOG("line: %d\n", __LINE__);
@@ -1051,6 +1139,7 @@ static const struct mtk_ddp_comp_funcs mtk_disp_c3d_funcs = {
 	.user_cmd = mtk_disp_c3d_user_cmd,
 	.prepare = mtk_disp_c3d_prepare,
 	.unprepare = mtk_disp_c3d_unprepare,
+	.config_overhead = mtk_disp_c3d_config_overhead,
 };
 
 static int mtk_disp_c3d_bind(struct device *dev, struct device *master,
@@ -1106,6 +1195,38 @@ void mtk_c3d_dump(struct mtk_ddp_comp *comp)
 	mtk_cust_dump_reg(baddr, 0x7C, 0x80, 0x84, 0x88);
 }
 
+void mtk_c3d_regdump(void)
+{
+	void __iomem  *baddr = default_comp->regs;
+	int k;
+
+	DDPDUMP("== %s REGS:0x%x ==\n", mtk_dump_comp_str(default_comp),
+			default_comp->regs_pa);
+	DDPDUMP("[%s REGS Start Dump]\n", mtk_dump_comp_str(default_comp));
+	for (k = 0; k <= 0x94; k += 16) {
+		DDPDUMP("0x%04x: 0x%08x 0x%08x 0x%08x 0x%08x\n", k,
+			readl(baddr + k),
+			readl(baddr + k + 0x4),
+			readl(baddr + k + 0x8),
+			readl(baddr + k + 0xc));
+	}
+	DDPDUMP("[%s REGS End Dump]\n", mtk_dump_comp_str(default_comp));
+	if (default_comp->mtk_crtc->is_dual_pipe && c3d1_default_comp) {
+		baddr = c3d1_default_comp->regs;
+		DDPDUMP("== %s REGS:0x%x ==\n", mtk_dump_comp_str(c3d1_default_comp),
+				c3d1_default_comp->regs_pa);
+		DDPDUMP("[%s REGS Start Dump]\n", mtk_dump_comp_str(c3d1_default_comp));
+		for (k = 0; k <= 0x94; k += 16) {
+			DDPDUMP("0x%04x: 0x%08x 0x%08x 0x%08x 0x%08x\n", k,
+				readl(baddr + k),
+				readl(baddr + k + 0x4),
+				readl(baddr + k + 0x8),
+				readl(baddr + k + 0xc));
+		}
+		DDPDUMP("[%s REGS End Dump]\n", mtk_dump_comp_str(c3d1_default_comp));
+	}
+}
+
 static int mtk_disp_c3d_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -1150,6 +1271,9 @@ static int mtk_disp_c3d_probe(struct platform_device *pdev)
 		dev_err(dev, "Failed to add component: %d\n", ret);
 		mtk_ddp_comp_pm_disable(&priv->ddp_comp);
 	}
+#ifdef OPLUS_FEATURE_DISPLAY
+	g_c3d_probe_ready = true;
+#endif
 	pr_notice("%s-\n", __func__);
 
 	return ret;

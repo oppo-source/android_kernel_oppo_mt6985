@@ -41,7 +41,6 @@
 
 #define TIME_1S  1000000000ULL
 #define TRAVERSE_PERIOD  300000000000ULL
-#define FPSGO_MAX_TREE_SIZE 10
 
 #define event_trace(ip, fmt, args...) \
 do { \
@@ -53,6 +52,11 @@ do { \
 	__trace_bprintk(ip, trace_printk_fmt, ##args);    \
 	}	\
 } while (0)
+
+#define mtk_base_dprintk_always(fmt, args...) \
+	pr_debug("[FPSGO_BASE]" fmt, ##args)
+
+static int total_fps_control_pid_info_num;
 
 static struct kobject *base_kobj;
 static struct rb_root render_pid_tree;
@@ -591,6 +595,13 @@ void fpsgo_reset_pid_attr(struct fpsgo_boost_attr *boost_attr)
 		boost_attr->gcc_enq_bound_quota_by_pid = BY_PID_DEFAULT_VAL;
 		boost_attr->gcc_deq_bound_quota_by_pid = BY_PID_DEFAULT_VAL;
 		boost_attr->blc_boost_by_pid = BY_PID_DEFAULT_VAL;
+
+		boost_attr->reset_taskmask = BY_PID_DEFAULT_VAL;
+
+		boost_attr->limit_cfreq2cap = BY_PID_DEFAULT_VAL;
+		boost_attr->limit_rfreq2cap = BY_PID_DEFAULT_VAL;
+		boost_attr->limit_cfreq2cap_m = BY_PID_DEFAULT_VAL;
+		boost_attr->limit_rfreq2cap_m = BY_PID_DEFAULT_VAL;
 	}
 }
 
@@ -839,7 +850,12 @@ int is_to_delete_fpsgo_attr(struct fpsgo_attr_by_pid *fpsgo_attr)
 			boost_attr.gcc_reserved_down_quota_pct_by_pid == BY_PID_DEFAULT_VAL &&
 			boost_attr.gcc_reserved_up_quota_pct_by_pid == BY_PID_DEFAULT_VAL &&
 			boost_attr.gcc_up_sec_pct_by_pid == BY_PID_DEFAULT_VAL &&
-			boost_attr.gcc_up_step_by_pid == BY_PID_DEFAULT_VAL) {
+			boost_attr.gcc_up_step_by_pid == BY_PID_DEFAULT_VAL &&
+			boost_attr.reset_taskmask == BY_PID_DEFAULT_VAL &&
+			boost_attr.limit_cfreq2cap == BY_PID_DEFAULT_VAL &&
+			boost_attr.limit_rfreq2cap == BY_PID_DEFAULT_VAL &&
+			boost_attr.limit_cfreq2cap_m == BY_PID_DEFAULT_VAL &&
+			boost_attr.limit_rfreq2cap_m == BY_PID_DEFAULT_VAL) {
 		return 1;
 	}
 	if (boost_attr.rescue_second_enable_by_pid == BY_PID_DELETE_VAL ||
@@ -877,7 +893,12 @@ int is_to_delete_fpsgo_attr(struct fpsgo_attr_by_pid *fpsgo_attr)
 			boost_attr.gcc_reserved_down_quota_pct_by_pid == BY_PID_DELETE_VAL ||
 			boost_attr.gcc_reserved_up_quota_pct_by_pid == BY_PID_DELETE_VAL ||
 			boost_attr.gcc_up_sec_pct_by_pid == BY_PID_DELETE_VAL ||
-			boost_attr.gcc_up_step_by_pid == BY_PID_DELETE_VAL) {
+			boost_attr.gcc_up_step_by_pid == BY_PID_DELETE_VAL ||
+			boost_attr.reset_taskmask == BY_PID_DELETE_VAL ||
+			boost_attr.limit_cfreq2cap == BY_PID_DELETE_VAL ||
+			boost_attr.limit_rfreq2cap == BY_PID_DELETE_VAL ||
+			boost_attr.limit_cfreq2cap_m == BY_PID_DELETE_VAL ||
+			boost_attr.limit_rfreq2cap_m == BY_PID_DELETE_VAL) {
 		return 1;
 	}
 	return 0;
@@ -1032,6 +1053,33 @@ void fpsgo_delete_sbe_info(int pid)
 	kfree(data);
 }
 
+void fpsgo_delete_oldest_fps_control_pid_info(void)
+{
+	unsigned long long min_ts = ULLONG_MAX;
+	struct fps_control_pid_info *min_iter = NULL, *tmp_iter = NULL;
+	struct rb_root *rbr = NULL;
+	struct rb_node *rbn = NULL;
+
+	if (RB_EMPTY_ROOT(&fps_control_pid_info_tree))
+		return;
+
+	rbr = &fps_control_pid_info_tree;
+	for (rbn = rb_first(rbr); rbn; rbn = rb_next(rbn)) {
+		tmp_iter = rb_entry(rbn, struct fps_control_pid_info, entry);
+		if (tmp_iter->ts < min_ts) {
+			min_ts = tmp_iter->ts;
+			min_iter = tmp_iter;
+		}
+	}
+
+	if (!min_iter)
+		return;
+
+	rb_erase(&min_iter->entry, &fps_control_pid_info_tree);
+	kfree(min_iter);
+	total_fps_control_pid_info_num--;
+}
+
 struct fps_control_pid_info *fpsgo_search_and_add_fps_control_pid(int pid, int force)
 {
 	struct rb_node **p = &fps_control_pid_info_tree.rb_node;
@@ -1060,9 +1108,14 @@ struct fps_control_pid_info *fpsgo_search_and_add_fps_control_pid(int pid, int f
 		return NULL;
 
 	tmp->pid = pid;
+	tmp->ts = fpsgo_get_time();
 
 	rb_link_node(&tmp->entry, parent, p);
 	rb_insert_color(&tmp->entry, &fps_control_pid_info_tree);
+	total_fps_control_pid_info_num++;
+
+	if (total_fps_control_pid_info_num > FPSGO_MAX_TREE_SIZE)
+		fpsgo_delete_oldest_fps_control_pid_info();
 
 	return tmp;
 }
@@ -1080,27 +1133,48 @@ void fpsgo_delete_fpsgo_control_pid(int pid)
 
 	rb_erase(&data->entry, &fps_control_pid_info_tree);
 	kfree(data);
+	total_fps_control_pid_info_num--;
+}
+
+int fpsgo_get_all_fps_control_pid_info(struct fps_control_pid_info *arr)
+{
+	int index = 0;
+	struct fps_control_pid_info *iter = NULL;
+	struct rb_root *rbr = NULL;
+	struct rb_node *rbn = NULL;
+
+	rbr = &fps_control_pid_info_tree;
+	for (rbn = rb_first(rbr); rbn; rbn = rb_next(rbn)) {
+		iter = rb_entry(rbn, struct fps_control_pid_info, entry);
+		arr[index].pid = iter->pid;
+		arr[index].ts = iter->ts;
+		index++;
+		if (index >= FPSGO_MAX_TREE_SIZE)
+			break;
+	}
+
+	return index;
 }
 
 static void fpsgo_check_BQid_status(void)
 {
 	struct rb_node *n;
-	struct rb_node *next;
 	struct BQ_id *pos;
 	int tgid = 0;
 
 	fpsgo_lockprove(__func__);
 
-	for (n = rb_first(&BQ_id_list); n; n = next) {
-		next = rb_next(n);
-
+	n = rb_first(&BQ_id_list);
+	while (n) {
 		pos = rb_entry(n, struct BQ_id, entry);
 		tgid = fpsgo_get_tgid(pos->pid);
-		if (tgid)
-			continue;
-
-		rb_erase(n, &BQ_id_list);
-		kfree(pos);
+		if (!tgid) {
+			rb_erase(&pos->entry, &BQ_id_list);
+			n = rb_first(&BQ_id_list);
+			kfree(pos);
+		} else {
+			n = rb_next(n);
+		}
 	}
 }
 
@@ -1677,7 +1751,7 @@ static ssize_t render_info_params_show(struct kobject *kobj,
 	pos += length;
 
 	length = scnprintf(temp + pos, FPSGO_SYSFS_MAX_BUFF_SIZE - pos,
-		" boost_affinity, boost_LR\n");
+		" boost_affinity, boost_LR, reset_taskmask\n");
 	pos += length;
 
 	length = scnprintf(temp + pos, FPSGO_SYSFS_MAX_BUFF_SIZE - pos,
@@ -1699,6 +1773,9 @@ static ssize_t render_info_params_show(struct kobject *kobj,
 	pos += length;
 	length = scnprintf(temp + pos, FPSGO_SYSFS_MAX_BUFF_SIZE - pos,
 				" gcc_enq_bound_thrs, gcc_enq_bound_quota, gcc_deq_bound_thrs, gcc_deq_bound_quota\n");
+	pos += length;
+	length = scnprintf(temp + pos, FPSGO_SYSFS_MAX_BUFF_SIZE - pos,
+			" reset_taskmask, limit_cfreq2cap, limit_rfreq2cap, limit_cfreq2cap_m, limit_rfreq2cap_m\n");
 	pos += length;
 
 	fpsgo_render_tree_lock(__func__);
@@ -1740,9 +1817,9 @@ static ssize_t render_info_params_show(struct kobject *kobj,
 			pos += length;
 
 			length = scnprintf(temp + pos,
-				FPSGO_SYSFS_MAX_BUFF_SIZE - pos, " %4d, %4d\n",
+				FPSGO_SYSFS_MAX_BUFF_SIZE - pos, " %4d, %4d, %4d\n",
 				attr_item.boost_affinity_by_pid,
-				attr_item.boost_lr_by_pid);
+				attr_item.boost_lr_by_pid, attr_item.reset_taskmask);
 			pos += length;
 
 			length = scnprintf(temp + pos,
@@ -1794,6 +1871,15 @@ static ssize_t render_info_params_show(struct kobject *kobj,
 				attr_item.gcc_deq_bound_quota_by_pid);
 			pos += length;
 
+			length = scnprintf(temp + pos,
+				FPSGO_SYSFS_MAX_BUFF_SIZE - pos, " %4d, %4d, %4d, %4d, %4d\n",
+				attr_item.reset_taskmask,
+				attr_item.limit_cfreq2cap,
+				attr_item.limit_rfreq2cap,
+				attr_item.limit_cfreq2cap_m,
+				attr_item.limit_rfreq2cap_m);
+			pos += length;
+
 			put_task_struct(tsk);
 		}
 	}
@@ -1837,7 +1923,7 @@ static ssize_t render_attr_params_show(struct kobject *kobj,
 	pos += length;
 
 	length = scnprintf(temp + pos, FPSGO_SYSFS_MAX_BUFF_SIZE - pos,
-		" boost_affinity, boost_LR,\n");
+		" boost_affinity, boost_LR, reset_taskmask\n");
 	pos += length;
 
 	length = scnprintf(temp + pos, FPSGO_SYSFS_MAX_BUFF_SIZE - pos,
@@ -1859,6 +1945,9 @@ static ssize_t render_attr_params_show(struct kobject *kobj,
 	pos += length;
 	length = scnprintf(temp + pos, FPSGO_SYSFS_MAX_BUFF_SIZE - pos,
 				" gcc_enq_bound_thrs, gcc_enq_bound_quota, gcc_deq_bound_thrs, gcc_deq_bound_quota\n");
+	pos += length;
+	length = scnprintf(temp + pos, FPSGO_SYSFS_MAX_BUFF_SIZE - pos,
+			" reset_taskmask, limit_cfreq2cap, limit_rfreq2cap, limit_cfreq2cap_m, limit_rfreq2cap_m\n");
 	pos += length;
 
 	fpsgo_render_tree_lock(__func__);
@@ -1889,9 +1978,9 @@ static ssize_t render_attr_params_show(struct kobject *kobj,
 		pos += length;
 
 		length = scnprintf(temp + pos,
-			FPSGO_SYSFS_MAX_BUFF_SIZE - pos, " %4d, %4d,\n",
+			FPSGO_SYSFS_MAX_BUFF_SIZE - pos, " %4d, %4d, %4d\n",
 			attr_item.boost_affinity_by_pid,
-			attr_item.boost_lr_by_pid);
+			attr_item.boost_lr_by_pid, attr_item.reset_taskmask);
 		pos += length;
 
 		length = scnprintf(temp + pos,
@@ -1941,6 +2030,15 @@ static ssize_t render_attr_params_show(struct kobject *kobj,
 			attr_item.gcc_enq_bound_quota_by_pid,
 			attr_item.gcc_deq_bound_thrs_by_pid,
 			attr_item.gcc_deq_bound_quota_by_pid);
+		pos += length;
+
+		length = scnprintf(temp + pos,
+			FPSGO_SYSFS_MAX_BUFF_SIZE - pos, " %4d, %4d, %4d, %4d, %4d\n",
+			attr_item.reset_taskmask,
+			attr_item.limit_cfreq2cap,
+			attr_item.limit_rfreq2cap,
+			attr_item.limit_cfreq2cap_m,
+			attr_item.limit_rfreq2cap_m);
 		pos += length;
 	}
 
@@ -2143,10 +2241,12 @@ static KOBJ_ATTR_RO(render_loading);
 int init_fpsgo_common(void)
 {
 	render_pid_tree = RB_ROOT;
-
 	BQ_id_list = RB_ROOT;
 	linger_tree = RB_ROOT;
 	hwui_info_tree = RB_ROOT;
+	sbe_info_tree = RB_ROOT;
+	fps_control_pid_info_tree = RB_ROOT;
+	fpsgo_attr_by_pid_tree = RB_ROOT;
 
 	if (!fpsgo_sysfs_create_dir(NULL, "common", &base_kobj)) {
 		fpsgo_sysfs_create_file(base_kobj, &kobj_attr_systrace_mask);

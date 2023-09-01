@@ -25,6 +25,7 @@
 #define MAX_DEP_PATH_NUM 50
 #define MAX_DEP_TASK_NUM 100
 #define N 8
+#define MAX_XGF_POLICY_CMD_NUM 10
 
 enum XGF_ERROR {
 	XGF_NOTIFY_OK,
@@ -177,6 +178,7 @@ struct xgf_render {
 	int dep_frames;
 
 	int ema2_enable;
+	int filter_dep_task_enable;
 	struct xgf_ema2_predictor *ema2_pt;
 };
 
@@ -231,6 +233,7 @@ struct xgf_policy_cmd {
 
 	int tgid;
 	int ema2_enable;
+	int filter_dep_task_enable;
 	unsigned long long ts;
 };
 
@@ -241,6 +244,7 @@ struct fpsgo_trace_event {
 	int note;
 	int state;
 	int pid;
+	unsigned long long addr;
 };
 
 extern int (*xgf_est_runtime_fp)(

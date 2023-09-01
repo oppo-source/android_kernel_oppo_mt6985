@@ -75,7 +75,7 @@ extern int cm_mgr_to_sspm_command(u32 cmd, int val);
 extern int cm_mgr_check_dts_setting(struct platform_device *pdev);
 extern int cm_mgr_common_init(void);
 extern void cm_mgr_common_exit(void);
-
+extern void cm_mgr_enable_cpu_to_dram_map(int enable);
 extern void cm_mgr_set_pdev(struct platform_device *pdev);
 extern int cm_mgr_get_num_array(void);
 extern void cm_mgr_set_num_array(int num);

@@ -1,8 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (c) 2019 MediaTek Inc.
+ * Copyright (C) 2016 MediaTek Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See http://www.gnu.org/licenses/gpl-2.0.html for more details.
  */
-
 
 /*
  * GT9764AF voice coil motor driver
@@ -37,25 +44,47 @@ static spinlock_t *g_pAF_SpinLock;
 static unsigned long g_u4AF_INF;
 static unsigned long g_u4AF_MACRO = 1023;
 static unsigned long g_u4CurrPosition;
+static unsigned long g_u4TargetPosition;
 #define Min_Pos 0
 #define Max_Pos 1023
 
-static int s4AF_ReadReg(u8 a_uAddr, u8 *a_uData)
+static int i2c_read(u8 a_u2Addr, u8 *a_puBuff)
 {
-	g_pstAF_I2Cclient->addr = (AF_I2C_SLAVE_ADDR) >> 1;
+	int i4RetValue = 0;
+	char puReadCmd[1] = { (char)(a_u2Addr) };
 
-	if (i2c_master_send(g_pstAF_I2Cclient, &a_uAddr, 1) < 0) {
-		LOG_INF("ReadI2C send failed!!\n");
+	g_pstAF_I2Cclient->addr = AF_I2C_SLAVE_ADDR;
+
+	g_pstAF_I2Cclient->addr = g_pstAF_I2Cclient->addr >> 1;
+
+	i4RetValue = i2c_master_send(g_pstAF_I2Cclient, puReadCmd, 1);
+	if (i4RetValue != 2) {
+		LOG_INF(" I2C write failed!!\n");
+		return -1;
+	}
+	i4RetValue = i2c_master_recv(g_pstAF_I2Cclient, (char *)a_puBuff, 1);
+	if (i4RetValue != 1) {
+		LOG_INF(" I2C read failed!!\n");
 		return -1;
 	}
 
-	if (i2c_master_recv(g_pstAF_I2Cclient, a_uData, 1) < 0) {
-		LOG_INF("ReadI2C recv failed!!\n");
-		return -1;
-	}
+	return 0;
+}
+u8 read_data1(u8 addr)
+{
+	u8 get_byte = 0;
+	i2c_read(addr, &get_byte);
+	LOG_INF("[GT9764AF]  get_byte %d\n", get_byte);
+	return get_byte;
+}
 
-	/* LOG_INF("RDI2C 0x%x, 0x%x\n", a_uAddr, *a_uData); */
 
+
+static int s4AF_ReadReg(unsigned short *a_pu2Result)
+{
+
+	*a_pu2Result = (read_data1(0x03) << 8) + (read_data1(0x04) & 0xff);
+	printk("[GT9764AF]  s4GT9764AF_ReadReg %d\n", *a_pu2Result);
 	return 0;
 }
 
@@ -84,7 +113,7 @@ static int s4AF_WriteReg(u8 a_uLength, u8 a_uAddr, u16 a_u2Data)
 	return 0;
 }
 
-static int setPosition(unsigned short UsPosition)
+/* static int setPosition(unsigned short UsPosition)
 {
 	unsigned short TarPos;
 	unsigned char UcPosH;
@@ -92,8 +121,7 @@ static int setPosition(unsigned short UsPosition)
 	unsigned int i4RetValue = 0;
 
 	TarPos = UsPosition;
-
-	/* LOG_INF("DAC(%04d) -> %03x\n", UsPosition, TarPos); */
+ //LOG_INF("DAC(%04d) -> %03x\n", UsPosition, TarPos);
 
 	UcPosH = (unsigned char)((TarPos >> 8) & 0x03);
 	UcPosL = (unsigned char)(TarPos & 0x00FF);
@@ -103,7 +131,7 @@ static int setPosition(unsigned short UsPosition)
 	i4RetValue = s4AF_WriteReg(0, 0x04, UcPosL); //VCM_LSB
 
 	return i4RetValue;
-}
+} */
 
 static inline int getAFInfo(__user struct stAF_MotorInfo *pstMotorInfo)
 {
@@ -135,24 +163,45 @@ static int initAF(void)
 
 	if (*g_pAF_Opened == 1) {
 
-		//int i4RetValue = 0;
-		int ret = 0;
-		//int cnt = 0;
-		unsigned char Temp;
+		int i4RetValue = 0;
+		char puSendCmd[2] = {0x02, 0x02};
+		char puSendCmd2[2] = {0x06, 0x40};
+		char puSendCmd3[2] = {0x07, 0x78};
+		g_pstAF_I2Cclient->addr = AF_I2C_SLAVE_ADDR;
 
-		s4AF_ReadReg(0x00, &Temp);  //ic info
-		LOG_INF("Check HW version: 0x00 is %x\n", Temp);
-		ret = s4AF_WriteReg(0, 0x02, 0x00); //CONTROL
+		g_pstAF_I2Cclient->addr = g_pstAF_I2Cclient->addr >> 1;
 
+		i4RetValue = i2c_master_send(g_pstAF_I2Cclient, puSendCmd, 2);
 
+		if (i4RetValue < 0) {
+			LOG_INF("I2C send 0x02 failed!!\n");
+			return -1;
+		}
 
+		i4RetValue = i2c_master_send(g_pstAF_I2Cclient, puSendCmd2, 2);
+
+		if (i4RetValue < 0) {
+			LOG_INF("I2C send 0x06 failed!!\n");
+			return -1;
+		}
+
+		i4RetValue = i2c_master_send(g_pstAF_I2Cclient, puSendCmd3, 2);
+
+		if (i4RetValue < 0) {
+			LOG_INF("I2C send 0x07 failed!!\n");
+			return -1;
+		}
+
+		msleep(1);
+		// init Pos  461
+
+		LOG_INF("driver init success!!\n");
 		spin_lock(g_pAF_SpinLock);
 		*g_pAF_Opened = 2;
 		spin_unlock(g_pAF_SpinLock);
 	}
 
 	LOG_INF("-\n");
-
 	return 0;
 }
 
@@ -160,16 +209,55 @@ static int initAF(void)
 static inline int moveAF(unsigned long a_u4Position)
 {
 	int ret = 0;
+	if ((a_u4Position > g_u4AF_MACRO) || (a_u4Position < g_u4AF_INF)) {
+	LOG_INF("out of range\n");
+	return -EINVAL;
+	}
+	if (*g_pAF_Opened == 1) {
+		unsigned short InitPos;
 
-	if (setPosition((unsigned short)a_u4Position) == 0) {
-		g_u4CurrPosition = a_u4Position;
-		ret = 0;
-	} else {
-		LOG_INF("set I2C failed when moving the motor\n");
-		ret = -1;
+		initAF();
+		ret = s4AF_ReadReg(&InitPos);
+
+		if (ret == 0) {
+			LOG_INF("Init Pos %6d\n", InitPos);
+
+			spin_lock(g_pAF_SpinLock);
+			g_u4CurrPosition = (unsigned long)InitPos;
+			spin_unlock(g_pAF_SpinLock);
+
+		} else {
+			spin_lock(g_pAF_SpinLock);
+			g_u4CurrPosition = 0;
+			spin_unlock(g_pAF_SpinLock);
+		}
+
+		spin_lock(g_pAF_SpinLock);
+		*g_pAF_Opened = 2;
+		spin_unlock(g_pAF_SpinLock);
 	}
 
-	return ret;
+	if (g_u4CurrPosition == a_u4Position)
+		return 0;
+
+	spin_lock(g_pAF_SpinLock);
+	g_u4TargetPosition = a_u4Position;
+	spin_unlock(g_pAF_SpinLock);
+
+//	LOG_INF("move [curr] %d [target] %d\n", g_u4CurrPosition, g_u4TargetPosition);
+//	printk("bo_liu, GT9764 move [curr] %d [target] %d\n", g_u4CurrPosition, g_u4TargetPosition);
+
+
+	if (s4AF_WriteReg(1,0x03,(unsigned short)g_u4TargetPosition) == 0) {
+		spin_lock(g_pAF_SpinLock);
+		g_u4CurrPosition = (unsigned long)g_u4TargetPosition;
+		spin_unlock(g_pAF_SpinLock);
+	} else {
+		LOG_INF("set I2C failed when moving the motor\n");
+	}
+
+
+	return 0;
 }
 
 static inline int setAFInf(unsigned long a_u4Position)
@@ -233,6 +321,8 @@ int GT9764AF_Release(struct inode *a_pstInode, struct file *a_pstFile)
 	int Ret = 0;
 
 	LOG_INF("Start\n");
+	if (*g_pAF_Opened == 2)
+	LOG_INF("Wait\n");
 
 	if (*g_pAF_Opened) {
 		LOG_INF("Free\n");
@@ -270,7 +360,7 @@ int GT9764AF_SetI2Cclient(struct i2c_client *pstAF_I2Cclient,
 	g_pAF_SpinLock = pAF_SpinLock;
 	g_pAF_Opened = pAF_Opened;
 
-	initAF();
+	//initAF();
 
 	return 1;
 }

@@ -11,6 +11,8 @@
 
 #include <adsp_helper.h>
 
+#include <scp.h>
+
 /*
  * =============================================================================
  *                     log
@@ -54,8 +56,8 @@ uint32_t audio_get_dsp_id(const uint8_t task)
 	case TASK_SCENE_CALL_FINAL:
 	case TASK_SCENE_MUSIC:
 	case TASK_SCENE_FAST:
+	case TASK_SCENE_SPATIALIZER:
 	case TASK_SCENE_FM_ADSP:
-	case TASK_SCENE_PHONE_CALL_SUB:
 	case TASK_SCENE_BLECALLDL:
 	case TASK_SCENE_VOIP:
 	case TASK_SCENE_ECHO_REF_DL:
@@ -65,7 +67,6 @@ uint32_t audio_get_dsp_id(const uint8_t task)
 	case TASK_SCENE_MD_UL:
 		dsp_id = AUDIO_OPENDSP_USE_HIFI3_A;
 		break;
-	case TASK_SCENE_PHONE_CALL:
 	case TASK_SCENE_RECORD:
 	case TASK_SCENE_CAPTURE_UL1:
 	case TASK_SCENE_AUD_DAEMON_B:
@@ -89,6 +90,24 @@ uint32_t audio_get_dsp_id(const uint8_t task)
 			pr_notice("task %d not support!!", task);
 			dsp_id = AUDIO_OPENDSP_ID_INVALID;
 		}
+		break;
+	case TASK_SCENE_AUDIO_CONTROLLER_RV:
+	case TASK_SCENE_RV_SPK_PROCESS:
+		dsp_id = AUDIO_OPENDSP_USE_RV_A;
+		break;
+	case TASK_SCENE_PHONE_CALL:
+		if (get_adsp_core_total() > 1)
+			dsp_id = AUDIO_OPENDSP_USE_HIFI3_B;
+		else if (get_adsp_core_total() > 0)
+			dsp_id = AUDIO_OPENDSP_USE_HIFI3_A;
+		else if (SCP_CORE_TOTAL > 0)
+			dsp_id = AUDIO_OPENDSP_USE_RV_A;
+		break;
+	case TASK_SCENE_PHONE_CALL_SUB:
+		if (get_adsp_core_total() > 0)
+			dsp_id = AUDIO_OPENDSP_USE_HIFI3_A;
+		else if (SCP_CORE_TOTAL > 0)
+			dsp_id = AUDIO_OPENDSP_USE_RV_A;
 		break;
 	default:
 		pr_notice("task %d not support!!", task);

@@ -361,6 +361,8 @@ struct dpmaif_rx_queue {
 	atomic_t        pit_rd_idx;
 	atomic_t        pit_wr_idx;
 
+	unsigned int    pit_seq;
+
 	struct tasklet_struct    rxq_task;
 	wait_queue_head_t        rxq_wq;
 	struct task_struct      *rxq_push_thread;
@@ -508,6 +510,7 @@ struct dpmaif_clk_node {
 
 
 extern unsigned int            g_plat_inf;
+extern int g_skb_gfp_mask;
 extern struct dpmaif_plat_ops  g_plt_ops;
 
 

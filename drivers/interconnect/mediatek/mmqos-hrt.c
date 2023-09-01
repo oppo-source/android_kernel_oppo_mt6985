@@ -17,6 +17,10 @@
 #define MULTIPLY_RATIO(value) ((value)*1000)
 #define DIVIDE_RATIO(value) ((value)/1000)
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 struct mmqos_hrt *mmqos_hrt;
 static bool disp_report_bw;
 
@@ -283,8 +287,7 @@ static int enable_vcp_blocking(void *data)
 	pr_notice("%s: increase lock_count=%d\n", __func__,
 		atomic_read(&mmqos_hrt->lock_count));
 
-	if (!mtk_mmdvfs_enable_vcp(true, VCP_PWR_USR_MMQOS))
-		mtk_mmdvfs_camera_notify_from_mmqos(true);
+	mtk_mmdvfs_enable_vcp(true, VCP_PWR_USR_MMQOS);
 
 	atomic_dec(&mmqos_hrt->lock_count);
 	wake_up(&mmqos_hrt->hrt_wait);
@@ -294,19 +297,21 @@ static int enable_vcp_blocking(void *data)
 	return 0;
 }
 
-
 static void set_camera_max_bw(u32 bw)
 {
 	struct task_struct *thread_vcp;
 
 	pr_notice("%s: %d\n", __func__, bw);
 
-	if (mmqos_hrt->cam_max_bw == 0 && bw > 0) {
+	if (mmqos_hrt->cam_max_bw == 0 && bw > 0)
 		thread_vcp = kthread_run(enable_vcp_blocking, NULL, "enable vcp");
-	} else if (mmqos_hrt->cam_max_bw > 0 && bw == 0) {
-		mtk_mmdvfs_camera_notify_from_mmqos(false);
+	else if (mmqos_hrt->cam_max_bw > 0 && bw == 0)
 		mtk_mmdvfs_enable_vcp(false, VCP_PWR_USR_MMQOS);
-	}
+
+	if (mmqos_hrt->cam_max_bw == 0 && bw > 0)
+		thread_vcp = kthread_run(enable_vcp_blocking, NULL, "enable vcp");
+	else if (mmqos_hrt->cam_max_bw > 0 && bw == 0)
+		mtk_mmdvfs_enable_vcp(false, VCP_PWR_USR_MMQOS);
 
 	mmqos_hrt->cam_max_bw = bw;
 	record_cam_hrt(bw);

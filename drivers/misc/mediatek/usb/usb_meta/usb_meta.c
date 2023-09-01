@@ -1233,8 +1233,14 @@ void enable_meta_vcom(int mode)
 
 	if (mode == 1) {
 		strncpy(serial_str, "", sizeof(serial_str) - 1);
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplu add for charging */
 		device_desc.idVendor = 0x0e8d;
 		device_desc.idProduct = 0x2007;
+#else
+		device_desc.idVendor = 0x22D9;
+		device_desc.idProduct = 0x0006;
+#endif
 		device_desc.bDeviceClass = 0x02;
 
 		/*ttyGS0*/
@@ -1245,9 +1251,14 @@ void enable_meta_vcom(int mode)
 
 
 		strncpy(serial_str, "", sizeof(serial_str) - 1);
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for charging */
 		device_desc.idVendor = 0x0e8d;
 		device_desc.idProduct = 0x202d;
-
+#else
+		device_desc.idVendor = 0x22d9;
+		device_desc.idProduct = 0x202d;
+#endif
 		/*ttyGS0 + ttyGS3*/
 		quick_vcom_num = (1 << 0) + (1 << 3);
 

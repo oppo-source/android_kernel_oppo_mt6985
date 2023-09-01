@@ -36,6 +36,9 @@ endif
 ifneq ($(wildcard $(srctree)/$(src)/mt6886/Makefile),)
 obj-$(CONFIG_SND_SOC_MT6886) += mt6886/
 endif
+ifneq ($(wildcard $(srctree)/sound/soc/mediatek/mt6835),)
+obj-$(CONFIG_SND_SOC_MT6835) += mt6835/
+endif
 # vow related code
 obj-$(CONFIG_MTK_VOW_SUPPORT) += vow/
 
@@ -44,6 +47,8 @@ obj-$(CONFIG_SND_SOC_MTK_AUDIO_DSP) += audio_dsp/
 
 #scp ultra sound related code
 obj-$(CONFIG_MTK_ULTRASND_PROXIMITY) += ultrasound/
+
+obj-$(CONFIG_MTK_SCP_AUDIO) += audio_scp/
 
 # include path
 subdir-ccflags-y += -Werror -I$(srctree)/drivers/misc/mediatek/include/mt-plat

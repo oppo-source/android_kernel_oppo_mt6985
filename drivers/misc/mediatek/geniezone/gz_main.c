@@ -671,6 +671,7 @@ static long tz_client_tee_service(struct file *file, void __user *arg,
 			}
 
 			kfree(param[i].mem.buffer);
+			param[i].mem.buffer = NULL;
 			break;
 		}
 	}
@@ -1110,7 +1111,7 @@ static int gz_main_probe(struct platform_device *pdev)
 {
 	int res;
 
-	KREE_DEBUG("%s gz driver start\n", __func__);
+	KREE_DEBUG("%s+\n", __func__);
 
 	res = create_files();
 	if (res) {
@@ -1125,6 +1126,7 @@ static int gz_main_probe(struct platform_device *pdev)
 
 #endif
 
+	KREE_DEBUG("%s-\n", __func__);
 	return res;
 }
 

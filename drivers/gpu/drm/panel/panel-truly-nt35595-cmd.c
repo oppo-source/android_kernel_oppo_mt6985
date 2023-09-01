@@ -28,9 +28,9 @@
 #include "../mediatek/mediatek_v2/mtk_drm_graphics_base.h"
 #endif
 
-#ifdef CONFIG_MTK_ROUND_CORNER_SUPPORT
-#include "../mediatek/mtk_corner_pattern/mtk_data_hw_roundedpattern.h"
-#endif
+// #ifdef CONFIG_MTK_ROUND_CORNER_SUPPORT
+// #include "../mediatek/mtk_corner_pattern/mtk_data_hw_roundedpattern.h"
+// #endif
 
 struct lcm {
 	struct device *dev;

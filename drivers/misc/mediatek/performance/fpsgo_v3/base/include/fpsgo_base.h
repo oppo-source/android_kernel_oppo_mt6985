@@ -14,7 +14,7 @@
 #include <linux/sched/task.h>
 #include <linux/sched.h>
 
-#define MAX_DEP_NUM 50
+#define MAX_DEP_NUM 100
 #define WINDOW 20
 #define RESCUE_TIMER_NUM 5
 #define QUOTA_MAX_SIZE 300
@@ -24,6 +24,7 @@
 #define FPSGO_MW 1
 #define BY_PID_DEFAULT_VAL -1
 #define BY_PID_DELETE_VAL -2
+#define FPSGO_MAX_TREE_SIZE 10
 
 enum {
 	FPSGO_SET_UNKNOWN = -1,
@@ -54,11 +55,7 @@ struct fbt_proc {
 };
 
 struct fbt_frame_info {
-	int target_fps;
-	int mips_diff;
-	long mips;
 	unsigned long long running_time;
-	int count;
 };
 
 struct fbt_loading_info {
@@ -109,6 +106,8 @@ struct fbt_boost_info {
 	int hit_cnt;
 	int deb_cnt;
 	int hit_cluster;
+	struct fbt_frame_info frame_info[WINDOW];
+	int f_iter;
 
 	/* SeparateCap */
 	long *cl_loading;
@@ -116,13 +115,6 @@ struct fbt_boost_info {
 	/* rescue*/
 	struct fbt_proc proc;
 	int cur_stage;
-
-	/* variance control */
-	struct fbt_frame_info frame_info[WINDOW];
-	unsigned int floor;
-	int floor_count;
-	int reset_floor_bound;
-	int f_iter;
 
 	/* filter heavy frames */
 	struct fbt_loading_info filter_loading[FBT_FILTER_MAX_WINDOW];
@@ -221,6 +213,12 @@ struct fpsgo_boost_attr {
 
 	/* Reset taskmask */
 	int reset_taskmask;
+
+	/* limit freq 2 cap */
+	int limit_cfreq2cap;
+	int limit_rfreq2cap;
+	int limit_cfreq2cap_m;
+	int limit_rfreq2cap_m;
 };
 
 struct render_info {
@@ -301,6 +299,7 @@ struct sbe_info {
 struct fps_control_pid_info {
 	int pid;
 	struct rb_node entry;
+	unsigned long long ts;
 };
 
 struct video_info {
@@ -368,6 +367,7 @@ struct sbe_info *fpsgo_search_and_add_sbe_info(int pid, int force);
 void fpsgo_delete_sbe_info(int pid);
 struct fps_control_pid_info *fpsgo_search_and_add_fps_control_pid(int pid, int force);
 void fpsgo_delete_fpsgo_control_pid(int pid);
+int fpsgo_get_all_fps_control_pid_info(struct fps_control_pid_info *arr);
 void fpsgo_check_thread_status(void);
 void fpsgo_clear(void);
 struct BQ_id *fpsgo_find_BQ_id(int pid, int tgid, long long identifier,

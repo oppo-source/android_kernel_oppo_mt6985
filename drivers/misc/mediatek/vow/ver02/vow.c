@@ -98,6 +98,7 @@ static DEFINE_MUTEX(vow_payloaddump_mutex);
 #endif
 static DEFINE_MUTEX(vow_vmalloc_lock);
 static DEFINE_MUTEX(vow_extradata_mutex);
+static DEFINE_MUTEX(vow_sendspkmdl_mutex);
 
 /*****************************************************************************
  * VOW SERVICES
@@ -898,12 +899,14 @@ static bool vow_service_ReleaseSpeakerModel(int id)
 
 	ret = vow_service_SendSpeakerModel(I, VOW_CLEAN_MODEL);
 
+	mutex_lock(&vow_sendspkmdl_mutex);
 	vowserv.vow_speaker_model[I].model_ptr = NULL;
 	vowserv.vow_speaker_model[I].uuid = 0;
 	vowserv.vow_speaker_model[I].id = -1;
 	vowserv.vow_speaker_model[I].keyword = -1;
 	vowserv.vow_speaker_model[I].flag = 0;
 	vowserv.vow_speaker_model[I].enabled = 0;
+	mutex_unlock(&vow_sendspkmdl_mutex);
 
 	return ret;
 }
@@ -916,20 +919,25 @@ static bool vow_service_SetSpeakerModel(unsigned long arg)
 	char *ptr8;
 #endif
 
-	I = vow_service_FindFreeSpeakerModel();
-	if (I == -1)
-		return false;
-
 	if (vow_service_GetParameter(arg) != 0)
 		return false;
+	I  = vow_service_SearchSpeakerModelWithKeyword(vowserv.vow_info_apuser[1]);
+	if (I  < 0) {
+		I = vow_service_FindFreeSpeakerModel();
+		if (I == -1)
+			return false;
+	}
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_SCP_SUPPORT)
+	mutex_lock(&vow_sendspkmdl_mutex);
 	vowserv.vow_speaker_model[I].model_ptr =
 	   (void *)(scp_get_reserve_mem_virt(VOW_MEM_ID))
 	   + (VOW_MODEL_SIZE * I);
+	mutex_unlock(&vow_sendspkmdl_mutex);
 
 	if (vow_service_CopyModel(I) != 0)
 		return false;
 
+	mutex_lock(&vow_sendspkmdl_mutex);
 	ptr8 = (char *)vowserv.vow_speaker_model[I].model_ptr;
 	VOWDRV_DEBUG("SetSPKModel:slot: %d, ID: %x, keyword: %x, UUID: %x, flag: %x\n",
 		      I,
@@ -941,17 +949,20 @@ static bool vow_service_SetSpeakerModel(unsigned long arg)
 		      *(char *)&ptr8[0], *(char *)&ptr8[1],
 		      *(char *)&ptr8[2], *(char *)&ptr8[3],
 		      *(short *)&ptr8[160], *(int *)&ptr8[7960]);
+	mutex_unlock(&vow_sendspkmdl_mutex);
 
 	ret = vow_service_SendSpeakerModel(I, VOW_SET_MODEL);
 	/* if IPI send fail, then just clean this model information */
 	if (ret == false) {
 		VOWDRV_DEBUG("vow ipi fail, then ignore this load model\n");
+		mutex_lock(&vow_sendspkmdl_mutex);
 		vowserv.vow_speaker_model[I].model_ptr = NULL;
 		vowserv.vow_speaker_model[I].uuid = 0;
 		vowserv.vow_speaker_model[I].id = -1;
 		vowserv.vow_speaker_model[I].keyword = -1;
 		vowserv.vow_speaker_model[I].flag = 0;
 		vowserv.vow_speaker_model[I].enabled = 0;
+		mutex_unlock(&vow_sendspkmdl_mutex);
 	}
 #else
 	VOWDRV_DEBUG("%s(), vow: SCP no support\n\r", __func__);
@@ -1170,12 +1181,15 @@ static bool vow_service_SetApDumpAddr(unsigned long arg)
 	if ((vow_info[2] == 0) || ((vow_info[3] != kReadVowDumpSize) &&
 	    (vow_info[3] != kReadVowDumpSize_Big)) || (vow_info[4] == 0) ||
 	    (vow_info[0] >= NUM_DUMP_DATA)) {
+		VOWDRV_DEBUG("%s(), vow SetdumpAddr error!\n", __func__);
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_SCP_DEBUG_SUPPORT)
 		VOWDRV_DEBUG("%s(): error id %d, addr_%x, size_%x, addr_%x\n",
 		 __func__,
 		 (unsigned int)vow_info[0],
 		 (unsigned int)vow_info[2],
 		 (unsigned int)vow_info[3],
 		 (unsigned int)vow_info[4]);
+#endif
 		return false;
 	}
 	id = vow_info[0];
@@ -1208,9 +1222,9 @@ static bool vow_service_SetApAddr(unsigned long arg)
 	/* add return condition */
 	if ((vow_info[2] == 0) || (vow_info[3] != VOW_VBUF_LENGTH) ||
 	    (vow_info[4] == 0)) {
-		VOWDRV_DEBUG("%s(), vow SetVBufAddr error!\n", __func__);
+		VOWDRV_DEBUG("%s(), vow SetApAddr error!\n", __func__);
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_SCP_DEBUG_SUPPORT)
-		VOWDRV_DEBUG("%s(), vow SetVBufAddr:addr_%x, size_%x, addr_%x\n",
+		VOWDRV_DEBUG("%s(), vow SetApAddr:addr_%x, size_%x, addr_%x\n",
 		 __func__,
 		 (unsigned int)vow_info[2],
 		 (unsigned int)vow_info[3],
@@ -1239,10 +1253,13 @@ static bool vow_service_SetVBufAddr(unsigned long arg)
 	/* add return condition */
 	if ((vow_info[2] == 0) || (vow_info[3] != VOW_VBUF_LENGTH) ||
 	    (vow_info[4] == 0)) {
+		VOWDRV_DEBUG("%s(), vow SetVBufAddr error!\n", __func__);
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_SCP_DEBUG_SUPPORT)
 		VOWDRV_DEBUG("vow SetVBufAddr:addr_%x, size_%x, addr_%x\n",
 		 (unsigned int)vow_info[2],
 		 (unsigned int)vow_info[3],
 		 (unsigned int)vow_info[4]);
+#endif
 		return false;
 	}
 
@@ -1731,6 +1748,8 @@ static void vow_service_reset(void)
 	bool ret = false;
 
 	VOWDRV_DEBUG("+%s()\n", __func__);
+	vowserv.scp_command_flag = false;
+	vowserv.tx_keyword_start = false;
 	vow_hal_reboot();
 	for (I = 0; I < MAX_VOW_SPEAKER_MODEL; I++) {
 		if (vowserv.vow_speaker_model[I].enabled  == 1) {
@@ -1826,10 +1845,12 @@ static bool vow_service_AllocKernelDumpBuffer(void)
 			vow_dump_info[I].kernel_dump_addr = vmalloc(kReadVowDumpSize_Big);
 			vow_dump_info[I].kernel_dump_size = kReadVowDumpSize_Big;
 		}
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_SCP_DEBUG_SUPPORT)
 		VOWDRV_DEBUG("%s vow_dump_info[%d].addr = 0x%p, size = 0x%x\n",
 			     __func__, I,
 			     vow_dump_info[I].kernel_dump_addr,
 			     vow_dump_info[I].kernel_dump_size);
+#endif
 		VOW_ASSERT(vow_dump_info[I].kernel_dump_addr != NULL);
 		vow_dump_info[I].kernel_dump_idx = 0;
 	}
@@ -2518,14 +2539,21 @@ static int VowDrv_QueryVowEINTStatus(void)
 
 static int VowDrv_open(struct inode *inode, struct file *fp)
 {
+	VOWDRV_DEBUG("%s() do nothing\n", __func__);
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_SCP_DEBUG_SUPPORT)
+	// no print in user load
 	VOWDRV_DEBUG("%s() do nothing inode:%p, file:%p\n",
 		    __func__, inode, fp);
+#endif
 	return 0;
 }
 
 static int VowDrv_release(struct inode *inode, struct file *fp)
 {
+	VOWDRV_DEBUG("%s(), enter\n", __func__);
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_SCP_DEBUG_SUPPORT)
 	VOWDRV_DEBUG("%s() inode:%p, file:%p\n", __func__, inode, fp);
+#endif
 
 	if (!(fp->f_mode & FMODE_WRITE || fp->f_mode & FMODE_READ))
 		return -ENODEV;
@@ -2957,6 +2985,14 @@ static ssize_t VowDrv_read(struct file *fp,
 	bool dsp_inform_tx_flag = false;
 
 	VOWDRV_DEBUG("+%s()+\n", __func__);
+	if (count != sizeof(struct vow_eint_data_struct_t)) {
+		VOWDRV_DEBUG(
+			"%s(), cpy incorrect size to user, size=%d, correct size=%d, exit\n",
+			__func__,
+			count,
+			sizeof(struct vow_eint_data_struct_t));
+		goto exit;
+	}
 	VowDrv_SetVowEINTStatus(VOW_EINT_RETRY);
 
 	if (VowDrv_Wait_Queue_flag == 0)

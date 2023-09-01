@@ -26,6 +26,19 @@ static int tcpm_check_typec_attached(struct tcpc_device *tcpc)
 	return 0;
 }
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/*oplus add for pd svooc*/
+bool tcpm_inquire_pdphy_ready(struct tcpc_device *tcpc)
+{
+	if (tcpc->pd_inited_flag) {
+		return true;
+	} else {
+		return false;
+	}
+}
+EXPORT_SYMBOL(tcpm_inquire_pdphy_ready);
+#endif
+
 #if IS_ENABLED(CONFIG_USB_POWER_DELIVERY)
 int tcpm_check_pd_attached(struct tcpc_device *tcpc)
 {

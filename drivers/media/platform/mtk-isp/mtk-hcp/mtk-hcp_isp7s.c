@@ -51,7 +51,7 @@ static struct mtk_hcp_reserve_mblock isp7s_smvr_mblock[] = {
 		.start_phys = 0x0,
 		.start_virt = 0x0,
 		.start_dma  = 0x0,
-		.size = 0x300000,
+		.size = 0xE1000,
 		.is_dma_buf = true,
 		.mmap_cnt = 0,
 		.mem_priv = NULL,
@@ -67,7 +67,7 @@ static struct mtk_hcp_reserve_mblock isp7s_smvr_mblock[] = {
 		.start_phys = 0x0,
 		.start_virt = 0x0,
 		.start_dma  = 0x0,
-		.size = 0xC00000,
+		.size = 0x400000,
 		.is_dma_buf = true,
 		.mmap_cnt = 0,
 		.mem_priv = NULL,
@@ -83,7 +83,7 @@ static struct mtk_hcp_reserve_mblock isp7s_smvr_mblock[] = {
 		.start_phys = 0x0,
 		.start_virt = 0x0,
 		.start_dma  = 0x0,
-		.size = 0xC00000,
+		.size = 0x596000,
 		.is_dma_buf = true,
 		.mmap_cnt = 0,
 		.mem_priv = NULL,
@@ -99,7 +99,7 @@ static struct mtk_hcp_reserve_mblock isp7s_smvr_mblock[] = {
 		.start_phys = 0x0,
 		.start_virt = 0x0,
 		.start_dma  = 0x0,
-		.size = 0x3000000,
+		.size = 0x1E00000,
 		.is_dma_buf = true,
 		.mmap_cnt = 0,
 		.mem_priv = NULL,
@@ -115,7 +115,7 @@ static struct mtk_hcp_reserve_mblock isp7s_smvr_mblock[] = {
 		.start_phys = 0x0,
 		.start_virt = 0x0,
 		.start_dma  = 0x0,
-		.size = 0x1000000,
+		.size = 0x67D000,
 		.is_dma_buf = true,
 		.mmap_cnt = 0,
 		.mem_priv = NULL,
@@ -131,7 +131,7 @@ static struct mtk_hcp_reserve_mblock isp7s_smvr_mblock[] = {
 		.start_phys = 0x0,
 		.start_virt = 0x0,
 		.start_dma  = 0x0,
-		.size = 0x3000000,
+		.size = 0x207D000,
 		.is_dma_buf = true,
 		.mmap_cnt = 0,
 		.mem_priv = NULL,
@@ -147,7 +147,7 @@ static struct mtk_hcp_reserve_mblock isp7s_smvr_mblock[] = {
 		.start_phys = 0x0,
 		.start_virt = 0x0,
 		.start_dma  = 0x0,
-		.size = 0x200000,
+		.size = 0x132000,   /*1MB + 200KB*/
 		.is_dma_buf = true,
 		.mmap_cnt = 0,
 		.mem_priv = NULL,
@@ -163,7 +163,7 @@ static struct mtk_hcp_reserve_mblock isp7s_smvr_mblock[] = {
 		.start_phys = 0x0,
 		.start_virt = 0x0,
 		.start_dma  = 0x0,
-		.size = 0x300000,
+		.size = 0x264000,   /*2MB + 400KB*/
 		.is_dma_buf = true,
 		.mmap_cnt = 0,
 		.mem_priv = NULL,
@@ -477,6 +477,12 @@ void *isp7s_get_hwid_virt(void)
 }
 EXPORT_SYMBOL(isp7s_get_hwid_virt);
 
+phys_addr_t isp7s_get_gce_mem_size(void)
+{
+	return mb[IMG_MEM_G_ID].size;
+}
+EXPORT_SYMBOL(isp7s_get_gce_mem_size);
+
 
 int isp7s_allocate_working_buffer(struct mtk_hcp *hcp_dev, unsigned int mode)
 {
@@ -553,7 +559,8 @@ int isp7s_allocate_working_buffer(struct mtk_hcp *hcp_dev, unsigned int mode)
 					dma_buf_fd(mblock[id].d_buf, O_RDWR | O_CLOEXEC);
 				dma_buf_begin_cpu_access(mblock[id].d_buf, DMA_BIDIRECTIONAL);
 				kref_init(&mblock[id].kref);
-				pr_info("%s:[HCP][%s] phys:0x%llx, virt:0x%p, dma:0x%llx, size:0x%llx, is_dma_buf:%d, fd:%d, d_buf:0x%p\n",
+
+				pr_debug("%s:[HCP][%s] phys:0x%llx, virt:0x%p, dma:0x%llx, size:0x%llx, is_dma_buf:%d, fd:%d, d_buf:0x%p\n",
 					__func__, mblock[id].name,
 					isp7s_get_reserve_mem_phys(id),
 					isp7s_get_reserve_mem_virt(id),
@@ -649,7 +656,8 @@ static void gce_release(struct kref *ref)
 	dma_buf_detach(mblock->d_buf, mblock->attach);
 	dma_buf_end_cpu_access(mblock->d_buf, DMA_BIDIRECTIONAL);
 	dma_buf_put(mblock->d_buf);
-	pr_info("%s:[HCP][%s] phys:0x%llx, virt:0x%p, dma:0x%llx, size:0x%llx, is_dma_buf:%d, fd:%d, d_buf:0x%p\n",
+
+	pr_debug("%s:[HCP][%s] phys:0x%llx, virt:0x%p, dma:0x%llx, size:0x%llx, is_dma_buf:%d, fd:%d, d_buf:0x%p\n",
 		__func__, mblock->name,
 		isp7s_get_reserve_mem_phys(IMG_MEM_G_ID),
 		isp7s_get_reserve_mem_virt(IMG_MEM_G_ID),
@@ -873,4 +881,5 @@ struct mtk_hcp_data isp7s_hcp_data = {
 	.get_gce = isp7s_get_gce,
 	.put_gce = isp7s_put_gce,
 	.get_hwid_virt = isp7s_get_hwid_virt,
+	.get_gce_mem_size = isp7s_get_gce_mem_size,
 };

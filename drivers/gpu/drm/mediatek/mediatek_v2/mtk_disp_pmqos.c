@@ -17,15 +17,15 @@
 #include <soc/mediatek/mmqos.h>
 #include <soc/mediatek/mmdvfs_v3.h>
 
-#define CRTC_NUM		3
+#define CRTC_NUM		4
 static struct drm_crtc *dev_crtc;
 /* add for mm qos */
 static struct clk *mm_clk;
 static struct regulator *mm_freq_request;
 static unsigned long *g_freq_steps;
 static unsigned int lp_freq;
-static int g_freq_level[CRTC_NUM] = {-1, -1, -1};
-static bool g_freq_lp[CRTC_NUM] = {false, false, false};
+static int g_freq_level[CRTC_NUM] = {-1, -1, -1, -1};
+static bool g_freq_lp[CRTC_NUM] = {false, false, false, false};
 static long g_freq;
 static int step_size = 1;
 
@@ -126,6 +126,44 @@ void __mtk_disp_set_module_hrt(struct icc_path *request,
 		mtk_icc_set_bw(request, 0, MBps_to_icc(bandwidth));
 }
 
+static bool mtk_disp_check_segment(struct mtk_drm_crtc *mtk_crtc,
+				struct mtk_drm_private *priv)
+{
+	bool ret = true;
+	int hact = 0;
+	int vact = 0;
+	int vrefresh = 0;
+	int bpc = 0;
+
+	if (IS_ERR_OR_NULL(mtk_crtc)) {
+		DDPPR_ERR("%s, mtk_crtc is NULL\n", __func__);
+		return ret;
+	}
+	if (IS_ERR_OR_NULL(priv)) {
+		DDPPR_ERR("%s, private is NULL\n", __func__);
+		return ret;
+	}
+	hact = mtk_crtc->base.state->adjusted_mode.hdisplay;
+	vact = mtk_crtc->base.state->adjusted_mode.vdisplay;
+	vrefresh = drm_mode_vrefresh(&mtk_crtc->base.state->adjusted_mode);
+	bpc = mtk_crtc->bpc;
+
+	if (priv->seg_id == 1) {
+		if (hact <= 800 && vact <= 1700 && bpc <= 8)
+			ret = true;
+		else
+			ret = false;
+	}
+/*
+ *	DDPMSG("%s, segment:%d, mode(%d, %d, %d)\n",
+ *			__func__, priv->seg_id, hact, vact, vrefresh);
+ */
+	if (ret == false)
+		DDPPR_ERR("%s, check sement fail: segment:%d, mode(%d, %d, %d)\n",
+			__func__, priv->seg_id, hact, vact, vrefresh);
+	return ret;
+}
+
 int mtk_disp_set_hrt_bw(struct mtk_drm_crtc *mtk_crtc, unsigned int bw)
 {
 	struct drm_crtc *crtc = &mtk_crtc->base;
@@ -136,6 +174,14 @@ int mtk_disp_set_hrt_bw(struct mtk_drm_crtc *mtk_crtc, unsigned int bw)
 	int i, j, ret = 0;
 
 	tmp = bw;
+
+	if (priv->data->mmsys_id == MMSYS_MT6835) {
+		if (mtk_disp_check_segment(mtk_crtc, priv) == false) {
+			mtk_icc_set_bw(priv->hrt_bw_request, 0, MBps_to_icc(1));
+			DRM_MMP_MARK(hrt_bw, 0, 1);
+			return 0;
+		}
+	}
 
 	for (i = 0; i < DDP_PATH_NR; i++) {
 		if (!(mtk_crtc->ddp_ctx[mtk_crtc->ddp_mode].req_hrt[i]))
@@ -153,6 +199,8 @@ int mtk_disp_set_hrt_bw(struct mtk_drm_crtc *mtk_crtc, unsigned int bw)
 
 	if (ret == RDMA_REQ_HRT)
 		tmp = mtk_drm_primary_frame_bw(crtc);
+	else if (ret == MDP_RDMA_REQ_HRT)
+		return 0;
 
 	/* skip same HRT BW */
 	if (priv->req_hrt[crtc_idx] == tmp)
@@ -176,8 +224,10 @@ void mtk_drm_pan_disp_set_hrt_bw(struct drm_crtc *crtc, const char *caller)
 	struct drm_display_mode *mode;
 	unsigned int bw = 0;
 
-	dev_crtc = crtc;
-	mtk_crtc = to_mtk_crtc(dev_crtc);
+	/* dev_crtc is for crtc0(primary display) only */
+	if (drm_crtc_index(crtc) == 0)
+		dev_crtc = crtc;
+	mtk_crtc = to_mtk_crtc(crtc);
 	mode = &crtc->state->adjusted_mode;
 
 	bw = _layering_get_frame_bw(crtc, mode);
@@ -253,8 +303,11 @@ int mtk_disp_hrt_cond_init(struct drm_crtc *crtc)
 	struct mtk_drm_crtc *mtk_crtc;
 	struct mtk_drm_private *priv;
 
-	dev_crtc = crtc;
-	mtk_crtc = to_mtk_crtc(dev_crtc);
+	/* dev_crtc is for crtc0(primary display) only */
+	if (drm_crtc_index(crtc) == 0)
+		dev_crtc = crtc;
+
+	mtk_crtc = to_mtk_crtc(crtc);
 
 	if (IS_ERR_OR_NULL(mtk_crtc)) {
 		DDPPR_ERR("%s:mtk_crtc is NULL\n", __func__);
@@ -339,15 +392,26 @@ void mtk_drm_set_mmclk(struct drm_crtc *crtc, int level, bool lp_mode,
 	int final_lp_mode = true;
 	int final_level = -1;
 	int cnt = 0;
+	struct mtk_drm_crtc *mtk_crtc = to_mtk_crtc(crtc);
+	struct mtk_ddp_comp *output_comp;
 
 	idx = drm_crtc_index(crtc);
 
+	if (IS_ERR_OR_NULL(mtk_crtc)) {
+		DDPPR_ERR("%s invalid mtk_crtc\n", __func__);
+		return;
+	}
+
+	/* memory session do not use */
+	output_comp = mtk_ddp_comp_request_output(mtk_crtc);
+	if (IS_ERR_OR_NULL(output_comp) ||
+		mtk_ddp_comp_get_type(output_comp->id) == MTK_DISP_WDMA) {
+		DDPINFO("crtc%d not support set mmclk\n", idx);
+		return;
+	}
+
 	DDPINFO("%s[%d] g_freq_level[idx=%d]: %d, g_freq_lp[idx=%d]: %d\n",
 		__func__, __LINE__, idx, level, idx, lp_mode);
-
-	/* only for crtc = 0, 1 */
-	if (idx > 2)
-		return;
 
 	if (level < 0 || level > (step_size - 1))
 		level = -1;

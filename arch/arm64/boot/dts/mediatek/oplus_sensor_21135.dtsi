@@ -1,0 +1,207 @@
+&odm {
+	sensor_fb: sensor_fb {
+		compatible = "oplus,sensor-feedback";
+	};
+	consumer_ir_core: consumer_ir_core {
+		compatible = "oplus,kookong_ir_core";
+		status = "okay";
+		vdd-supply = <&mt6373_vmch>;
+		vdd-min-vol = <3000000>;
+		vdd-max-vol = <3000000>;
+	};
+	consumerIr: consumerIr {
+		compatible = "oplus,kookong_ir_pwm";
+		status = "okay";
+		pwm-num = <3>;
+		pwm-dma-mask = <64>;
+	};
+	ssc_interactive: ssc_interactive {
+		report_brightness = <1>;
+		support_pwm_turbo = <1>;
+		support_bri_to_scp = <1>;
+		need_to_sync_lcd_rate = <1>;
+		primary_lb_brl_info {
+			brl_thrd_num = <3>;
+			brl_thrd = <1204 1527 4095>;
+		};
+	};
+	oplus_sensor:oplus_sensor {
+		compatible = "oplus,sensor-devinfo";
+		als-row-coe = <1000>;
+		/* sensor start */
+		/*
+		enum {
+			LIS3DH,
+			LSM6DS3,
+			BMI160,
+			LIS2HH12,
+			LSM6DSM,
+			BMI2XY,
+			LSM6DSO,
+			BMA4XY,
+			SC7A20,
+			ICM4X6XX,
+		};
+		*/
+		gsensor_1: gsensor_1 {
+			status = "okay";
+			sensor_name = <5>;//BMI2XY
+			device_name = "bmi2xy";
+			i2c_num = <2>;
+			direction = <5>;
+			eint_num = <20>;
+			gyro_cali_version= <2>;
+			gyro_cali_range =<350>;
+			acc_cali_range= <300 300 300>;
+		};
+		gsensor_2: gsensor_2 {
+			status = "okay";
+			sensor_name = <8>;//icm4263x
+			device_name = "icm4263x";
+			i2c_num = <2>;
+			direction = <4>;
+			eint_num = <20>;
+			gyro_cali_version= <2>;
+			gyro_cali_range =<350>;
+			acc_cali_range= <300 300 300>;
+		};
+
+		/*
+		enum {
+			AKM09911,
+			MMC3530,
+			MMC5603,
+			MXG4300,
+			AKM09918,
+		};
+		*/
+		msensor_1: msensor_1 {
+			status = "okay";
+			sensor_name = <4>;//AKM09918
+			i2c_num = <6>;
+			i2c_addr = <0x0C>;
+			direction = <7>;
+			eint_num = <0>;
+			soft-mag-parameter = <10591 0 326 0 7 1 50 1 9312 0 71 1 216 1 233 1 10583 0>;
+		};
+		/*
+		enum {
+			TMD2725,
+			APSD9922,
+			STK3335,
+			STK3331,
+			STK2232,
+			TCS3701,
+			STK32600,
+			STK33502,
+			MN78911,
+			TCS3720,
+		};
+		*/
+		proximity_1: proximity_1 {
+			status = "okay";
+			sensor_name = <9>;//TCS3720
+			i2c_num = <5>;
+			i2c_addr = <0x39>;
+			direction = <0>;
+			eint_num = <19>;
+			low_step = <300>;
+			high_step = <500>;
+			low_limit = <400>;
+			high_limit = <600>;
+			dirty_low_step = <180>;
+			dirty_high_step = <280>;
+			ps_dirty_limit = <1800>;
+			ps_ir_limit = <500>;
+			ps_adjust_min = <0>;
+			ps_adjust_max = <800>;
+			sampling_count = <5>;
+			step_max = <400>;
+			step_min = <110>;
+			step_div = <1500>;
+			anti_shake_delta = <80>;
+			dynamic_cali_max = <3000>;
+			raw2offset_radio = <20800>;
+			offset_max = <250>;
+			offset_range_min = <255>;
+			offset_range_max = <255>;
+			force_cali_limit = <0>;
+			cali_jitter_limit = <80>;
+			cal_offset_margin = <120>;
+			sensor-reg = <0xB1 0x0C 0x82 0x43>;
+			60hz_psd_us = <14200>;
+			90hz_psd_us = <10600>;
+			120hz_psd_us = <7900>;
+			ps_check_num = <3>;
+			ps_mid_filter = <0>;
+			need_to_sync_lcd_rate = <1>;
+		};
+		light_1: light_1 {
+			status = "okay";
+			sensor_name = <9>;//TCS3720
+			i2c_num = <5>;
+			i2c_addr = <0x39>;
+			direction = <0>;
+			eint_num = <19>;
+			als_ratio = <110>;
+			cct_type = <0x02>; //0x01 CCT_NORMAL 0x02 CCT_WISE
+			device_name = "tcs3720";
+			gold_cct_3k = <7628 3701 1694 12148 1001 1001>;
+			gold_cct_6k = <5046 4060 2220 10686 1001 1001>;
+			sup_changing_rpt = <1>;
+			lb_bri_max = <4096>;
+			use_eint_mode = <1>;
+			ir_ratio = <8>; // *1000
+			als_delay = <390>;
+			decision_table_index = <2>;
+			available_sensor = <14>;
+			gold_cct_factor = <941 946 924 966 1001 1001>;
+		};
+		rear_cct_1: rear_cct_1 {
+			status = "okay";
+			sensor_name = <2>; // as7352
+			i2c_num = <0>;
+			i2c_addr = <0x39>;
+			direction = <0>;
+			eint_num = <18>;
+			device_name = "as7352";
+			gold_rear_spectrum_3k = <938  3541 3999 3086 5364 617  1006 2018 5165 457 4008 532 777 1001>; // Z Y X NIR VIS F2 F3 F4 F6 F1 F7 F8 F5 F
+			gold_rear_spectrum_6k = <1993 3484 3193 808  4975 1247 2056 2769 3346 893 2520 357 867 1001>;
+			gold_rear_spectrum_factor_512gain = <942 939 948 848 918 1030 1005 1001 912 1136 959 929 892 1001>;
+			gold_rear_spectrum_factor_2048gain = <932 923 949 853 937 1014 974 994 920 1135 968 926 900 1001>;
+		};
+		ois_1: ois_1 {
+			status = "okay";
+			sensor_name = <0>;
+		};
+		pick_up: pick_up {
+			status = "okay";
+			use-proximity = <1>;
+		};
+		lux_aod: lux_aod {
+			status = "okay";
+			use-proximity = <1>;
+		};
+		alsps_arch: alsps_arch {
+			status = "okay";
+			new-arch-supported = <1>;
+		};
+		cali_arch: cali_arch {
+			status = "okay";
+			new-arch-supported = <1>;
+		};
+		smart_prox: smart_prox {
+			status = "okay";
+			support_smart_prox = <1>;
+		};
+		ap_timer: ap_timer {
+			status = "okay";
+			support_ap_timer = <1>;
+		};
+		pocket: pocket {
+			status = "okay";
+			support_pocket = <1>;
+		};
+	};
+/* sensor end */
+};

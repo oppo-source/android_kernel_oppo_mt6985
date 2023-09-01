@@ -26,6 +26,7 @@ struct led_conf_info {
 	struct led_classdev cdev;
 	int flags;
 	enum led_mode mode;
+	int connector_id;
 #define LED_MT_BRIGHTNESS_HW_CHANGED	BIT(1)
 #define LED_MT_BRIGHTNESS_CHANGED	BIT(2)
 
@@ -43,6 +44,9 @@ static inline void mtk_leds_notify_brightness_hw_changed(
 	struct led_conf_info *led_conf, enum led_brightness brightness) { }
 #endif
 
+#ifdef OPLUS_FEATURE_DISPLAY_APOLLO
+void apollo_set_brightness_for_show(unsigned int level);
+#endif /* OPLUS_FEATURE_DISPLAY_APOLLO */
 int mtk_leds_register_notifier(struct notifier_block *nb);
 int mtk_leds_unregister_notifier(struct notifier_block *nb);
 int mtk_leds_brightness_set(char *name, int level, unsigned int params, unsigned int params_flag);

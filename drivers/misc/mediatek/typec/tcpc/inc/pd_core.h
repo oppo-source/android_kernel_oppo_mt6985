@@ -670,6 +670,10 @@
 #define USB_VID_RICHTEK		0x29cf  /* demo uvdm */
 #define USB_VID_DIRECTCHARGE	0x29cf  /* direct charge */
 #define USB_VID_MQP		0x1748
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for pd svoioc flow */
+#define USB_VID_OPLUS		0x22d9
+#endif
 
 /* PD counter definitions */
 #define PD_MESSAGE_ID_COUNT	7

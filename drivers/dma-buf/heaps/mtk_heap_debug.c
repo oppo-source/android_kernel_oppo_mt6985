@@ -1851,6 +1851,7 @@ static int dma_heap_oom_notify(struct notifier_block *nb,
 			       unsigned long nb_val, void *nb_freed)
 {
 	unsigned long long oom_time = get_current_time_ms();
+	unsigned long dma_buf_sz = atomic64_read(&dma_heap_normal_total);
 
 	if (oom_time - last_oom_time < OOM_DUMP_INTERVAL) {
 		last_oom_time = oom_time;
@@ -1859,7 +1860,10 @@ static int dma_heap_oom_notify(struct notifier_block *nb,
 		return 0;
 	}
 
-	mtk_dmabuf_dump_all(NULL, HEAP_DUMP_OOM);
+	if (dma_buf_sz > SZ_2G + SZ_512M)
+		mtk_dmabuf_dump_all(NULL, HEAP_DUMP_OOM);
+	else
+		mtk_dmabuf_dump_all(NULL, HEAP_DUMP_STATS);
 
 	last_oom_time = oom_time;
 

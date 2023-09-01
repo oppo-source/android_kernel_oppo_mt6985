@@ -634,6 +634,8 @@ void update_freq(struct mtk_vcodec_dev *dev, int codec_type)
 			dev->venc_dvfs_params.per_frame_adjust = 0;
 
 		dev->venc_dvfs_params.freq_sum = (u32)freq_sum;
+		dev->venc_dvfs_params.oprate_sum = (u32)op_rate_sum;
+
 		freq_sum = match_avail_freq(dev, codec_type, freq_sum);
 
 		dev->venc_dvfs_params.target_freq = (u32)freq_sum;
@@ -645,4 +647,48 @@ void update_freq(struct mtk_vcodec_dev *dev, int codec_type)
 		mtk_v4l2_debug(6, "[VDVFS] VENC bw_factor = %u",
 			dev->venc_dvfs_params.target_bw_factor);
 	}
+}
+
+void mtk_vcodec_alive_checker_suspend(struct mtk_vcodec_dev *dev)
+{
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
+#ifdef VDEC_CHECK_ALIVE
+	/* Only support vdec check alive now */
+	if (mtk_vcodec_vcp & (1 << MTK_INST_DECODER)) {
+		mutex_lock(&dev->ctx_mutex);
+		if (!list_empty(&dev->ctx_list) && dev->vdec_dvfs_params.has_timer) {
+			mtk_v4l2_debug(0, "[VDVFS][VDEC] suspend vdec alive checker (freq %d)..",
+				dev->vdec_dvfs_params.target_freq);
+			del_timer_sync(&dev->vdec_dvfs_params.vdec_active_checker);
+			dev->vdec_dvfs_params.has_timer = 0;
+			mutex_unlock(&dev->ctx_mutex);
+			flush_workqueue(dev->check_alive_workqueue);
+		} else
+			mutex_unlock(&dev->ctx_mutex);
+	}
+#endif
+#endif
+}
+
+void mtk_vcodec_alive_checker_resume(struct mtk_vcodec_dev *dev)
+{
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
+#ifdef VDEC_CHECK_ALIVE
+	/* Only support vdec check alive now */
+	if (mtk_vcodec_vcp & (1 << MTK_INST_DECODER)) {
+		mutex_lock(&dev->ctx_mutex);
+		if (!list_empty(&dev->ctx_list) && !dev->vdec_dvfs_params.has_timer) {
+			mtk_v4l2_debug(0, "[VDVFS][VDEC] resume vdec alive checker (freq %d)..",
+				dev->vdec_dvfs_params.target_freq);
+			timer_setup(&dev->vdec_dvfs_params.vdec_active_checker,
+				mtk_vcodec_check_alive, 0);
+			dev->vdec_dvfs_params.vdec_active_checker.expires =
+				jiffies + msecs_to_jiffies(MTK_VDEC_CHECK_ACTIVE_INTERVAL);
+			add_timer(&dev->vdec_dvfs_params.vdec_active_checker);
+			dev->vdec_dvfs_params.has_timer = 1;
+		}
+		mutex_unlock(&dev->ctx_mutex);
+	}
+#endif
+#endif
 }

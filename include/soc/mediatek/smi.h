@@ -48,6 +48,7 @@ void mtk_smi_add_device_link(struct device *dev, struct device *larbdev);
 void mtk_smi_init_power_off(void);
 void mtk_smi_dump_last_pd(const char *user);
 void mtk_smi_larb_clamp_and_lock(struct device *larbdev, bool on);
+int mtk_smi_common_in_mminfra_chk(struct device *dev);
 s32 smi_sysram_enable(struct device *larbdev, const u32 master_id,
 			const bool enable, const char *user);
 s32 mtk_smi_dbg_cg_status(void);
@@ -75,6 +76,11 @@ static inline int mtk_smi_larb_get(struct device *larbdev)
 static inline void mtk_smi_larb_put(struct device *larbdev) { }
 
 static inline int mtk_smi_larb_get_ex(struct device *larbdev, int user)
+{
+	return 0;
+}
+
+static inline int mtk_smi_common_in_mminfra_chk(struct device *dev)
 {
 	return 0;
 }

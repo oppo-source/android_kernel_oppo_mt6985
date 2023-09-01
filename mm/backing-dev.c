@@ -229,20 +229,13 @@ static __init int bdi_class_init(void)
 }
 postcore_initcall(bdi_class_init);
 
-static int bdi_init(struct backing_dev_info *bdi);
-
 static int __init default_bdi_init(void)
 {
-	int err;
-
 	bdi_wq = alloc_workqueue("writeback", WQ_MEM_RECLAIM | WQ_UNBOUND |
 				 WQ_SYSFS, 0);
 	if (!bdi_wq)
 		return -ENOMEM;
-
-	err = bdi_init(&noop_backing_dev_info);
-
-	return err;
+	return 0;
 }
 subsys_initcall(default_bdi_init);
 
@@ -265,18 +258,10 @@ void wb_wakeup_delayed(struct bdi_writeback *wb)
 	unsigned long timeout;
 
 	timeout = msecs_to_jiffies(dirty_writeback_interval * 10);
-#if IS_ENABLED(CONFIG_MTK_UFS_DEBUG)
 	spin_lock_irq(&wb->work_lock);
-#else
-	spin_lock_bh(&wb->work_lock);
-#endif
 	if (test_bit(WB_registered, &wb->state))
 		queue_delayed_work(bdi_wq, &wb->dwork, timeout);
-#if IS_ENABLED(CONFIG_MTK_UFS_DEBUG)
 	spin_unlock_irq(&wb->work_lock);
-#else
-	spin_unlock_bh(&wb->work_lock);
-#endif
 }
 
 static void wb_update_bandwidth_workfn(struct work_struct *work)
@@ -352,20 +337,12 @@ static void cgwb_remove_from_bdi_list(struct bdi_writeback *wb);
 static void wb_shutdown(struct bdi_writeback *wb)
 {
 	/* Make sure nobody queues further work */
-#if IS_ENABLED(CONFIG_MTK_UFS_DEBUG)
 	spin_lock_irq(&wb->work_lock);
-#else
-	spin_lock_bh(&wb->work_lock);
-#endif
 	if (!test_and_clear_bit(WB_registered, &wb->state)) {
-		spin_unlock_bh(&wb->work_lock);
+		spin_unlock_irq(&wb->work_lock);
 		return;
 	}
-#if IS_ENABLED(CONFIG_MTK_UFS_DEBUG)
 	spin_unlock_irq(&wb->work_lock);
-#else
-	spin_unlock_bh(&wb->work_lock);
-#endif
 
 	cgwb_remove_from_bdi_list(wb);
 	/*
@@ -800,7 +777,7 @@ static void cgwb_remove_from_bdi_list(struct bdi_writeback *wb)
 
 #endif	/* CONFIG_CGROUP_WRITEBACK */
 
-static int bdi_init(struct backing_dev_info *bdi)
+int bdi_init(struct backing_dev_info *bdi)
 {
 	int ret;
 

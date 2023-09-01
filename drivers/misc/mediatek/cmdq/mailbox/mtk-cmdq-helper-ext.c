@@ -34,6 +34,10 @@ struct cmdq_sec_helper_fp *cmdq_sec_helper;
 
 #endif
 
+#ifdef OPLUS_FEATURE_DISPLAY
+#include <soc/oplus/system/oplus_mm_kevent_fb.h>
+#endif
+
 #ifndef cmdq_util_msg
 #define cmdq_util_msg(f, args...) cmdq_msg(f, ##args)
 #endif
@@ -488,12 +492,13 @@ static void cmdq_dump_vcp_reg(struct cmdq_pkt *pkt)
 	}
 }
 
-static bool cmdq_pkt_is_exec(struct cmdq_pkt *pkt)
+bool cmdq_pkt_is_exec(struct cmdq_pkt *pkt)
 {
 	if (pkt && pkt->task_alloc && !pkt->rec_irq)
 		return true;
 	return false;
 }
+EXPORT_SYMBOL(cmdq_pkt_is_exec);
 
 void cmdq_mbox_pool_set_limit(struct cmdq_client *cl, u32 limit)
 {
@@ -925,7 +930,7 @@ struct cmdq_pkt *cmdq_pkt_create(struct cmdq_client *client)
 		pkt->dev = client->chan->mbox->dev;
 
 #if IS_ENABLED(CONFIG_MTK_CMDQ_MBOX_EXT)
-	if (client && cmdq_util_helper->is_feature_en(CMDQ_LOG_FEAT_PERF))
+	if (client)
 		cmdq_pkt_perf_begin(pkt);
 
 	if (!cmdq_util_is_prebuilt_client(client))
@@ -2019,6 +2024,9 @@ void cmdq_pkt_perf_begin(struct cmdq_pkt *pkt)
 	dma_addr_t pa;
 	struct cmdq_pkt_buffer *buf;
 
+	if (!cmdq_util_helper->is_feature_en(CMDQ_LOG_FEAT_PERF))
+		return;
+
 	if (!pkt->buf_size)
 		if (cmdq_pkt_add_cmd_buffer(pkt) < 0)
 			return;
@@ -2035,6 +2043,9 @@ void cmdq_pkt_perf_end(struct cmdq_pkt *pkt)
 {
 	dma_addr_t pa;
 	struct cmdq_pkt_buffer *buf;
+
+	if (!cmdq_util_helper->is_feature_en(CMDQ_LOG_FEAT_PERF))
+		return;
 
 	if (!pkt->buf_size)
 		if (cmdq_pkt_add_cmd_buffer(pkt) < 0)
@@ -2237,8 +2248,7 @@ s32 cmdq_pkt_finalize(struct cmdq_pkt *pkt)
 		return 0;
 
 #if IS_ENABLED(CONFIG_MTK_CMDQ_MBOX_EXT)
-	if (cmdq_util_helper->is_feature_en(CMDQ_LOG_FEAT_PERF))
-		cmdq_pkt_perf_end(pkt);
+	cmdq_pkt_perf_end(pkt);
 
 #ifdef CMDQ_SECURE_SUPPORT
 	if (pkt->sec_data) {
@@ -2431,17 +2441,36 @@ static void cmdq_flush_async_cb(struct cmdq_cb_data data)
 	struct cmdq_flush_item *item = pkt->flush_item;
 	struct cmdq_cb_data user_data = {
 		.data = item->data, .err = data.err };
+#if IS_ENABLED(CONFIG_MTK_IRQ_MONITOR_DEBUG)
+	u64 debug_end[2] = {0};
+	u32 debug_cnt = 0;
+	u8 irq_long_times;
+	struct cmdq_client *client = pkt->cl;
+#endif
 
 	cmdq_log("%s pkt:%p", __func__, pkt);
 
 	if (data.err == -EINVAL) {
 		cmdq_pkt_err_irq_dump(pkt);
-		BUG_ON(1);
+		if (!error_irq_no_reboot)
+			BUG_ON(1);
 	}
 
+#if IS_ENABLED(CONFIG_MTK_IRQ_MONITOR_DEBUG)
+	debug_end[debug_cnt++] = sched_clock();
+#endif
 	if (item->cb)
 		item->cb(user_data);
+#if IS_ENABLED(CONFIG_MTK_IRQ_MONITOR_DEBUG)
+	debug_end[debug_cnt++] = sched_clock();
+#endif
 	complete(&pkt->cmplt);
+#if IS_ENABLED(CONFIG_MTK_IRQ_MONITOR_DEBUG)
+	irq_long_times = cmdq_get_irq_long_times(client->chan);
+	if (debug_end[1] - debug_end[0] >= 500000 && !irq_long_times)
+		cmdq_util_err("IRQ_LONG:%llu in user callback",
+			debug_end[1] - debug_end[0]);
+#endif
 }
 #endif
 
@@ -2545,10 +2574,13 @@ void cmdq_pkt_err_dump_cb(struct cmdq_cb_data data)
 
 	cmdq_util_user_err(client->chan, "hwid:%d Begin of Error %u",
 		hwid, err_num[hwid]);
+#ifdef OPLUS_FEATURE_DISPLAY
+		if (err_num[hwid] < 5) {
+			mm_fb_display_kevent("DisplayDriverID@@508$$", MM_FB_KEY_RATELIMIT_1H, "cmdq timeout hwid:%d Begin of Error %u", hwid, err_num[hwid]);
+		}
+#endif
 	if (!err_num[hwid])
 		cmdq_util_helper->error_enable((u8)hwid);
-
-	cmdq_dump_core(client->chan);
 
 #ifdef CMDQ_SECURE_SUPPORT
 	/* for secure path dump more detail */
@@ -2558,6 +2590,7 @@ void cmdq_pkt_err_dump_cb(struct cmdq_cb_data data)
 		cmdq_sec_helper->sec_err_dump_fp(
 			pkt, client, (u64 **)&inst, &mod);
 	} else {
+		cmdq_dump_core(client->chan);
 		cmdq_thread_dump(client->chan, pkt, (u64 **)&inst, &pc);
 	}
 
@@ -2571,8 +2604,12 @@ void cmdq_pkt_err_dump_cb(struct cmdq_cb_data data)
 #endif
 
 	if (inst && inst->op == CMDQ_CODE_WFE) {
+#ifdef CMDQ_SECURE_SUPPORT
+		if (!pkt->sec_data)
+			cmdq_print_wait_summary(client->chan, pc, inst);
+#else
 		cmdq_print_wait_summary(client->chan, pc, inst);
-
+#endif
 		if (inst->arg_a >= CMDQ_TOKEN_PREBUILT_MDP_WAIT &&
 			inst->arg_a <= CMDQ_TOKEN_DISP_VA_END)
 			cmdq_util_prebuilt_dump(
@@ -2628,14 +2665,9 @@ void cmdq_pkt_err_dump_cb(struct cmdq_cb_data data)
 			mod = "CMDQ";
 
 		/* no inst available */
-		if (aee == CMDQ_AEE_EXCEPTION)
-			cmdq_util_aee_ex(aee, mod,
-				"DISPATCH:%s(%s) unknown instruction thread:%d",
-				mod, cmdq_util_helper->hw_name(client->chan), thread_id);
-		else
-			cmdq_util_aee_ex(CMDQ_AEE_WARN, mod,
-				"DISPATCH:%s(%s) unknown instruction thread:%d",
-				mod, cmdq_util_helper->hw_name(client->chan), thread_id);
+		cmdq_util_aee_ex(aee, mod,
+			"DISPATCH:%s(%s) unknown instruction thread:%d",
+			mod, cmdq_util_helper->hw_name(client->chan), thread_id);
 	}
 #ifdef CMDQ_SECURE_SUPPORT
 done:

@@ -8,7 +8,13 @@
 
 #include <linux/i2c.h>
 #include <linux/mutex.h>
-
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+#define SENSOR_PARALLEISM
+#endif
+//end chuan
 #ifndef NO_I2C_MTK
 #include "i2c-mtk.h"
 #else

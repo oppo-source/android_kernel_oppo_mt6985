@@ -67,6 +67,7 @@ struct mtk_seninf_work {
 	struct kthread_work work;
 	struct kthread_delayed_work dwork;
 	struct seninf_ctx *ctx;
+	int do_sensor_stream_on;
 	union work_data_t {
 		unsigned int sof;
 		void *data_ptr;
@@ -204,6 +205,7 @@ struct seninf_ctx {
 	/* flags */
 	unsigned int csi_streaming:1;
 	unsigned int streaming:1;
+	unsigned int delay_s_sensor_flag:1;
 
 	int seninf_dphy_settle_delay_dt;
 	int cphy_settle_delay_dt;
@@ -215,6 +217,7 @@ struct seninf_ctx {
 
 	int open_refcnt;
 	struct mutex mutex;
+	struct mutex delay_s_sensor_mutex;
 
 	/* csi irq */
 	unsigned int data_not_enough_cnt;

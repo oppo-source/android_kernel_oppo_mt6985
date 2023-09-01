@@ -4,6 +4,7 @@
  */
 #include <linux/module.h>
 #include <sched/sched.h>
+#include <trace/hooks/sched.h>
 #include <sugov/cpufreq.h>
 #include "common.h"
 #if IS_ENABLED(CONFIG_MTK_GEARLESS_SUPPORT)
@@ -16,6 +17,18 @@
 #include <linux/sort.h>
 #if IS_ENABLED(CONFIG_MTK_THERMAL_INTERFACE)
 #include <thermal_interface.h>
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING)
+#include <linux/cpufreq_bouncing.h>
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+#include <../kernel/oplus_cpu/sched/frame_boost/frame_group.h>
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+#include <../kernel/oplus_cpu/sched/sched_assist/sa_common.h>
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_ABNORMAL_FLAG)
+#include <../kernel/oplus_cpu/oplus_overload/task_overload.h>
 #endif
 
 MODULE_LICENSE("GPL");
@@ -259,7 +272,7 @@ unsigned long mtk_em_cpu_energy(struct em_perf_domain *pd,
 		unsigned long max_util, unsigned long sum_util,
 		unsigned long allowed_cpu_cap, unsigned int *cpu_temp)
 {
-	unsigned long freq, scale_cpu;
+	unsigned long scale_cpu, freq = 0;
 	struct em_perf_state *ps;
 	int cpu, opp = -1;
 #if IS_ENABLED(CONFIG_MTK_OPP_CAP_INFO)
@@ -270,6 +283,7 @@ unsigned long mtk_em_cpu_energy(struct em_perf_domain *pd,
 #endif
 	unsigned long dyn_pwr = 0, static_pwr = 0;
 	unsigned long energy;
+	struct cpufreq_policy curr_policy;
 
 	if (!sum_util)
 		return 0;
@@ -282,13 +296,13 @@ unsigned long mtk_em_cpu_energy(struct em_perf_domain *pd,
 	cpu = cpumask_first(to_cpumask(pd->cpus));
 	scale_cpu = arch_scale_cpu_capacity(cpu);
 	ps = &pd->table[pd->nr_perf_states - 1];
-#if IS_ENABLED(CONFIG_NONLINEAR_FREQ_CTL)
-	mtk_map_util_freq(NULL, max_util, ps->frequency, to_cpumask(pd->cpus), &freq);
-#else
-	max_util = map_util_perf(max_util);
-	max_util = min(max_util, allowed_cpu_cap);
-	freq = map_util_freq(max_util, ps->frequency, scale_cpu);
-#endif
+	if (!cpufreq_get_policy(&curr_policy, cpu))
+		trace_android_vh_map_util_freq_new(max_util, ps->frequency, scale_cpu, &freq, &curr_policy, NULL);
+	if (!freq) {
+		max_util = map_util_perf(max_util);
+		max_util = min(max_util, allowed_cpu_cap);
+		freq = map_util_freq(max_util, ps->frequency, scale_cpu);
+	}
 	freq = max(freq, per_cpu(min_freq, cpu));
 
 #if IS_ENABLED(CONFIG_MTK_OPP_CAP_INFO)
@@ -477,6 +491,11 @@ void mtk_tick_entry(void *data, struct rq *rq)
 	ts[2] = sched_clock();
 #endif
 	opp_ceiling = ioread32(base + offset);
+	if ((opp_ceiling < 0) || (opp_ceiling > pd->nr_perf_states - 1)) {
+		pr_info("ERROR: invalid value from thermal, cpu = %d, opp_ceiling = %d, nr_perf_states = %d\n",
+			this_cpu, opp_ceiling, pd->nr_perf_states);
+		WARN_ON(1);
+	}
 	opp_idx = pd->nr_perf_states - opp_ceiling - 1;
 	freq_thermal = pd->table[opp_idx].frequency;
 
@@ -613,13 +632,26 @@ void check_for_migration(struct task_struct *p)
 	int new_cpu = -1, better_idle_cpu = -1;
 	int cpu = task_cpu(p);
 	struct rq *rq = cpu_rq(cpu);
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	bool need_up_migrate = false;
+#endif
+
 #if IS_ENABLED(CONFIG_MTK_IRQ_MONITOR_DEBUG)
 	u64 ts[16] = {0};
 
 	ts[0] = sched_clock();
 #endif
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	if (fbg_need_up_migration(p, rq))
+		need_up_migrate = true;
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	if (rq->misfit_task_load || need_up_migrate) {
+#else
 	if (rq->misfit_task_load) {
+#endif
 		struct em_perf_domain *pd;
 		struct cpufreq_policy *policy;
 		int opp_curr = 0, thre = 0, thre_idx = 0;
@@ -768,6 +800,21 @@ void check_for_migration(struct task_struct *p)
 
 void hook_scheduler_tick(void *data, struct rq *rq)
 {
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_ABNORMAL_FLAG)
+	int ret;
+#endif /* #OPLUS_FEATURE_ABNORMAL_FLAG */
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GKI_CPUFREQ_BOUNCING)
+	int this_cpu = cpu_of(rq);
+	struct cpufreq_policy *pol = cpufreq_cpu_get_raw(this_cpu);
+
+	if (pol)
+		cb_update(pol, ktime_get_ns());
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_ABNORMAL_FLAG)
+	ret = get_ux_state_type(rq->curr);
+	if (ret != UX_STATE_INHERIT && ret != UX_STATE_SCHED_ASSIST)
+		test_task_overload(rq->curr);
+#endif /* #OPLUS_FEATURE_ABNORMAL_FLAG */
 	if (rq->curr->policy == SCHED_NORMAL)
 		check_for_migration(rq->curr);
 }
@@ -807,7 +854,13 @@ void mtk_hook_after_enqueue_task(void *data, struct rq *rq,
 	ts[3] = sched_clock();
 #endif
 	if (fdata) {
-		should_update = !check_freq_update_for_time(fdata, rq_clock(rq));
+		int this_cpu = cpu_of(rq);
+		struct cpufreq_policy *policy = cpufreq_cpu_get_raw(this_cpu);
+
+		if (policy && !strcmp(policy->governor->name, "uag"))
+			should_update = !check_freq_update_for_time_uag(fdata, rq_clock(rq));
+		else
+			should_update = !check_freq_update_for_time(fdata, rq_clock(rq));
 		if (should_update)
 			fdata->func(fdata, rq_clock(rq), 0);
 	}
@@ -940,6 +993,13 @@ unsigned long calc_pwr(int cpu, unsigned long task_util)
 static inline bool should_honor_rt_sync(struct rq *rq, struct task_struct *p,
 					bool sync)
 {
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	fbg_skip_rt_sync(rq, p, &sync);
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+	sa_skip_rt_sync(rq, p, &sync);
+#endif
 	/*
 	 * If the waker is CFS, then an RT sync wakeup would preempt the waker
 	 * and force it to run for a likely small time after the RT wakee is
@@ -1038,7 +1098,11 @@ void mtk_select_task_rq_rt(void *data, struct task_struct *p, int source_cpu,
 			if (!mtk_rt_task_fits_capacity(p, cpu, min_cap, max_cap))
 				continue;
 
-			if (idle_cpu(cpu)) {
+			if (idle_cpu(cpu)
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+				&& fbg_rt_task_fits_capacity(p, cpu)
+#endif
+				) {
 				/* WFI > non-WFI */
 				idle_cpus = (idle_cpus | (1 << cpu));
 				idle = idle_get_state(cpu_rq(cpu));
@@ -1071,6 +1135,12 @@ void mtk_select_task_rq_rt(void *data, struct task_struct *p, int source_cpu,
 			curr = rq->curr;
 			if (curr && (curr->policy == SCHED_NORMAL)
 					&& (curr->prio > lowest_prio)
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+				&& (fbg_rt_task_fits_capacity(p, cpu))
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+                                && !sa_rt_skip_ux_cpu(cpu)
+#endif
 					&& (!task_may_not_preempt(curr, cpu))) {
 				lowest_prio = curr->prio;
 				lowest_cpu = cpu;
@@ -1341,3 +1411,52 @@ out:
 #endif
 	return;
 }
+
+int set_util_est_ctrl(bool enable)
+{
+	sysctl_util_est = enable;
+	return 0;
+}
+
+int set_task_idle_prefer(int pid, bool prefer)
+{
+	struct task_struct *task = NULL;
+
+	rcu_read_lock();
+	task = find_task_by_vpid(pid);
+	if (!task) {
+		rcu_read_unlock();
+		return -ESRCH;
+	}
+	get_task_struct(task);
+	task->android_vendor_data1[T_TASK_IDLE_PREFER_FLAG] = prefer;
+	rcu_read_unlock();
+	put_task_struct(task);
+
+	return 0;
+}
+
+bool get_task_idle_prefer_by_pid(int pid)
+{
+	struct task_struct *task = NULL;
+	bool rslt = false;
+
+	rcu_read_lock();
+	task = find_task_by_vpid(pid);
+	if (!task) {
+		rcu_read_unlock();
+		return false;
+	}
+	get_task_struct(task);
+
+	rslt = task->android_vendor_data1[T_TASK_IDLE_PREFER_FLAG];
+	rcu_read_unlock();
+	put_task_struct(task);
+	return rslt;
+}
+
+inline bool get_task_idle_prefer_by_task(struct task_struct *task)
+{
+	return task->android_vendor_data1[T_TASK_IDLE_PREFER_FLAG];
+}
+

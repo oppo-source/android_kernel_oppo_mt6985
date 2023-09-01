@@ -179,6 +179,18 @@ unsigned long pd_get_util_opp(int cpu, unsigned long util)
 }
 EXPORT_SYMBOL_GPL(pd_get_util_opp);
 
+unsigned long pd_get_util_opp_legacy(int cpu, unsigned long util)
+{
+	int i, idx;
+	struct pd_capacity_info *pd_info;
+
+	i = per_cpu(gear_id, cpu);
+	pd_info = &pd_capacity_tbl[i];
+	idx = map_util_idx_by_tbl(pd_info, util);
+	return pd_info->util_opp_map_legacy[idx];
+}
+EXPORT_SYMBOL_GPL(pd_get_util_opp_legacy);
+
 unsigned long pd_get_util_freq(int cpu, unsigned long util)
 {
 	int i, idx;
@@ -397,6 +409,8 @@ static void free_capacity_table(void)
 		pd_capacity_tbl[i].table = NULL;
 		kfree(pd_capacity_tbl[i].util_opp_map);
 		pd_capacity_tbl[i].util_opp_map = NULL;
+		kfree(pd_capacity_tbl[i].util_opp_map_legacy);
+		pd_capacity_tbl[i].util_opp_map_legacy = NULL;
 		kfree(pd_capacity_tbl[i].freq_opp_map);
 		pd_capacity_tbl[i].freq_opp_map = NULL;
 		kfree(pd_capacity_tbl[i].freq_opp_map_legacy);
@@ -427,11 +441,25 @@ static int init_util_freq_opp_mapping_table(void)
 									GFP_KERNEL);
 		if (!pd_info->util_opp_map)
 			goto nomem;
+		pd_info->util_opp_map_legacy = kcalloc(pd_info->nr_util_opp_map, sizeof(int),
+									GFP_KERNEL);
+		if (!pd_info->util_opp_map_legacy)
+			goto nomem;
+
 		for (j = 0; j < nr_opp; j++) {
 			k = max_cap - pd_info->table[j].capacity;
 			next_k = max_cap - pd_info->table[min(nr_opp - 1, j + 1)].capacity;
-			for (; k <= next_k; k++)
+			for (; k <= next_k; k++) {
 				pd_info->util_opp_map[k] = j;
+				for (opp = mtk_em_pd_ptr_public[i].nr_perf_states - 1; opp >= 0;
+						opp--) {
+					if (mtk_em_pd_ptr_public[i].table[opp].capacity >=
+							(max_cap - k)) {
+						break;
+					}
+				}
+				pd_info->util_opp_map_legacy[k] = opp;
+			}
 		}
 
 		/* init freq_opp_map */
@@ -682,6 +710,7 @@ static int alloc_capacity_table(void)
 		pd_capacity_tbl[cur_tbl].freq_min =
 			min(pd->table[pd->nr_perf_states - 1].frequency, pd->table[0].frequency);
 		pd_capacity_tbl[cur_tbl].util_opp_map = NULL;
+		pd_capacity_tbl[cur_tbl].util_opp_map_legacy = NULL;
 		pd_capacity_tbl[cur_tbl].freq_opp_map = NULL;
 		pd_capacity_tbl[cur_tbl].freq_opp_map_legacy = NULL;
 
@@ -760,7 +789,7 @@ static const struct proc_ops pd_capacity_tbl_ops = {
 
 int init_opp_cap_info(struct proc_dir_entry *dir)
 {
-	int ret;
+	int ret, i;
 	struct proc_dir_entry *entry;
 
 	ret = init_sram_mapping();
@@ -779,6 +808,10 @@ int init_opp_cap_info(struct proc_dir_entry *dir)
 	if (ret)
 		return ret;
 
+	for (i = 0; i < pd_count; i++) {
+		set_target_margin(i, 20);
+		set_turn_point_freq(i, 0);
+	}
 	entry = proc_create("pd_capacity_tbl", 0644, dir, &pd_capacity_tbl_ops);
 	if (!entry)
 		pr_info("mtk_scheduler/pd_capacity_tbl entry create failed\n");
@@ -872,6 +905,8 @@ void mtk_arch_set_freq_scale(void *data, const struct cpumask *cpus,
 
 unsigned int util_scale = 1280;
 unsigned int sysctl_sched_capacity_margin_dvfs = 20;
+unsigned int turn_point_util[NR_CPUS];
+unsigned int target_margin[NR_CPUS];
 /*
  * set sched capacity margin for DVFS, Default = 20
  */
@@ -894,15 +929,76 @@ unsigned int get_sched_capacity_margin_dvfs(void)
 }
 EXPORT_SYMBOL_GPL(get_sched_capacity_margin_dvfs);
 
+int set_target_margin(int gearid, int margin)
+{
+	if (gearid < 0 || gearid > pd_count)
+		return -1;
+
+	if (margin < 0 || margin > 95)
+		return -1;
+	target_margin[gearid] = (SCHED_CAPACITY_SCALE * 100 / (100 - margin));
+	return 0;
+}
+EXPORT_SYMBOL_GPL(set_target_margin);
+
+unsigned int get_target_margin(int gearid)
+{
+	return (100 - (SCHED_CAPACITY_SCALE * 100)/target_margin[gearid]);
+}
+EXPORT_SYMBOL_GPL(get_target_margin);
+
+/*
+ *for vonvenient, pass freq, but converty to util
+ */
+int set_turn_point_freq(int gearid, unsigned long freq)
+{
+	int idx;
+	struct pd_capacity_info *pd_info;
+
+	if (gearid < 0 || gearid > pd_count)
+		return -1;
+
+	if (freq == 0) {
+		turn_point_util[gearid] = 0;
+		return 0;
+	}
+
+	pd_info = &pd_capacity_tbl[gearid];
+	idx = map_freq_idx_by_tbl(pd_info, freq);
+	idx = pd_info->freq_opp_map[idx];
+	turn_point_util[gearid] = pd_info->table[idx].capacity;
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(set_turn_point_freq);
+
+inline unsigned long get_turn_point_freq(int gearid)
+{
+	int idx;
+	struct pd_capacity_info *pd_info;
+	if (turn_point_util[gearid] == 0)
+		return 0;
+	pd_info = &pd_capacity_tbl[gearid];
+	idx = map_util_idx_by_tbl(pd_info, turn_point_util[gearid]);
+	idx = pd_info->util_opp_map[idx];
+	return max(pd_info->table[idx].freq, pd_info->freq_min);
+}
+EXPORT_SYMBOL_GPL(get_turn_point_freq);
+
 void mtk_map_util_freq(void *data, unsigned long util, unsigned long freq,
 				struct cpumask *cpumask, unsigned long *next_freq)
 {
-	int cpu;
+	int cpu, orig_util = util, gearid;
 
 	util = (util * util_scale) >> SCHED_CAPACITY_SHIFT;
 	cpu = cpumask_first(cpumask);
-	*next_freq = pd_get_util_freq(cpu, util);
+	gearid = per_cpu(gear_id, cpu);
+	if (turn_point_util[gearid] &&
+		util > turn_point_util[gearid])
+		util = max(turn_point_util[gearid], orig_util * target_margin[gearid]
+					>> SCHED_CAPACITY_SHIFT);
 
+	*next_freq = pd_get_util_freq(cpu, util);
 	if (data != NULL) {
 		struct sugov_policy *sg_policy = (struct sugov_policy *)data;
 		struct cpufreq_policy *policy = sg_policy->policy;
@@ -913,6 +1009,20 @@ void mtk_map_util_freq(void *data, unsigned long util, unsigned long freq,
 	}
 }
 EXPORT_SYMBOL_GPL(mtk_map_util_freq);
+
+void nonlinear_map_util_freq(void *data, unsigned long util, unsigned long freq,
+		unsigned long cap, unsigned long *next_freq, struct cpufreq_policy *policy,
+		bool *need_freq_update)
+{
+	unsigned int first_cpu;
+	int cluster_id;
+
+	first_cpu = cpumask_first(policy->related_cpus);
+	cluster_id = topology_physical_package_id(first_cpu);
+
+	if (cluster_id < MAX_CLUSTERS && init_flag[cluster_id] == 1)
+		mtk_map_util_freq(NULL, util, freq, policy->cpus, next_freq);
+}
 #endif
 #else
 

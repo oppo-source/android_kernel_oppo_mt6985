@@ -193,10 +193,14 @@ struct mtk_btag_cpu {
 };
 
 /* Trace: entry of the ring buffer */
+#define BTAG_TR_READY		(1 << 0)
+#define BTAG_TR_NOCLEAR		(1 << 1)
+
 struct mtk_btag_trace {
 	__u64 time;
 	__u32 qid;
 	__s16 pid;
+	__u8 flags;
 	struct mtk_btag_workload workload;
 	struct mtk_btag_throughput throughput;
 	struct mtk_btag_vmstat vmstat;
@@ -285,7 +289,7 @@ void mtk_btag_mictx_eval_req(struct mtk_blocktag *btag, __u32 idx, bool write,
 void mtk_btag_mictx_accumulate_weight_qd(struct mtk_blocktag *btag, __u32 idx,
 					 __u64 t_begin, __u64 t_cur);
 void mtk_btag_mictx_update(struct mtk_blocktag *btag, __u32 idx, __u32 q_depth,
-			   __u64 sum_of_start);
+			   __u64 sum_of_start, int cmd_rsp);
 int mtk_btag_mictx_get_data(
 	struct mtk_btag_mictx_id mictx_id,
 	struct mtk_btag_mictx_iostat_struct *iostat);
@@ -322,6 +326,8 @@ void *mtk_btag_seq_debug_start(struct seq_file *seq, loff_t *pos);
 void *mtk_btag_seq_debug_next(struct seq_file *seq, void *v, loff_t *pos);
 void mtk_btag_seq_debug_stop(struct seq_file *seq, void *v);
 
+void set_mmc_perf_mode(struct mmc_host *mmc, bool boost);
+
 #else
 
 #define mtk_btag_mictx_enable(...)
@@ -339,7 +345,7 @@ void mtk_btag_seq_debug_stop(struct seq_file *seq, void *v);
 #define mmc_mtk_biolog_init(...)
 #define mmc_mtk_biolog_exit(...)
 #define mmc_mtk_biolog_check(...)
-
+#define set_mmc_perf_mode(...)
 #endif
 
 #endif

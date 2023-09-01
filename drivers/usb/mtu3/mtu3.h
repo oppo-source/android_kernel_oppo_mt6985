@@ -322,6 +322,7 @@ struct ssusb_mtk {
 	bool clk_mgr;
 	bool noise_still_tr;
 	bool gen1_txdeemph;
+	bool u2_ip;
 	/* fpga */
 	enum mtu3_plat_type plat_type;
 	enum mtu3_fpga_phy fpga_phy;
@@ -540,4 +541,9 @@ extern const struct usb_ep_ops mtu3_ep0_ops;
 
 int get_dp_switch_status(struct ssusb_mtk *ssusb);
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+extern bool is_usb_rdy(void);
+extern void Charger_Detect_Init(void);
+extern void Charger_Detect_Release(void);
+#endif
 #endif

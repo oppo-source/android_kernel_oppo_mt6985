@@ -10,7 +10,10 @@
 #include <linux/of_address.h>
 #include <linux/dma-iommu.h>
 #include <linux/pm_runtime.h>
+#include <linux/pm_domain.h>
+#include <linux/clk-provider.h>
 #include <linux/remoteproc.h>
+#include <linux/notifier.h>
 #include "mtk_imgsys-engine.h"
 #include "mtk_imgsys-debug.h"
 /* TODO */
@@ -21,6 +24,7 @@
 #define ADL_HW_SET    2
 #define SW_RST   (0x000C)
 #define DBG_SW_CLR   (0x0260)
+//#define IMG_CB_CLK_CHECK
 
 struct imgsys_dbg_engine_t dbg_engine_name_list[DL_CHECK_ENG_NUM] = {
 	{IMGSYS_ENG_WPE_EIS, "WPE_EIS"},
@@ -308,6 +312,56 @@ void imgsys_main_uninit(struct mtk_imgsys_dev *imgsys_dev)
 	}
 
 	pr_debug("%s: -.\n", __func__);
+}
+
+static int mtk_imgsys_pd_callback(struct notifier_block *nb,
+		unsigned long flags, void *data)
+{
+	struct mtk_imgsys_dev *imgsys_dev;
+#ifdef IMG_CB_CLK_CHECK
+	uint32_t i;
+#endif
+
+	pr_debug("%s: +\n", __func__);
+
+	if ((flags != GENPD_NOTIFY_ON) && (flags != GENPD_NOTIFY_PRE_OFF)) {
+		pr_debug("%s: no need flags\n", __func__);
+		return 0;
+	}
+	imgsys_dev = container_of(nb, struct mtk_imgsys_dev, pw_notifier);
+#ifdef IMG_CB_CLK_CHECK
+	if (flags == GENPD_NOTIFY_ON) {
+		for (i = 0; i < imgsys_dev->num_clks; i++) {
+			if (__clk_is_enabled(imgsys_dev->clks[i].clk))
+				dev_dbg(imgsys_dev->dev,
+				"%s: + [imgclk_dbg](%d) on\n", __func__, i);
+			else
+				dev_dbg(imgsys_dev->dev,
+				"%s: + [imgclk_dbg](%d) off\n", __func__, i);
+		}
+		dev_dbg(imgsys_dev->dev, "%s: after ISP_MAIN on", __func__);
+	} else if (flags == GENPD_NOTIFY_PRE_OFF) {
+		for (i = 0; i < imgsys_dev->num_clks; i++) {
+			if (__clk_is_enabled(imgsys_dev->clks[i].clk))
+				dev_dbg(imgsys_dev->dev,
+				"%s: - [imgclk_dbg](%d) on\n", __func__, i);
+			else
+				dev_dbg(imgsys_dev->dev,
+				"%s: - [imgclk_dbg](%d) off\n", __func__, i);
+		}
+		dev_dbg(imgsys_dev->dev, "%s: before ISP_MAIN off", __func__);
+	}
+#endif
+	pr_debug("%s: -\n", __func__);
+
+	return 0;
+}
+
+int imgsys_clk_check(struct mtk_imgsys_dev *imgsys_dev)
+{
+	pr_debug("%s: add ISP_MAIN cb\n", __func__);
+	imgsys_dev->pw_notifier.notifier_call = mtk_imgsys_pd_callback;
+	return dev_pm_genpd_add_notifier(imgsys_dev->dev, &imgsys_dev->pw_notifier);
 }
 
 void imgsys_debug_dump_routine(struct mtk_imgsys_dev *imgsys_dev,

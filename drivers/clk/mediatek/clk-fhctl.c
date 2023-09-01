@@ -62,11 +62,6 @@ static bool _mtk_fh_set_rate(const char *pll_name, unsigned long dds, int postdi
 				dds, 9999);
 		return true;
 	}
-	FHDBG("pll_name<%s> fh_id<%d> hdlr<%x> perms<%x>",
-			array->pll_name,
-			array->fh_id,
-			hdlr,
-			array->perms);
 	return false;
 }
 
@@ -214,6 +209,7 @@ static void fh_plt_drv_shutdown(struct platform_device *pdev)
 }
 
 static const struct of_device_id fh_of_match[] = {
+	{ .compatible = "mediatek,mt6835-fhctl"},
 	{ .compatible = "mediatek,mt6853-fhctl"},
 	{ .compatible = "mediatek,mt6855-fhctl"},
 	{ .compatible = "mediatek,mt6877-fhctl"},

@@ -1,0 +1,286 @@
+&odm {
+	sensor_fb: sensor_fb {
+		compatible = "oplus,sensor-feedback";
+	};
+	oplus_sensor:oplus_sensor {
+		compatible = "oplus,sensor-devinfo";
+		als-row-coe = <1000>;
+		/* sensor start */
+		/*
+		enum {
+			LIS3DH,
+			LSM6DS3,
+			BMI160,
+			LIS2HH12,
+			LSM6DSM,
+			BMI2XY,
+			LSM6DSO,
+			ICM4X6XX,
+			ICM4263X,
+			ICM4N607,
+			BMI22X,
+			SC7A20,
+			MC34X9,
+			BMA4XY,
+		};
+		*/
+		gsensor_1: gsensor_1 {
+			status = "okay";
+			sensor_name = <11>;//SC7A20
+			device_name = "sc7a20";
+			i2c_num = <2>;
+			i2c_addr = <0x00>;
+			direction = <6>;
+			eint_num = <17>;
+			acc_cali_range= <300 300 300>;
+		};
+		gsensor_2: gsensor_2 {
+			status = "okay";
+			sensor_name = <9>;//ICM4N607
+			device_name = "icm42607";
+			i2c_num = <2>;
+			i2c_addr = <0x00>;
+			direction = <5>;
+			eint_num = <17>;
+			acc_cali_range= <300 300 300>;
+		};
+		gsensor_3: gsensor_3 {
+			status = "okay";
+			sensor_name = <13>;//BMA4XY
+			device_name = "bma4xy";
+			i2c_num = <2>;
+			i2c_addr = <0x00>;
+			direction = <10>;
+			eint_num = <17>;
+			acc_cali_range= <300 300 300>;
+		};
+		/*
+		enum {
+			AKM09911,
+			MMC3530,
+			MMC5603,
+			MXG4300,
+			AKM09918,
+		};
+		*/
+		msensor_1: msensor_1 {
+			status = "okay";
+			sensor_name = <2>;//MMC5603
+			i2c_num = <4>;
+			i2c_addr = <0x30>;
+			direction = <1>;
+			eint_num = <0>;
+			para_num = <2>;
+			mag_para_1 {
+				match_projects = <23661 23671>;
+				soft-mag-parameter = <9905 0 1283 0 494 0 1006 0 8943 0 105 0 452 0 854 1 10235 0>;
+			};
+			mag_para_2 {
+				match_projects = <23660 23604 23605 23606 23670>;
+				soft-mag-parameter = <9999 0 89 1 87 0 88 0 9992 0 18 0 286 0 137 1 10390 0>;
+			};
+		};
+		msensor_2: msensor_2 {
+			status = "okay";
+			sensor_name = <3>;//MXG4300
+			i2c_num = <4>;
+			i2c_addr = <0x0C>;
+			direction = <1>;
+			eint_num = <0>;
+			para_num = <2>;
+			mag_para_1 {
+				match_projects = <23661 23671>;
+				soft-mag-parameter = <10159 0 962 0 762 0 1130 0 9137 0 395 1 229 1 338 1 10385 0>;
+			};
+			mag_para_2 {
+				match_projects = <23660 23604 23605 23606 23670>;
+				soft-mag-parameter = <10029 0 78 0 5 1 92 1 9645 0 279 0 62 1 141 1 10316 0>;
+			};
+		};
+		/*
+		enum {
+			TMD2725,
+			APSD9922,
+			STK3335,
+			STK3331,
+			STK2232,
+			TCS3701,
+			STK32600,
+			STK33502,
+			MN78911,
+			TCS3720,
+			SIP3515,
+			STK3329,
+			LTR569,
+		};
+		*/
+		proximity_1: proximity_1 {
+			status = "okay";
+			sensor_name = <7>;//STK33502
+			i2c_num = <0>;
+			i2c_addr = <0x46>;
+			direction = <0>;
+			eint_num = <18>;
+			low_step = <300>;
+			high_step = <400>;
+			low_limit = <600>;
+			high_limit = <900>;
+			dirty_low_step = <500>;
+			dirty_high_step = <600>;
+			ps_dirty_limit = <1020>;
+			ps_ir_limit = <2000>;
+			ps_adjust_min = <0>;
+			ps_adjust_max = <2350>;
+			sampling_count = <5>;
+			step_max = <800>;
+			step_min = <100>;
+			step_div = <1000>;
+			anti_shake_delta = <100>;
+			dynamic_cali_max = <7000>;
+			raw2offset_radio = <1000>;
+			offset_max = <60000>;
+			offset_range_min = <0>;
+			offset_range_max = <65534>;
+			force_cali_limit = <2000>;
+			cali_jitter_limit = <100>;
+			cal_offset_margin = <3000>;
+		};
+		proximity_2: proximity_2 {
+			status = "okay";
+			sensor_name = <10>;//SIP3515
+			i2c_num = <0>;
+			i2c_addr = <0x58>;
+			direction = <0>;
+			eint_num = <18>;
+			low_step = <300>;
+			high_step = <400>;
+			low_limit = <400>;
+			high_limit = <600>;
+			dirty_low_step = <200>;
+			dirty_high_step = <300>;
+			ps_dirty_limit = <1020>;
+			ps_ir_limit = <2000>;
+			ps_adjust_min = <0>;
+			ps_adjust_max = <1850>;
+			sampling_count = <5>;
+			step_max = <400>;
+			step_min = <100>;
+			step_div = <2000>;
+			anti_shake_delta = <70>;
+			dynamic_cali_max = <1024>;
+			raw2offset_radio = <1000>;
+			offset_max = <60000>;
+			offset_range_min = <0>;
+			offset_range_max = <65534>;
+			force_cali_limit = <2000>;
+			cali_jitter_limit = <20>;
+			cal_offset_margin = <3000>;
+		};
+		proximity_3: proximity_3 {
+			status = "okay";
+			sensor_name = <12>;//LTR569
+			i2c_num = <0>;
+			i2c_addr = <0x23>;
+			direction = <0>;
+			eint_num = <18>;
+			low_step = <300>;
+			high_step = <400>;
+			low_limit = <250>;
+			high_limit = <350>;
+			dirty_low_step = <200>;
+			dirty_high_step = <300>;
+			ps_dirty_limit = <1020>;
+			ps_ir_limit = <2000>;
+			ps_adjust_min = <0>;
+			ps_adjust_max = <1850>;
+			sampling_count = <5>;
+			step_max = <400>;
+			step_min = <100>;
+			step_div = <2000>;
+			anti_shake_delta = <70>;
+			dynamic_cali_max = <3000>;
+			raw2offset_radio = <1000>;
+			offset_max = <60000>;
+			offset_range_min = <0>;
+			offset_range_max = <65534>;
+			force_cali_limit = <2000>;
+			cali_jitter_limit = <50>;
+			cal_offset_margin = <3000>;
+		};
+		light_1: light_1 {
+			status = "okay";
+			sensor_name = <7>;//STK33502
+			i2c_num = <0>;
+			i2c_addr = <0x46>;
+			direction = <0>;
+			eint_num = <18>;
+			als_buffer_length =<8>;
+			als_ratio = <90>;
+			als_type = <1>;//<1-normal;2-under screen;3-normal needed compensation>
+			device_name = "stk33502";
+			coefficient_mode = <6>; //6x coefficient mode
+			als_coef_a = <8310>; //*100
+			als_coef_b = <48350>; //*100
+			als_coef_c = <2320>; //*100
+			als_coef_d = <7520>; //*100
+			als_coef_e = <10521>; //*100
+			als_coef_ratio = <68>;
+		};
+		light_2: light_2 {
+			status = "okay";
+			sensor_name = <10>;//SIP3515
+			i2c_num = <0>;
+			i2c_addr = <0x58>;
+			direction = <0>;
+			eint_num = <18>;
+			als_buffer_length =<8>;
+			als_ratio = <90>;
+			als_type = <1>;//<1-normal;2-under screen;3-normal needed compensation>
+			device_name = "sip3515";
+			als_coef_a = <4301>; //*100
+			als_coef_b = <16601>; //*100
+			als_coef_c = <15001>; //*100
+			als_coef_d = <47001>; //*100
+			als_coef_e = <80001>; //*100
+			als_coef_ratio = <70>;
+		};
+		light_3: light_3 {
+			status = "okay";
+			sensor_name = <12>;//LTR569
+			i2c_num = <0>;
+			i2c_addr = <0x23>;
+			direction = <0>;
+			eint_num = <18>;
+			als_buffer_length =<8>;
+			als_ratio = <90>;
+			als_type = <1>;//<1-normal;2-under screen;3-normal needed compensation>
+			device_name = "ltr569";
+			als_coef_a = <2970>; //*100
+			als_coef_b = <2470>; //*100
+			als_coef_c = <2200>; //*100
+			als_coef_d = <1470>; //*100
+			ir_value0 = <1600>; //*100
+			ir_value1 = <3300>; //*100
+			ir_value2 = <10000>; //*100
+			als_coef_ratio = <70>;
+		};
+
+		pick_up: pick_up {
+			status = "okay";
+			use-proximity = <1>;
+		};
+		lux_aod: lux_aod {
+			status = "okay";
+			use-proximity = <1>;
+		};
+		alsps_arch: alsps_arch {
+			status = "okay";
+			new-arch-supported = <1>;
+		};
+		cali_arch: cali_arch {
+			status = "okay";
+			new-arch-supported = <1>;
+		};
+	};
+/* sensor end */
+};

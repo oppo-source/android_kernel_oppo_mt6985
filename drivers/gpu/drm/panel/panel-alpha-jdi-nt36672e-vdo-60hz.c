@@ -90,7 +90,6 @@ static struct i2c_driver _lcm_i2c_driver = {
  *****************************************************************************/
 
 #ifdef VENDOR_EDIT
-// shifan@bsp.tp 20191226 add for loading tp fw when screen lighting on
 extern void lcd_queue_load_tp_fw(void);
 #endif /*VENDOR_EDIT*/
 
@@ -827,7 +826,6 @@ static int jdi_prepare(struct drm_panel *panel)
 #endif
 
 #ifdef VENDOR_EDIT
-	// shifan@bsp.tp 20191226 add for loading tp fw when screen lighting on
 	lcd_queue_load_tp_fw();
 #endif
 
@@ -1043,6 +1041,14 @@ static int jdi_probe(struct mipi_dsi_device *dsi)
 	}
 	ctx->prepared = true;
 	ctx->enabled = true;
+
+	if (of_property_read_bool(dsi_node, "init-panel-off")) {
+		ctx->prepared = false;
+		ctx->enabled = false;
+		pr_info("nt36672e,60hz dsi_node:%s set prepared = enabled = false\n",
+					dsi_node->full_name);
+	}
+
 	drm_panel_init(&ctx->panel, dev, &jdi_drm_funcs, DRM_MODE_CONNECTOR_DSI);
 
 	drm_panel_add(&ctx->panel);

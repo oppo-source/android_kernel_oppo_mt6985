@@ -79,6 +79,10 @@ static spinlock_t g_PDA_SpinLock;
 
 wait_queue_head_t g_wait_queue_head;
 
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+static DEFINE_MUTEX(pda_mutex);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 // PDA HW quantity
 static unsigned int g_PDA_quantity;
 
@@ -224,6 +228,16 @@ static void pda_reset(unsigned int PDA_Index)
 {
 	unsigned long end = 0;
 
+	#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	spin_lock(&g_PDA_SpinLock);
+	if (g_u4EnableClockCount == 0) {
+		LOG_INF("Cannot process without enable pda clock\n");
+		spin_unlock(&g_PDA_SpinLock);
+		return;
+	}
+	spin_unlock(&g_PDA_SpinLock);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 	end = jiffies + msecs_to_jiffies(100);
 
 	// reset HW status
@@ -269,6 +283,16 @@ static void pda_nontransaction_reset(unsigned int PDA_Index)
 {
 	unsigned int MRAW_reset_value = 0;
 	unsigned int Reset_Bitmask = 0;
+
+	#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	spin_lock(&g_PDA_SpinLock);
+	if (g_u4EnableClockCount == 0) {
+		LOG_INF("Cannot process without enable pda clock\n");
+		spin_unlock(&g_PDA_SpinLock);
+		return;
+	}
+	spin_unlock(&g_PDA_SpinLock);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 	// equivalent to hardware reset
 	PDA_WR32(PDA_devs[PDA_Index].m_pda_base + PDA_PDA_TOP_CTL_REG,
@@ -1769,6 +1793,11 @@ static irqreturn_t pda_irqhandle(signed int Irq, void *DeviceId)
 	++g_PDA0_IRQCount;
 	if (g_PDA0_IRQCount > g_reasonable_IRQCount) {
 		PDA_devs[0].HWstatus = -29;
+		#ifdef OPLUS_FEATURE_CAMERA_COMMON
+		LOG_INF("Irq abnormal, rsn: %d, pda0count: %d\n",
+			g_reasonable_IRQCount,
+			g_PDA0_IRQCount);
+		#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		pda_nontransaction_reset(0);
 	}
 #endif
@@ -1805,6 +1834,11 @@ static irqreturn_t pda2_irqhandle(signed int Irq, void *DeviceId)
 	++g_PDA1_IRQCount;
 	if (g_PDA1_IRQCount > g_reasonable_IRQCount) {
 		PDA_devs[1].HWstatus = -29;
+		#ifdef OPLUS_FEATURE_CAMERA_COMMON
+		LOG_INF("Irq abnormal, rsn: %d, pda1count: %d\n",
+			g_reasonable_IRQCount,
+			g_PDA1_IRQCount);
+		#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		pda_nontransaction_reset(1);
 	}
 #endif
@@ -2123,6 +2157,11 @@ static long PDA_Ioctl(struct file *a_pstFile,
 			break;
 		}
 
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+		/* Protect the Multi Process */
+		mutex_lock(&pda_mutex);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 		ret = g_pda_Pdadata.ROInumber == 0 && g_pda_Pdadata.nNumerousROI == 0;
 		if (g_pda_Pdadata.ROInumber > PDAROIARRAYMAX || ret) {
 			g_pda_Pdadata.Status = -28;
@@ -2277,6 +2316,10 @@ EXIT_WITHOUT_FREE_IOVA:
 #ifdef FOR_DEBUG
 		LOG_INF("Exit\n");
 #endif
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+		mutex_unlock(&pda_mutex);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 #ifndef FPGA_UT
 		// reset flow

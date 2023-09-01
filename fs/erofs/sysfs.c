@@ -37,7 +37,7 @@ static struct erofs_attr erofs_attr_##_name = {			\
 	.attr = {.name = __stringify(_name), .mode = _mode },	\
 	.attr_id = attr_##_id,					\
 	.struct_type = struct_##_struct,			\
-	.offset = offsetof(struct _struct, _name),\
+	.offset = offsetof(struct _struct, _name),		\
 }
 
 #define EROFS_ATTR_RW(_name, _id, _struct)	\
@@ -204,9 +204,11 @@ void erofs_unregister_sysfs(struct super_block *sb)
 {
 	struct erofs_sb_info *sbi = EROFS_SB(sb);
 
-	kobject_del(&sbi->s_kobj);
-	kobject_put(&sbi->s_kobj);
-	wait_for_completion(&sbi->s_kobj_unregister);
+	if (sbi->s_kobj.state_in_sysfs) {
+		kobject_del(&sbi->s_kobj);
+		kobject_put(&sbi->s_kobj);
+		wait_for_completion(&sbi->s_kobj_unregister);
+	}
 }
 
 int __init erofs_init_sysfs(void)

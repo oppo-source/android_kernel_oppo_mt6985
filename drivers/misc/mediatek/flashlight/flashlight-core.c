@@ -52,6 +52,8 @@ static int pt_low_vol = LOW_BATTERY_LEVEL_0;
 static int pt_low_bat = BATTERY_PERCENT_LEVEL_0;
 static int pt_over_cur = BATTERY_OC_LEVEL_0;
 
+static int max_pt_low_vol = LOW_BATTERY_LEVEL_2;
+
 #ifdef CONFIG_MTK_FLASHLIGHT_PT_STRICT
 static int pt_strict = 1;
 #else
@@ -60,6 +62,10 @@ static int pt_strict; /* always be zero in C standard */
 
 static int pt_is_low(int pt_low_vol, int pt_low_bat, int pt_over_cur);
 #endif
+
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 /******************************************************************************
  * Flashlight operations
@@ -545,7 +551,7 @@ EXPORT_SYMBOL(flashlight_pt_is_low);
 static int pt_arg_verify(int pt_low_vol, int pt_low_bat, int pt_over_cur)
 {
 	if (pt_low_vol < LOW_BATTERY_LEVEL_0 ||
-			pt_low_vol > LOW_BATTERY_LEVEL_2) {
+			pt_low_vol > LOW_BATTERY_LEVEL_3) {
 		pr_info("PT low voltage (%d) is not valid\n", pt_low_vol);
 		return -1;
 	}
@@ -567,8 +573,21 @@ static int pt_is_low(int pt_low_vol, int pt_low_bat, int pt_over_cur)
 {
 	int is_low = 0;
 
+	if (max_pt_low_vol == LOW_BATTERY_LEVEL_3) {
+		if (pt_low_vol == LOW_BATTERY_LEVEL_2 ||
+			pt_low_vol == LOW_BATTERY_LEVEL_3) {
+			is_low = 1;
+			if (pt_strict)
+				is_low = 2;
+		}
+	} else {
+		if (pt_low_vol != LOW_BATTERY_LEVEL_0) {
+			is_low = 1;
+			if (pt_strict)
+				is_low = 2;
+		}
+	}
 	if (pt_low_bat != BATTERY_PERCENT_LEVEL_0
-			|| pt_low_vol != LOW_BATTERY_LEVEL_0
 			|| pt_over_cur != BATTERY_OC_LEVEL_0) {
 		is_low = 1;
 		if (pt_strict)
@@ -607,15 +626,20 @@ static int pt_trigger(void)
 	return 0;
 }
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 static void pt_low_vol_callback(enum LOW_BATTERY_LEVEL_TAG level)
 {
 	if (level == LOW_BATTERY_LEVEL_0) {
 		pt_low_vol = LOW_BATTERY_LEVEL_0;
 	} else if (level == LOW_BATTERY_LEVEL_1) {
 		pt_low_vol = LOW_BATTERY_LEVEL_1;
-		pt_trigger();
+		if (max_pt_low_vol == LOW_BATTERY_LEVEL_2)
+			pt_trigger();
 	} else if (level == LOW_BATTERY_LEVEL_2) {
 		pt_low_vol = LOW_BATTERY_LEVEL_2;
+		pt_trigger();
+	} else if (level == LOW_BATTERY_LEVEL_3) {
+		pt_low_vol = LOW_BATTERY_LEVEL_3;
 		pt_trigger();
 	} else {
 		/* unlimited cpu and gpu */
@@ -633,6 +657,7 @@ static void pt_low_bat_callback(enum BATTERY_PERCENT_LEVEL_TAG level)
 		/* unlimited cpu and gpu*/
 	}
 }
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 static void pt_oc_callback(enum BATTERY_OC_LEVEL_TAG level)
 {
@@ -699,12 +724,14 @@ static long _flashlight_ioctl(
 
 	case FLASH_IOC_IS_LOW_POWER:
 		fl_arg.arg = 0;
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 #ifdef CONFIG_MTK_FLASHLIGHT_PT
 		fl_arg.arg = pt_is_low(pt_low_vol, pt_low_bat, pt_over_cur);
 		if (fl_arg.arg)
 			pr_debug("Pt status: (%d,%d,%d)\n",
 					pt_low_vol, pt_low_bat, pt_over_cur);
 #endif
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		if (copy_to_user((void __user *)arg, (void *)&fl_arg,
 					sizeof(struct flashlight_user_arg))) {
 			pr_info("Failed to copy power status to user\n");
@@ -1084,8 +1111,10 @@ static ssize_t flashlight_pt_store(struct device *dev,
 
 	/* call callback function */
 	pt_strict = strict;
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	pt_low_vol_callback(low_vol);
 	pt_low_bat_callback(low_bat);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	pt_oc_callback(over_cur);
 #endif
 
@@ -1922,10 +1951,14 @@ static int __init flashlight_init(void)
 	}
 
 #ifdef CONFIG_MTK_FLASHLIGHT_PT
-	register_low_battery_notify(
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
+	ret = register_low_battery_notify(
 			&pt_low_vol_callback, LOW_BATTERY_PRIO_FLASHLIGHT);
+	if (ret == LOW_BATTERY_LEVEL_3)
+		max_pt_low_vol = ret;
 	register_bp_thl_notify(
 			&pt_low_bat_callback, BATTERY_PERCENT_PRIO_FLASHLIGHT);
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	register_battery_oc_notify(
 			&pt_oc_callback, BATTERY_OC_PRIO_FLASHLIGHT);
 #endif

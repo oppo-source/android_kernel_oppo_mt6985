@@ -385,13 +385,11 @@ static inline bool pd_process_ctrl_msg(
 			return true;
 		break;
 #endif	/* CONFIG_USB_PD_DBG_DP_UFP_U_AUTO_ATTENTION */
-
+#endif	/* CONFIG_USB_PD_ALT_MODE */
 	case PE_UFP_VDM_ATTENTION_REQUEST:
 		pd_notify_tcp_vdm_event_2nd_result(
 			pd_port, TCP_DPM_RET_VDM_ACK);
 		break;
-#endif	/* CONFIG_USB_PD_ALT_MODE */
-
 #if CONFIG_USB_PD_SRC_STARTUP_DISCOVER_ID
 	case PE_SRC_VDM_IDENTITY_REQUEST:
 		pe_data->power_cable_present = true;

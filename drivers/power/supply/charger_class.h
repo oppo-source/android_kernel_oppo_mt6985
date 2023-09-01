@@ -204,6 +204,9 @@ struct charger_ops {
 	int (*get_property)(struct charger_device *dev,
 			    enum charger_property prop,
 			    union charger_propval *val);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	int (*enable_ship_mode)(struct charger_device *dev);
+#endif
 };
 
 static inline void *charger_dev_get_drvdata(
@@ -388,6 +391,9 @@ extern int charger_dev_get_property(struct charger_device *dev,
 
 /* For buck1 FPWM */
 extern int charger_dev_enable_hidden_mode(struct charger_device *dev, bool en);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+extern int charger_dev_enable_ship_mode(struct charger_device *charger_dev);
+#endif
 
 extern int register_charger_device_notifier(
 	struct charger_device *charger_dev,

@@ -86,7 +86,6 @@ static int scp_ultra_pcm_dev_probe(struct platform_device *pdev)
 	} else {
 		pr_debug("%s(), pdev->dev.of_node NULL!!!\n", __func__);
 	}
-
 	ret = snd_soc_register_component(&pdev->dev,
 			&mtk_scp_ultra_pcm_platform, NULL, 0);
 	if (ret) {

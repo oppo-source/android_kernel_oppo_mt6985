@@ -1,0 +1,38 @@
+/**********************************************************************************
+* Copyright (c)  2008-2020  Guangdong oplus Mobile Comm Corp., Ltd
+*
+***********************************************************************************/
+&odm {
+	nfc_chipset:nfc_chipset {
+		compatible = "oplus-nfc-chipset";
+		chipset-23661 = "PN557";
+		chipset-23671 = "PN557";
+	};
+
+	mt6382nfc: mt6382nfc {
+	compatible = "mediatek, mt6382_nfc-eint";
+	interrupt-parent = <&pio>;
+	interrupts = <11 IRQ_TYPE_EDGE_BOTH 11 0>;
+	mt6382-nfc-srclk = <&pio 11 0x0>;
+	status = "okay";
+	};
+
+};
+
+&clock_buffer_ctrl {
+	mediatek,xo-bbck4 = <1>;
+};
+
+&i2c0 {
+       status = "okay";
+       clock-frequency = <400000>;
+       nq@28 {
+               compatible = "nxp,pn553";
+               reg = <0x28>;
+               nxp,pn544-irq = <&pio 41 0x0>;
+               nxp,pn544-ven = <&pio 40 0x0>;
+               nxp,pn544-fw-dwnld = <&pio 42 0x0>;
+               nxp,pn544-clkreq = <&pio 2 0x0>;
+               interrupt-parent = <&pio>;
+       };
+};

@@ -1,0 +1,83 @@
+// SPDX-License-Identifier: GPL-2.0
+/* Copyright (c) 2020 MediaTek Inc. */
+
+#include <dt-bindings/clock/mt6985-clk.h>
+
+// seninf_top : cust_mt6983_explorer_camera_v4l2.dtsi
+
+&pio {
+	cd_pin_pulldown: cd_pin_pulldown {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO192__FUNC_GPIO192>;
+                        bias-pull-down;
+                        drive-strength = <3>;
+			input-enable;
+		};
+	};
+	explorer_int0: explorer_int0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO6__FUNC_GPIO6>;
+                        bias-pull-down;
+                        drive-strength = <3>;
+			input-enable;
+		};
+	};
+	explorer_int1: explorer_int1 {
+                pins_cmd_dat {
+                        pinmux = <PINMUX_GPIO5__FUNC_GPIO5>;
+                        bias-pull-down;
+                        drive-strength = <3>;
+                        input-enable;
+                };
+        };
+	explorer_int2: explorer_int2 {
+                pins_cmd_dat {
+                        pinmux = <PINMUX_GPIO3__FUNC_GPIO3>;
+                        bias-pull-down;
+                        drive-strength = <3>;
+                        input-enable;
+                };
+        };
+	pmic_pon_1: pmic_pon_1 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO207__FUNC_GPIO207>;
+                        bias-pull-down;
+			drive-strength = <3>;
+			output-low;
+		};
+	};
+	pmic_resin_n: pmic_resin_n {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO210__FUNC_GPIO210>;
+			bias-pull-down;
+			drive-strength = <3>;
+			output-low;
+		};
+	};
+};
+
+&soc {
+	preisp: zeku,explorer@0 {
+		compatible = "zeku,explorer";
+		interrupt-parent = <&pio>;
+		bsp_irq_gpio = <&pio 6 0>;
+		bsp_int1_gpio = <&pio 5 0>;
+		bsp_int2_gpio = <&pio 3 0>;
+		pmic_pon_gpio = <&pio 207 0>;
+		pmic_reset_gpio = <&pio 210 0>;
+		ignore-dsleep; //modify the sleep  ignore
+		pinctrl-names = "default";
+		pinctrl-0 = <&explorer_int0>;
+		pinctrl-1 = <&explorer_int1>;
+		pinctrl-2 = <&explorer_int2>;
+		pinctrl-3 = <&pmic_pon_1>;
+		pinctrl-4 = <&pmic_resin_n>;
+		explorer,clk-drive-strength = <2>;
+		explorer,cmd-drive-strength = <2>;
+		explorer,data-drive-strength = <2>;
+		explorer,spmi-drive-strength = <1>;
+		explorer,ref-clk-idx = <2>;  //dcxo->xo_bufs[idx], BBCK3
+		explorer,ref-clk-voter = "0x100";
+		explorer,ref-clk-voter-id = <8>;
+	};
+};

@@ -53,6 +53,7 @@ source "drivers/misc/mediatek/vmm/Kconfig"
 source "drivers/misc/mediatek/vdec_fmt/Kconfig"
 source "drivers/misc/mediatek/mminfra/Kconfig"
 source "drivers/misc/mediatek/widevine_drm/Kconfig"
+source "drivers/misc/mediatek/wl2866d/Kconfig"
 endmenu # MultiMedia, Display, Camera
 
 menu "Security"
@@ -166,6 +167,10 @@ source "drivers/misc/mediatek/perf_common/Kconfig"
 source "drivers/misc/mediatek/rps/Kconfig"
 source "drivers/misc/mediatek/task_turbo/Kconfig"
 endmenu # Performance
+
+#ifdef OPLUS_FEATURE_OEM_OCDT
+source "drivers/misc/mediatek/boot_common/Kconfig"
+#endif
 
 menu "Config File"
 config BUILD_CONFIG_FILE

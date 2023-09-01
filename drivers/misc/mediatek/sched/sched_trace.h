@@ -12,6 +12,12 @@
 #include <linux/tracepoint.h>
 #include <linux/compat.h>
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+#define LB_UX_PREFER	(0x80)
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+#define LB_FBT_PREFER	(0x90)
+#endif
 #ifdef CREATE_TRACE_POINTS
 int sched_cgroup_state(struct task_struct *p, int subsys_id)
 {

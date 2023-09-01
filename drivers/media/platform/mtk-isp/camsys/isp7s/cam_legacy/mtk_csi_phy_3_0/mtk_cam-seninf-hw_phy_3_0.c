@@ -3,6 +3,7 @@
 
 #include <linux/module.h>
 #include <linux/delay.h>
+#include <linux/minmax.h>
 
 #include "mtk_cam-seninf.h"
 #include "mtk_cam-seninf-hw.h"
@@ -24,8 +25,8 @@
 #define SENINF_CK 242000000
 #define CYCLE_MARGIN 1
 #define RESYNC_DMY_CNT 4
-#define DPHY_SETTLE 0x1C
-#define CPHY_SETTLE 0x16 //60~80ns
+#define DPHY_SETTLE_DEF 100  // ns
+#define CPHY_SETTLE_DEF 70 //60~80ns
 #define DPHY_TRAIL_SPEC 224
 
 #define DEBUG_CAM_MUX_SWITCH 0
@@ -81,16 +82,29 @@ static struct mtk_cam_seninf_ops *_seninf_ops = &mtk_csi_phy_3_0;
 	SENINF_BITS(ptr, TM_STAGGER_CON##s, TM_EXP_HSYNC_VC##s, vc); \
 } while (0)
 
-#define SET_VC_SPLIT(ptr, sel, b, vc) do { \
+#define SET_VC_SPLIT(ptr, sel, b, vc, ref) do { \
 	SENINF_BITS(ptr, SENINF_MUX_VC_SEL##sel, \
 		    RG_SENINF_MUX_B##b##_VC_SEL, vc); \
 	SENINF_BITS(ptr, SENINF_MUX_VC_SEL##sel, \
-		    RG_SENINF_MUX_B##b##_VC_REF_EN, 1); \
+		    RG_SENINF_MUX_B##b##_VC_REF_EN, ref); \
 } while (0)
 
 #define SHOW(buf, len, fmt, ...) { \
 	len += snprintf(buf + len, PAGE_SIZE - len, fmt, ##__VA_ARGS__); \
 }
+
+static u64 settle_formula(u64 settle_ns, u64 seninf_ck)
+{
+	u64 _val = (settle_ns * seninf_ck);
+
+	if (_val % 1000000000)
+		_val = 1 + (_val / 1000000000) - 3;
+	else
+		_val = (_val / 1000000000) - 3;
+
+	return _val;
+}
+
 
 static int mtk_cam_seninf_init_iomem(struct seninf_ctx *ctx,
 			      void __iomem *if_base, void __iomem *ana_base)
@@ -396,6 +410,7 @@ static int mtk_cam_seninf_disable_cammux(struct seninf_ctx *ctx, int cam_mux)
 		SENINF_BITS(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_OPT,
 			    RG_SENINF_CAM_MUX_PCSR_TAG_VC_DT_PAGE_SEL, i);
 		SENINF_WRITE_REG(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_TAG_VC_SEL, 0);
+		SENINF_WRITE_REG(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_TAG_DT_SEL, 0);
 	}
 
 	SENINF_WRITE_REG(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_IRQ_STATUS,
@@ -840,22 +855,31 @@ static int mtk_cam_seninf_set_cammux_next_ctrl(struct seninf_ctx *ctx, int src, 
 
 	if (src != 0x3f) {
 		u32 in_ctrl, in_opt, out_ctrl, out_opt;
+		u32 in_tag_vc, in_tag_dt, out_tag_vc, out_tag_dt;
 
 		mtk_cam_seninf_switch_to_cammux_inner_page(ctx, true);
 		in_ctrl = SENINF_READ_REG(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_CTRL);
 		in_opt = SENINF_READ_REG(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_OPT);
+		in_tag_vc = SENINF_READ_REG(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_TAG_VC_SEL);
+		in_tag_dt = SENINF_READ_REG(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_TAG_DT_SEL);
 		mtk_cam_seninf_switch_to_cammux_inner_page(ctx, false);
 		out_ctrl = SENINF_READ_REG(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_CTRL);
 		out_opt = SENINF_READ_REG(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_OPT);
+		out_tag_vc = SENINF_READ_REG(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_TAG_VC_SEL);
+		out_tag_dt = SENINF_READ_REG(pSeninf_cam_mux_pcsr, SENINF_CAM_MUX_PCSR_TAG_DT_SEL);
 		mtk_cam_seninf_switch_to_cammux_inner_page(ctx, true);
 		dev_info(ctx->dev,
-			" %s cam_mux %d in|out SENINF_CAM_MUX_PCSR_CTRL 0x%x|0x%x SENINF_CAM_MUX_PCSR_OPT 0x%x|0x%x\n",
+			" %s cam_mux %d in|out PCSR CTRL 0x%x|0x%x OPT 0x%x|0x%x TAG_VC 0x%x|0x%x TAG_DT 0x%x|0x%x\n",
 			__func__,
 			target,
 			in_ctrl,
 			out_ctrl,
 			in_opt,
-			out_opt);
+			out_opt,
+			in_tag_vc,
+			out_tag_vc,
+			in_tag_dt,
+			out_tag_dt);
 	}
 
 	return 0;
@@ -1124,53 +1148,58 @@ static int mtk_cam_seninf_set_mux_ctrl(struct seninf_ctx *ctx, int mux,
 	return 0;
 }
 
-static int mtk_cam_seninf_set_mux_vc_split(struct seninf_ctx *ctx,
-				int mux, int tag, int vc)
+static int mtk_cam_seninf_set_mux_vc_split_all(struct seninf_ctx *ctx,
+				int mux)
 {
-	void *pSeninf_mux;
+	struct seninf_vcinfo *vcinfo = &ctx->vcinfo;
+	void *pSeninf_mux = ctx->reg_if_mux[(unsigned int)mux];
+	struct seninf_vc *vc;
+	int i;
 
-	pSeninf_mux = ctx->reg_if_mux[(unsigned int)mux];
+	for (i = 0; i < vcinfo->cnt; i++) {
+		vc = &vcinfo->vc[i];
 
-	switch (tag) {
-	case 0:
-		SET_VC_SPLIT(pSeninf_mux, 0, 0, vc);
-		break;
-	case 1:
-		SET_VC_SPLIT(pSeninf_mux, 0, 1, vc);
-		break;
-	case 2:
-		SET_VC_SPLIT(pSeninf_mux, 0, 2, vc);
-		break;
-	case 3:
-		SET_VC_SPLIT(pSeninf_mux, 0, 3, vc);
-		break;
-	case 4:
-		SET_VC_SPLIT(pSeninf_mux, 1, 4, vc);
-		break;
-	case 5:
-		SET_VC_SPLIT(pSeninf_mux, 1, 5, vc);
-		break;
-	case 6:
-		SET_VC_SPLIT(pSeninf_mux, 1, 6, vc);
-		break;
-	case 7:
-		SET_VC_SPLIT(pSeninf_mux, 1, 7, vc);
-		break;
-	default:
+		switch (vc->muxvr_offset) {
+		case 0:
+			SET_VC_SPLIT(pSeninf_mux, 0, 0, vc->vc, (i == 0));
+			break;
+		case 1:
+			SET_VC_SPLIT(pSeninf_mux, 0, 1, vc->vc, (i == 0));
+			break;
+		case 2:
+			SET_VC_SPLIT(pSeninf_mux, 0, 2, vc->vc, (i == 0));
+			break;
+		case 3:
+			SET_VC_SPLIT(pSeninf_mux, 0, 3, vc->vc, (i == 0));
+			break;
+		case 4:
+			SET_VC_SPLIT(pSeninf_mux, 1, 4, vc->vc, (i == 0));
+			break;
+		case 5:
+			SET_VC_SPLIT(pSeninf_mux, 1, 5, vc->vc, (i == 0));
+			break;
+		case 6:
+			SET_VC_SPLIT(pSeninf_mux, 1, 6, vc->vc, (i == 0));
+			break;
+		case 7:
+			SET_VC_SPLIT(pSeninf_mux, 1, 7, vc->vc, (i == 0));
+			break;
+		default:
 #if LOG_MORE
-		dev_info(ctx->dev,
-			"%s: skip vc split setting for more than tag 7\n", __func__);
+			dev_info(ctx->dev,
+				 "%s: skip vc split setting for more than tag 7\n", __func__);
 #endif
-		break;
+			break;
+		}
 	}
 
-//#if LOG_MORE
+	//#if LOG_MORE
 	dev_info(ctx->dev,
-		"%s: set mux %d vc split for tag %d vc %d SEL0(0x%x), SEL1(0x%x)\n",
-		__func__, mux, tag, vc,
-		SENINF_READ_REG(pSeninf_mux, SENINF_MUX_VC_SEL0),
-		SENINF_READ_REG(pSeninf_mux, SENINF_MUX_VC_SEL1));
-//#endif
+		 "%s: set mux %d vc split SEL0(0x%x), SEL1(0x%x)\n",
+		 __func__, mux,
+		 SENINF_READ_REG(pSeninf_mux, SENINF_MUX_VC_SEL0),
+		 SENINF_READ_REG(pSeninf_mux, SENINF_MUX_VC_SEL1));
+	//#endif
 
 	return 0;
 }
@@ -1299,7 +1328,7 @@ static int mtk_cam_seninf_set_cammux_chk_pixel_mode(struct seninf_ctx *ctx,
 
 static int mtk_cam_seninf_set_test_model(struct seninf_ctx *ctx,
 				  int mux, int cam_mux, int pixel_mode,
-				  int filter, int con, int vc, int dt)
+				  int filter, int con, int vc, int dt, int muxvr_ofs)
 {
 	int intf;
 	void *pSeninf;
@@ -1308,7 +1337,7 @@ static int mtk_cam_seninf_set_test_model(struct seninf_ctx *ctx,
 	int mux_vr;
 
 	intf = (mux >= 12) ? (mux - 10) : mux; // isp7s seninf tm to mux mapping rule
-	mux_vr = mux2mux_vr(ctx, mux, cam_mux);
+	mux_vr = mux2mux_vr(ctx, mux, cam_mux, muxvr_ofs);
 
 	pSeninf = ctx->reg_if_ctrl[(unsigned int)intf];
 	pSeninf_tg = ctx->reg_if_tg[(unsigned int)intf];
@@ -1692,9 +1721,13 @@ static int csirx_dphy_init(struct seninf_ctx *ctx)
 					: ctx->cphy_settle_delay_dt;
 		} else {
 			settle_delay_dt = ctx->csi_param.cphy_settle;
-			if (settle_delay_dt == 0)
-				settle_delay_dt = CPHY_SETTLE;
-			else {
+			if (settle_delay_dt == 0) {
+				settle_delay_dt =
+					settle_formula(CPHY_SETTLE_DEF, SENINF_CK);
+				dev_info(ctx->dev,
+					 "cphy settle val: (%u, %u) => %llu\n",
+					 CPHY_SETTLE_DEF, SENINF_CK, settle_delay_dt);
+			} else {
 				u64 temp = SENINF_CK * settle_delay_dt;
 
 				if (temp % 1000000000)
@@ -1706,8 +1739,12 @@ static int csirx_dphy_init(struct seninf_ctx *ctx)
 		settle_delay_ck = settle_delay_dt;
 	} else {
 		if (!ctx->csi_param.not_fixed_dphy_settle) {
-			settle_delay_dt = settle_delay_ck = DPHY_SETTLE;
+			settle_delay_dt = settle_delay_ck =
+				settle_formula(DPHY_SETTLE_DEF, SENINF_CK);
 			settle_delay_ck = 0;
+			dev_info(ctx->dev,
+				 "dphy settle val: (%u, %u) => %llu\n",
+				 DPHY_SETTLE_DEF, SENINF_CK, settle_delay_dt);
 		} else {
 			if (ctx->csi_param.not_fixed_trail_settle) {
 				settle_delay_dt = ctx->csi_param.dphy_data_settle
@@ -1718,9 +1755,13 @@ static int csirx_dphy_init(struct seninf_ctx *ctx)
 						: ctx->settle_delay_ck;
 			} else {
 				settle_delay_dt = ctx->csi_param.dphy_data_settle;
-				if (settle_delay_dt == 0)
-					settle_delay_dt = DPHY_SETTLE;
-				else {
+				if (settle_delay_dt == 0) {
+					settle_delay_dt =
+						settle_formula(DPHY_SETTLE_DEF, SENINF_CK);
+					dev_info(ctx->dev,
+						 "dphy settle val: (%u, %u) => %llu\n",
+						 DPHY_SETTLE_DEF, SENINF_CK, settle_delay_dt);
+				} else {
 					u64 temp = SENINF_CK * settle_delay_dt;
 
 					if (temp % 1000000000)
@@ -1729,9 +1770,13 @@ static int csirx_dphy_init(struct seninf_ctx *ctx)
 						settle_delay_dt = (temp / 1000000000);
 				}
 				settle_delay_ck = ctx->csi_param.dphy_clk_settle;
-				if (settle_delay_ck == 0)
-					settle_delay_ck = DPHY_SETTLE;
-				else {
+				if (settle_delay_ck == 0) {
+					settle_delay_ck =
+						settle_formula(DPHY_SETTLE_DEF, SENINF_CK);
+					dev_info(ctx->dev,
+						 "dphy settle val: (%u, %u) => %llu\n",
+						 DPHY_SETTLE_DEF, SENINF_CK, settle_delay_dt);
+				} else {
 					u64 temp = SENINF_CK * settle_delay_ck;
 
 					if (temp % 1000000000)
@@ -3419,6 +3464,40 @@ static ssize_t mtk_cam_seninf_show_status(struct device *dev,
 #define FT_30_FPS 33
 #define PKT_CNT_CHK_MARGIN 110
 
+#define MAX_DELAY_STEP 100
+
+/**
+ * Delay with stream off check
+ *
+ * @param ctx seninf_ctx
+ * @param delay Total delay
+ *
+ * @return {@code false} if it has been streamed off and delay partically, otherwise (@code true}
+ */
+static bool delay_with_stream_check(struct seninf_ctx *ctx, unsigned long delay)
+{
+	unsigned long delay_step, delay_inc;
+
+	delay_inc = 0;
+	delay_step = 1;
+	do {
+		if (!ctx->streaming)
+			break;
+
+		delay_step = min((unsigned long)MAX_DELAY_STEP, delay - delay_inc);
+		mdelay(delay_step);
+		delay_inc += delay_step;
+	} while (delay > delay_inc);
+
+	if (delay > delay_inc) {
+		dev_info(ctx->dev, "delay = %lu, inc = %lu, seninf streamed-off\n",
+			 delay, delay_inc);
+		return false;
+	}
+
+	return true;
+}
+
 static int mtk_cam_seninf_debug(struct seninf_ctx *ctx)
 {
 	void *base_ana, *base_cphy, *base_dphy, *base_csi, *base_mux;
@@ -3588,7 +3667,8 @@ static int mtk_cam_seninf_debug(struct seninf_ctx *ctx)
 
 		while (total_delay <= ((debug_ft * PKT_CNT_CHK_MARGIN) / 100)) {
 			tmp_mipi_packet_cnt = mipi_packet_cnt & 0xFFFF;
-			mdelay(debug_vb);
+			if (!delay_with_stream_check(ctx, debug_vb))
+				return ret; // has been stream off
 			total_delay += debug_vb;
 			mipi_packet_cnt = SENINF_READ_REG(base_csi,
 						SENINF_CSI2_PACKET_CNT_STATUS);
@@ -3606,8 +3686,8 @@ static int mtk_cam_seninf_debug(struct seninf_ctx *ctx)
 
 	/* Check csi status again */
 	if (debug_ft > total_delay) {
-		mdelay(debug_ft - total_delay);
-		total_delay = debug_ft;
+		if (!delay_with_stream_check(ctx, debug_ft - total_delay))
+			return ret; // has been stream off
 	}
 
 	temp = SENINF_READ_REG(base_csi, SENINF_CSI2_IRQ_STATUS);
@@ -3615,6 +3695,8 @@ static int mtk_cam_seninf_debug(struct seninf_ctx *ctx)
 		"SENINF%d_CSI2_IRQ_STATUS(0x%x)\n", ctx->seninfIdx, temp);
 	if ((temp & 0xD0) != 0)
 		ret = -2; //multi lanes sync error, crc error, ecc error
+	else if ((temp & 0x10000000) != 0)
+		ret = -3; //async fifo overrun
 
 	/* SENINF_MUX */
 	for (j = SENINF_MUX1; j < _seninf_ops->mux_num; j++) {
@@ -3637,10 +3719,13 @@ static int mtk_cam_seninf_debug(struct seninf_ctx *ctx)
 			if (SENINF_READ_REG(base_mux, SENINF_MUX_IRQ_STATUS) & 0x1) {
 				SENINF_WRITE_REG(base_mux, SENINF_MUX_IRQ_STATUS,
 						 0xffffffff);
-				if (debug_ft > FT_30_FPS)
-					mdelay(FT_30_FPS);
-				else
-					mdelay(debug_ft);
+				if (debug_ft > FT_30_FPS) {
+					if (!delay_with_stream_check(ctx, FT_30_FPS))
+						return ret; // has been stream off
+				} else {
+					if (!delay_with_stream_check(ctx, debug_ft))
+						return ret; // has been stream off
+				}
 				dev_info(ctx->dev,
 					"after reset overrun, SENINF_MUX_IRQ_STATUS(0x%x) SENINF%d_MUX_SIZE(0x%x)\n",
 					SENINF_READ_REG(base_mux,
@@ -3863,7 +3948,7 @@ static int mtk_cam_seninf_irq_handler(int irq, void *data)
 						     SENINF_MUX_IRQ_STATUS);
 					camIrq_tmp = SENINF_READ_REG(
 						     pSeninf_cam_mux_pcsr,
-						     SENINF_CAM_MUX_PCSR_CHK_ERR_RES);
+						     SENINF_CAM_MUX_PCSR_IRQ_STATUS);
 
 					if (muxIrq_tmp) {
 						SENINF_WRITE_REG(
@@ -3874,19 +3959,15 @@ static int mtk_cam_seninf_irq_handler(int irq, void *data)
 							     pmux,
 							     SENINF_MUX_IRQ_STATUS);
 					}
-					if (camIrq_tmp) {
+					if (camIrq_tmp & 0x3) {
 						SENINF_WRITE_REG(
 						pSeninf_cam_mux_pcsr,
-						SENINF_CAM_MUX_PCSR_CHK_ERR_RES,
-						0xffffffff);
-						camIrq_tmp =
-						SENINF_READ_REG(
-						pSeninf_cam_mux_pcsr,
-						SENINF_CAM_MUX_PCSR_CHK_ERR_RES);
+						SENINF_CAM_MUX_PCSR_IRQ_STATUS,
+						0x103);
 					}
 					if (muxIrq_tmp & (0x1 << 0))
 						ctx_->fifo_overrun_cnt++;
-					if (camIrq_tmp)
+					if (camIrq_tmp & 0x3)
 						ctx_->size_err_cnt++;
 				}
 			}
@@ -4425,7 +4506,7 @@ struct mtk_cam_seninf_ops mtk_csi_phy_3_0 = {
 	._set_cammux_src = mtk_cam_seninf_set_cammux_src,
 	._set_vc = mtk_cam_seninf_set_vc,
 	._set_mux_ctrl = mtk_cam_seninf_set_mux_ctrl,
-	._set_mux_vc_split = mtk_cam_seninf_set_mux_vc_split,
+	._set_mux_vc_split_all = mtk_cam_seninf_set_mux_vc_split_all,
 	._set_mux_crop = mtk_cam_seninf_set_mux_crop,
 	._is_mux_used = mtk_cam_seninf_is_mux_used,
 	._mux = mtk_cam_seninf_mux,

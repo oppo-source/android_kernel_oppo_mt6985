@@ -1,0 +1,65 @@
+/* Copyright (c) 2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
+
+&pio {
+	sia81xx_gpio_L_ONE: sia81xx_gpio_L_ONE {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO170__FUNC_GPIO170>;
+			slew-rate = <1>;
+			bias-disable;
+		};
+	};
+
+	sia81xx_gpio_L_TWO: sia81xx_gpio_L_TWO {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO47__FUNC_GPIO47>;
+			slew-rate = <1>;
+			bias-disable;
+		};
+	};
+
+};
+
+&odm {
+	si_pa_L_One: si_pa@L_One{
+		compatible = "si,sia81xx";
+		si,si_pa_type = "sia8100x";
+		si,si_pa_reset = <&pio 170 0>;
+		si,si_pa_owi = <&pio 170 0>;
+		si,si_pa_id = <&pio 47 0>;
+		pinctrl-names = "si_pa_gpio", "si_pa_id";
+		pinctrl-0 = <&sia81xx_gpio_L_ONE>;
+		pinctrl-1 = <&sia81xx_gpio_L_TWO>;
+		si,si_pa_disable_pin = <0>;
+
+		en_dynamic_id = <1>;
+		channel_num = <1>;
+		owi_mode = <1>;
+	};
+
+};
+
+&sound {
+	si,sia81xx-max-num = <1>;
+	si,sia81xx-aux-devs = <&si_pa_L_One>;
+	si,sia81xx-aux-devs-prefix = "SpkrLeft_One";
+};
+
+/* chongqing headset bring up */
+&accdet{
+	eint_use_ext_res = <1>;
+	headset-eint-trig-mode = <2>;
+};
+
+&speech_usip_mem{
+	adsp-phone-call-enh-enable = <0x0>;
+};

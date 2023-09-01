@@ -42,6 +42,37 @@ void i2c_table_write(struct subdrv_ctx *ctx, u16 *list, u32 len)
 	}
 }
 
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+void i2c_table_rewrite(struct subdrv_ctx *ctx, u16 *list, u32 len)
+{
+	int ret = 1;
+	u8 retry = 6;
+	switch (ctx->s_ctx.i2c_transfer_data_type) {
+	case I2C_DT_ADDR_16_DATA_16:
+		do{
+			ret = subdrv_i2c_wr_regs_u16(ctx, list, len);
+			retry--;
+			if (ret != 0){
+				DRV_LOGE(ctx, "i2c write setting table, retry = %u, ret:%d\n", retry, ret);
+				msleep(5);
+			}
+		} while (ret != 0 && retry > 0);
+		break;
+	case I2C_DT_ADDR_16_DATA_8:
+	default:
+		do{
+			ret = subdrv_i2c_wr_regs_u8(ctx, list, len);
+			retry--;
+			if (ret != 0){
+				DRV_LOGE(ctx, "i2c write setting table, retry = %u, ret:%d\n", retry, ret);
+				msleep(5);
+			}
+		} while (ret != 0 && retry > 0);
+		break;
+	}
+}
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 static void dump_i2c_buf(struct subdrv_ctx *ctx)
 {
 	int i, j;
@@ -464,8 +495,19 @@ void set_max_framerate_by_scenario(struct subdrv_ctx *ctx,
 	DRV_LOG(ctx, "max_fps(input/output):%u/%u(sid:%u), min_fl_en:1\n",
 		framerate, ctx->current_fps, scenario_id);
 	if (ctx->s_ctx.reg_addr_auto_extend ||
-			(ctx->frame_length > (ctx->exposure[0] + ctx->s_ctx.exposure_margin)))
+			(ctx->frame_length > (ctx->exposure[0] + ctx->s_ctx.exposure_margin))){
+		#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		set_dummy(ctx);
+		#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		if(ctx->s_ctx.sensor_id == S5KJN1LUNA_SENSOR_ID){
+			DRV_LOG(ctx, "frame_length = %d, line_length = %d\n", ctx->frame_length, ctx->line_length);
+			subdrv_i2c_wr_u16(ctx, 0x0340, ctx->frame_length);
+			subdrv_i2c_wr_u16(ctx, 0x0342, ctx->line_length);
+		} else {
+			set_dummy(ctx);
+		}
+		#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+	}
 }
 
 bool set_auto_flicker(struct subdrv_ctx *ctx, bool min_framelength_en)
@@ -961,8 +1003,22 @@ void streaming_control(struct subdrv_ctx *ctx, bool enable)
 	}
 
 	if (enable) {
+		#ifdef OPLUS_FEATURE_CAMERA_COMMON
+		if (ctx->s_ctx.chk_s_off_before_s_on)
+			check_stream_off(ctx);
+		#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		set_dummy(ctx);
+		#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		subdrv_i2c_wr_u8(ctx, ctx->s_ctx.reg_addr_stream, 0x01);
+		#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		if (ctx->s_ctx.sensor_id == IMX890LUNA_SENSOR_ID &&
+				ctx->current_scenario_id == SENSOR_SCENARIO_ID_CUSTOM3) {
+			set_i2c_buffer(ctx, ctx->s_ctx.reg_addr_stream, 0x01);
+			DRV_LOG(ctx, "streaming delay");
+		} else {
+			subdrv_i2c_wr_u8(ctx, ctx->s_ctx.reg_addr_stream, 0x01);
+		}
+		#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	} else {
 		subdrv_i2c_wr_u8(ctx, ctx->s_ctx.reg_addr_stream, 0x00);
 		if (ctx->s_ctx.reg_addr_fast_mode && ctx->fast_mode_on) {
@@ -972,10 +1028,16 @@ void streaming_control(struct subdrv_ctx *ctx, bool enable)
 			set_i2c_buffer(ctx, ctx->s_ctx.reg_addr_fast_mode, 0x00);
 			commit_i2c_buffer(ctx);
 		}
+		memset(ctx->exposure, 0, sizeof(ctx->exposure));
+		memset(ctx->ana_gain, 0, sizeof(ctx->ana_gain));
 		ctx->autoflicker_en = FALSE;
 		ctx->extend_frame_length_en = 0;
 		ctx->is_seamless = 0;
+		#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		if (ctx->s_ctx.chk_s_off_end)
+		#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		if (ctx->s_ctx.chk_s_off_after_s_off)
+		#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 			check_stream_off(ctx);
 	}
 	ctx->is_streaming = enable;
@@ -1066,7 +1128,7 @@ void get_min_shutter_by_scenario(struct subdrv_ctx *ctx,
 		u64 *min_shutter, u64 *exposure_step)
 {
 	if (scenario_id >= ctx->s_ctx.sensor_mode_num) {
-		DRV_LOGE(ctx, "invalid cur_sid:%u, mode_num:%u set default\n",
+		DRV_LOG(ctx, "invalid cur_sid:%u, mode_num:%u set default\n",
 			scenario_id, ctx->s_ctx.sensor_mode_num);
 		scenario_id = 0;
 	}
@@ -1485,6 +1547,63 @@ void get_sensor_rgbw_output_mode(struct subdrv_ctx *ctx,
 	DRV_LOG(ctx, "rgbw_output_mode:%u(sid:%u)\n", *rgbw_output_mode, scenario_id);
 }
 
+void get_readout_by_scenario(struct subdrv_ctx *ctx,
+		enum SENSOR_SCENARIO_ID_ENUM scenario_id, u64 *readout_time)
+{
+	u32 ratio = 1;
+
+	if (scenario_id >= ctx->s_ctx.sensor_mode_num) {
+		DRV_LOG(ctx, "invalid sid:%u, mode_num:%u\n",
+			scenario_id, ctx->s_ctx.sensor_mode_num);
+		return;
+	}
+	switch (ctx->s_ctx.mode[scenario_id].hdr_mode) {
+	case HDR_RAW_STAGGER_2EXP:
+		ratio = 2;
+		break;
+	case HDR_RAW_STAGGER_3EXP:
+		ratio = 3;
+		break;
+	default:
+		break;
+	}
+	*readout_time =
+		(u64)((u64)ctx->s_ctx.mode[scenario_id].linelength
+		* ctx->s_ctx.mode[scenario_id].imgsensor_winsize_info.h2_tg_size
+		* 1000000000) / ctx->s_ctx.mode[scenario_id].pclk * ratio;
+}
+
+void get_exposure_count_by_scenario(struct subdrv_ctx *ctx,
+		enum SENSOR_SCENARIO_ID_ENUM scenario_id, u32 *scenario_exp_cnt)
+{
+	u32 exp_cnt = 0;
+
+	if (scenario_id >= ctx->s_ctx.sensor_mode_num) {
+		DRV_LOG(ctx, "invalid sid:%u, mode_num:%u\n",
+			scenario_id, ctx->s_ctx.sensor_mode_num);
+		return;
+	}
+
+	switch (ctx->s_ctx.mode[scenario_id].hdr_mode) {
+	case HDR_RAW_STAGGER_2EXP:
+		exp_cnt = 2;
+		break;
+	case HDR_RAW_STAGGER_3EXP:
+		exp_cnt = 3;
+		break;
+	default:
+		exp_cnt = 1;
+		break;
+	}
+
+	*scenario_exp_cnt = exp_cnt;
+}
+
+void set_sensor_rmsc_mode(struct subdrv_ctx *ctx, struct mtk_sensor_rmsc_mode *rmsc_mode)
+{
+	DRV_LOG(ctx, "sensor no support. rmsc = %d", rmsc_mode->qbc_rmsc_mode);
+}
+
 int common_get_imgsensor_id(struct subdrv_ctx *ctx, u32 *sensor_id)
 {
 	u8 i = 0;
@@ -1570,7 +1689,11 @@ void sensor_init(struct subdrv_ctx *ctx)
 	/* write init setting */
 	if (ctx->s_ctx.init_setting_table != NULL) {
 		DRV_LOG_MUST(ctx, "E: size:%u\n", ctx->s_ctx.init_setting_len);
+		#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		i2c_table_write(ctx, ctx->s_ctx.init_setting_table, ctx->s_ctx.init_setting_len);
+		#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		i2c_table_rewrite(ctx, ctx->s_ctx.init_setting_table, ctx->s_ctx.init_setting_len);
+		#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		DRV_LOG(ctx, "X: size:%u\n", ctx->s_ctx.init_setting_len);
 	} else {
 		DRV_LOGE(ctx, "please implement initial setting!\n");
@@ -1692,7 +1815,11 @@ void update_mode_info(struct subdrv_ctx *ctx, enum SENSOR_SCENARIO_ID_ENUM scena
 	ctx->pclk = ctx->s_ctx.mode[scenario_id].pclk;
 	ctx->line_length = ctx->s_ctx.mode[scenario_id].linelength;
 	ctx->frame_length = ctx->s_ctx.mode[scenario_id].framelength;
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	ctx->current_fps = 10 * ctx->pclk / ctx->line_length / ctx->frame_length;
+	#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+	ctx->current_fps = ctx->pclk / ctx->line_length * 10 / ctx->frame_length;
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	ctx->readout_length = ctx->s_ctx.mode[scenario_id].readout_length;
 	ctx->read_margin = ctx->s_ctx.mode[scenario_id].read_margin;
 	ctx->min_frame_length = ctx->frame_length;
@@ -1731,15 +1858,24 @@ int common_control(struct subdrv_ctx *ctx,
 		scenario_id = SENSOR_SCENARIO_ID_NORMAL_PREVIEW;
 		ret = ERROR_INVALID_SCENARIO_ID;
 	}
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	if (ctx->s_ctx.chk_s_off_sta)
+	#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+	if (ctx->s_ctx.chk_s_off_before_control)
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		check_stream_off(ctx);
 	update_mode_info(ctx, scenario_id);
 
 	if (ctx->s_ctx.mode[scenario_id].mode_setting_table != NULL) {
 		DRV_LOG_MUST(ctx, "E: sid:%u size:%u\n", scenario_id,
 			ctx->s_ctx.mode[scenario_id].mode_setting_len);
+		#ifndef OPLUS_FEATURE_CAMERA_COMMON
 		i2c_table_write(ctx, ctx->s_ctx.mode[scenario_id].mode_setting_table,
 			ctx->s_ctx.mode[scenario_id].mode_setting_len);
+		#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+		i2c_table_rewrite(ctx, ctx->s_ctx.mode[scenario_id].mode_setting_table,
+			ctx->s_ctx.mode[scenario_id].mode_setting_len);
+		#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 		DRV_LOG(ctx, "X: sid:%u size:%u\n", scenario_id,
 			ctx->s_ctx.mode[scenario_id].mode_setting_len);
 	} else {
@@ -2043,6 +2179,49 @@ int common_feature_control(struct subdrv_ctx *ctx, MSDK_SENSOR_FEATURE_ENUM feat
 		get_sensor_rgbw_output_mode(ctx, *feature_data_32,
 			(u32 *)(uintptr_t)(*(feature_data + 1)));
 		break;
+	case SENSOR_FEATURE_GET_READOUT_BY_SCENARIO:
+		get_readout_by_scenario(ctx,
+			(enum SENSOR_SCENARIO_ID_ENUM)*feature_data,
+			feature_data + 1);
+		break;
+	case SENSOR_FEATURE_GET_EXPOSURE_COUNT_BY_SCENARIO:
+		get_exposure_count_by_scenario(ctx,
+			(enum SENSOR_SCENARIO_ID_ENUM)*feature_data,
+			(u32 *)(feature_data + 1));
+		break;
+	case SENSOR_FEATURE_SET_SENSOR_RMSC_MODE:
+		set_sensor_rmsc_mode(ctx,
+			(struct mtk_sensor_rmsc_mode *)feature_data);
+		break;
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	case SENSOR_FEATURE_GET_IS_STREAMING_ENABLE:
+		get_is_streaming_enable(ctx, feature_data_32);
+		break;
+	/* case SENSOR_FEATURE_ESD_RESET_BY_USER:
+		DRV_LOG(ctx, "call SENSOR_FEATURE_ESD_RESET_BY_USER\n");
+		switch (*feature_data) {
+			case SENSOR_SCENARIO_ID_NORMAL_PREVIEW:
+			case SENSOR_SCENARIO_ID_NORMAL_CAPTURE:
+			case SENSOR_SCENARIO_ID_NORMAL_VIDEO:
+			case SENSOR_SCENARIO_ID_HIGHSPEED_VIDEO:
+			case SENSOR_SCENARIO_ID_SLIM_VIDEO:
+			case SENSOR_SCENARIO_ID_CUSTOM1:
+			case SENSOR_SCENARIO_ID_CUSTOM2:
+			case SENSOR_SCENARIO_ID_CUSTOM3:
+			case SENSOR_SCENARIO_ID_CUSTOM4:
+			case SENSOR_SCENARIO_ID_CUSTOM5:
+			case SENSOR_SCENARIO_ID_CUSTOM6:
+			case SENSOR_SCENARIO_ID_CUSTOM7:
+			case SENSOR_SCENARIO_ID_CUSTOM8:
+			case SENSOR_SCENARIO_ID_CUSTOM9:
+			case SENSOR_SCENARIO_ID_CUSTOM10:
+			case SENSOR_SCENARIO_ID_CUSTOM11:
+			default:
+				*(MUINT32 *)(uintptr_t)(*(feature_data + 1)) = 1;
+			break;
+		}
+		break; */
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	default:
 		break;
 	}
@@ -2109,3 +2288,10 @@ int common_update_sof_cnt(struct subdrv_ctx *ctx, u32 sof_cnt)
 	ctx->sof_cnt = sof_cnt;
 	return 0;
 }
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+void get_is_streaming_enable(struct subdrv_ctx *ctx, u32 *enable)
+{
+	*enable = ctx->is_streaming;
+}
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/

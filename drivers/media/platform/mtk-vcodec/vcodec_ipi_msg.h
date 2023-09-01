@@ -37,8 +37,9 @@ enum mtk_vdec_hw_id {
 	MTK_VDEC_LAT = 1,
 	MTK_VDEC_CORE1 = 2,
 	MTK_VDEC_LAT1 = 3,
+	MTK_VDEC_HW_NUM = 4,
 	MTK_VDEC_LINE_COUNT = 4,
-	MTK_VDEC_HW_NUM = 5,
+	MTK_VDEC_IRQ_NUM = 5,
 };
 
 enum mtk_fmt_type {
@@ -283,8 +284,9 @@ enum vcodec_mem_type {
 	MEM_TYPE_FOR_UBE_HW,                    /* /< External memory for UBE reserved memory */
 	MEM_TYPE_FOR_SEC_SW,                    /* /< External memory for secure SW */
 	MEM_TYPE_FOR_SEC_HW,                    /* /< External memory for secure HW */
-	MEM_TYPE_FOR_SEC_UBE_HW,                    /* /< External memory for secure UBE */
+	MEM_TYPE_FOR_SEC_UBE_HW,                /* /< External memory for secure UBE */
 	MEM_TYPE_FOR_SHM,                       /* /< External memory for share memory */
+	MEM_TYPE_FOR_SEC_WFD_HW,                /* /< External memory for secure WFD */
 	MEM_TYPE_MAX = 0xFFFFFFFF               /* /< Max memory type */
 };
 

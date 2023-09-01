@@ -9,6 +9,7 @@
 #include "adsp_core.h"
 #include "adsp_platform.h"
 #include "adsp_mbox.h"
+#include "adsp_semaphore.h"
 
 static int (*ipi_queue_recv_msg_hanlder)(
 	uint32_t core_id, /* enum adsp_core_id */
@@ -104,8 +105,11 @@ void adsp_mbox_dump(void)
 	mt_irq_dump_status(adsp_mbox_table[ADSP_MBOX1_CH_ID].irq_num);
 	mt_irq_dump_status(adsp_mbox_table[ADSP_MBOX3_CH_ID].irq_num);
 #endif
+	if (get_adsp_clock_semaphore() != ADSP_OK)
+		pr_notice("%s() get adsp clock smeaphore fail\n", __func__);
 	mtk_mbox_dump_recv_pin(&adsp_mboxdev, &adsp_mbox_pin_recv[0]);
 	mtk_mbox_dump_recv_pin(&adsp_mboxdev, &adsp_mbox_pin_recv[1]);
+	release_adsp_clock_semaphore();
 }
 
 int adsp_mbox_send(struct mtk_mbox_pin_send *pin_send, void *msg,
@@ -121,6 +125,8 @@ int adsp_mbox_send(struct mtk_mbox_pin_send *pin_send, void *msg,
 			__func__, pin_send->mbox);
 		return MBOX_PIN_BUSY;
 	}
+
+	adsp_enable_clock();
 
 	if (mtk_mbox_check_send_irq(mbdev, pin_send->mbox,
 				    pin_send->pin_index)) {
@@ -154,12 +160,13 @@ int adsp_mbox_send(struct mtk_mbox_pin_send *pin_send, void *msg,
 						pin_send->pin_index)) {
 			time_ipc_us = ktime_us_delta(ktime_get(), start_time);
 			if (time_ipc_us > 1000) {/* 1 ms */
-				pr_warn("%s, time_ipc_us > 1000", __func__);
+				pr_debug("%s, time_ipc_us > 1000 (%lld us)", __func__, time_ipc_us);
 				break;
 			}
 		}
 	}
 EXIT:
+	adsp_disable_clock();
 	mutex_unlock(&pin_send->mutex_send);
 	return result;
 }
@@ -174,7 +181,12 @@ static int adsp_mbox_pin_cb(unsigned int id, void *prdata, void *buf,
 		pr_notice("%s() invalid core_id %u\n", __func__, core_id);
 		return ADSP_IPI_ERROR;
 	}
+
+	if (get_adsp_clock_semaphore() != ADSP_OK)
+		pr_notice("%s() get clock semaphore fail\n", __func__);
+
 	adsp_mt_clr_spm(core_id);
+	release_adsp_clock_semaphore();
 
 	if (id >= ADSP_NR_IPI) {
 		pr_notice("%s() invalid ipi_id %d\n", __func__, id);

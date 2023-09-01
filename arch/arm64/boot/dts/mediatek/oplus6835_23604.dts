@@ -1,0 +1,415 @@
+// SPDX-License-Identifier: (GPL-2.0 OR MIT)
+/*
+ * Copyright (C) 2022 MediaTek Inc.
+ */
+/dts-v1/;
+/plugin/;
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+#include <dt-bindings/phy/phy.h>
+#include <dt-bindings/pinctrl/mt6835-pinfunc.h>
+#include "mediatek/mt6835_6377.dtsi"
+#include "mediatek/cust_mt6835_camera.dtsi"
+#include "mediatek/cust_mt6835_lcd_mt6382_1080x2400.dtsi"
+/* #ifdef OPLUS_FEATURE_CHG_BASIC */
+/* Add for DX-2 charge device-tree */
+/*#include "mediatek/oplus_charge_23661.dtsi"*/
+/* #endif */
+
+//#ifdef OPLUS_FEATURE_SENSOR
+#include "mediatek/oplus_sensor_23661.dtsi"
+#include "mediatek/oplus_charge_23661_33w.dtsi"
+//#endif
+//#ifdef OPLUS_FEATURE_AUDIO
+#include "mediatek/mt6835-sia8100x-chongqing.dtsi"
+//#endif
+#include "mediatek/oplus_tp_23661.dtsi"
+
+/* Trustonic Mobilecore real driver */
+&mobicore{
+       trustonic,real-drv = <1>;
+};
+
+
+&odm {
+/* Add for sim detect */
+    oplus_sim_detect {
+        compatible = "oplus, sim_detect";
+        Hw,sim_det = <&pio 48 0x00>;
+    };
+};
+
+
+/* usb typec mux start */
+&pio {
+	sel_up: sel_high {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO54__FUNC_GPIO54>;
+			output-high;
+		};
+	};
+
+	sel_down: sel_low  {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO54__FUNC_GPIO54>;
+			output-low;
+		};
+	};
+
+	sw_enable: sw_enable {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO30__FUNC_GPIO30>;
+			output-high;
+		};
+	};
+
+	sw_disable: sw_disable {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO30__FUNC_GPIO30>;
+			output-high;
+		};
+	};
+};
+
+&ps5169 {
+	status = "disabled";
+};
+
+&fusb304 {
+	status = "disabled";
+};
+
+&mt6375_typec {
+	port {
+		tcpc_typec_usb: endpoint@0 {
+			remote-endpoint = <&ssusb_mux>;
+		};
+	};
+};
+
+&typec_mux_switch {
+	orientation-switch;
+	mode-switch;
+	accessory;
+	port {
+		ssusb_mux: endpoint@0 {
+			remote-endpoint = <&tcpc_typec_usb>;
+		};
+	};
+};
+/* usb typec mux end*/
+
+/* GPS GPIO standardization start */
+&pio {
+	gps_pins_default: gps_default {
+	};
+	gps_l1_lna_pins_ol: gps_l1_lna@0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO123__FUNC_GPIO123>;
+			output-low;
+		};
+	};
+	gps_l1_lna_pins_dsp_ctrl: gps_l1_lna@1 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO123__FUNC_GPS_L1_ELNA_EN>;
+		};
+	};
+	gps_l1_lna_pins_oh: gps_l1_lna@2 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO123__FUNC_GPIO123>;
+			output-high;
+		};
+	};
+	gps_l5_lna_pins_ol: gps_l5_lna@0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO124__FUNC_GPIO124>;
+			output-low;
+		};
+	};
+	gps_l5_lna_pins_dsp_ctrl: gps_l5_lna@1 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO124__FUNC_GPS_L5_ELNA_EN>;
+		};
+	};
+	gps_l5_lna_pins_oh: gps_l5_lna@2 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO124__FUNC_GPIO124>;
+			output-high;
+		};
+	};
+};
+
+&gps {
+	pinctrl-names = "default",
+		"gps_l1_lna_disable",
+		"gps_l1_lna_dsp_ctrl",
+		"gps_l1_lna_enable",
+		"gps_l5_lna_disable",
+		"gps_l5_lna_dsp_ctrl",
+		"gps_l5_lna_enable";
+	pinctrl-0 = <&gps_pins_default>;
+	pinctrl-1 = <&gps_l1_lna_pins_ol>;
+	pinctrl-2 = <&gps_l1_lna_pins_dsp_ctrl>;
+	pinctrl-3 = <&gps_l1_lna_pins_oh>;
+	pinctrl-4 = <&gps_l5_lna_pins_ol>;
+	pinctrl-5 = <&gps_l5_lna_pins_dsp_ctrl>;
+	pinctrl-6 = <&gps_l5_lna_pins_oh>;
+	status = "okay";
+};
+/* GPS GPIO standardization end */
+
+#include "mediatek/cust_mt6835_camera_chongqing_v4l2.dtsi"
+
+&pdc {
+	pd_vbus_upper_bound = <12000000>;
+};
+
+&charger{
+	enable-vbat-mon = <0>;
+};
+
+/*&gpio_keys {
+        volumedown {
+            label = "Volume_Down";
+            linux,code = <114>;
+            gpios = <&pio 19 1>;
+            wakeup-source;
+            debounce-interval = <5>;
+        };
+};*/
+&i2c6 {
+	spk: speaker_amp@5c {
+		compatible = "richtek,rt5512";
+		#sound-dai-cells = <0>;
+		reg = <0x5c>;
+		status = "okay";
+		sound-name-prefix = "Left";
+	};
+};
+
+&sound {
+	mediatek,spk-i2s = <3 0>;
+	mediatek,speaker-codec {
+		sound-dai = <&spk>;
+	};
+};
+
+
+&odm {
+/*OPLUS_FEATURE_OEM_OCDT oppo project start */
+	oplus_project:oplus_project {
+		compatible = "oplus,oplus_project";
+	};
+
+	oplus_boardid:oplus_boardid {
+		compatible = "oplus,oplus_boardid";
+		oplus_boardid,dtsino="23604";//only one u32
+		oplus_boardid,pcbmask="0xffff";//all mask 0xffff
+	};
+
+	oplus_devinfo:oplus_devinfo {
+		compatible = "oplus-devinfo";
+		pinctrl-names = "default", "aboard_gpio0_sleep", "aboard_gpio0_active", "aboard_gpio0_idle";
+		pinctrl-0 = <&hw_pins_default>;
+		pinctrl-1 = <&aboard_pin_gpio0_sleep>;
+		pinctrl-2 = <&aboard_pin_gpio0_active>;
+		pinctrl-3 = <&aboard_pin_gpio0_idle>;
+		main-sub {
+			use_tristate_gpio;
+			compatible = "hw-match, main-sub";
+			aboard-gpio0 = <&pio 111 0x00>;
+			aboard-patterns = <2>;        /*0[high-resistance] 1[pull-down] 2[pull-up]*/
+			/*main board*/
+			match-projects = <23604>;
+		};
+	};
+
+	kpd_volume_down:kpd_volume_down {
+		compatible = "mediatek, VOLUME_DOWN-eint";
+		interrupt-parent = <&pio>;
+		interrupts = <19 IRQ_TYPE_EDGE_FALLING 19 0>;
+		debounce = <32000>;
+		status = "okay";
+	};
+
+	pmic_history_count:pmic_history_count {
+	};
+	pmic_history0:pmic_history0 {
+	};
+	pmic_history1:pmic_history1 {
+	};
+	pmic_history2:pmic_history2 {
+	};
+	pmic_history3:pmic_history3 {
+	};
+
+};
+/*endif*/
+
+
+&keypad {
+        keypad,volume-down = <&pio 19 0x00>;
+        pinctrl-names = "volume_down_as_int";
+        pinctrl-0 = <&volume_down_gpio_eint>;
+        status = "okay";
+};
+
+&pio {
+        volume_down_gpio_eint:volume_down@0{
+                pins_cmd_dat {
+                        pinmux = <PINMUX_GPIO19__FUNC_GPIO19>;
+                        slew-rate = <0>;  /*direction 0:in, 1:out*/
+                        input-enable;
+                        bias-disable;
+                };
+        };
+};
+
+//#ifdef OPLUS_FEATURE_SECURITY_COMMON
+&oplus_secure_common {
+	compatible = "oplus,secure_common";
+	oplus,sec_reg_num = <0>;
+	oplus,sec_en_anti_reg = <0>;
+	oplus,sec_override1_reg = <0>;
+	oplus,override1_en_value = <0>;
+};
+//#endif
+
+/* FINGERPRINT start */
+&spi1 {
+#address-cells = <1>;
+#size-cells = <0>;
+status = "okay";
+oplus_fp: fingerprint@0 {
+		compatible = "oplus,fp_spi";
+		reg = <0>;
+		spi-max-frequency = <52000000>;
+		spi-id = <1>;
+		spi-irq = <15>;
+		spi-reg = <11011000>;
+
+		uff,gpio_irq = <&pio 15 0x00>;
+		uff,gpio_reset = <&pio 7 0x00>;
+		uff,gpio_cs = <&pio 61 0x00>;
+		pinctrl-names = "default", "fp_spi_driver", "fp_cs_func", "gpio_cs_pull_down";
+		pinctrl-0 = <&gpio_uff_irq_default>, <&gpio_uff_reset_default>, <&gpio_uff_cs_default>;
+		pinctrl-1 = <&gpio_uff_clk_6mA>, <&gpio_uff_mosi_6mA>, <&gpio_uff_miso_6mA>, <&gpio_uff_cs_6mA>;
+		pinctrl-2 = <&gpio_uff_cs_func>;
+		pinctrl-3 = <&gpio_uff_cs_pull_down>;
+
+		dvdd-supply = <&mt6377_vfp>;
+		dvdd-config = <3000000 3000000 150000>;
+		power-num = <1>;
+		status = "okay";
+		power_source_1 {
+			power-mode = <1>;
+			power-name = "dvdd";
+			power-config = "dvdd-config";
+			delay-time = <0>;
+		};
+	};
+};
+
+&pio{
+gpio_uff_reset_default: gpio_uff_reset_default {
+				pins_cmd_dat {
+					pinmux = <PINMUX_GPIO7__FUNC_GPIO7>;
+					slew-rate = <1>;
+					output-low;
+				};
+			};
+gpio_uff_irq_default: gpio_uff_irq_default {
+				pins_cmd_dat {
+					pinmux = <PINMUX_GPIO15__FUNC_GPIO15>;
+					slew-rate = <1>;
+					bias-disable;
+					output-low;
+				};
+			};
+
+gpio_uff_cs_default: gpio_uff_cs_default {
+				pins_cmd_dat {
+					pinmux = <PINMUX_GPIO61__FUNC_GPIO61>;
+					slew-rate = <1>;
+					bias-disable;
+					output-low;
+				};
+			};
+
+
+gpio_uff_clk_6mA: gpio_uff_clk_6mA {
+				pins_cmd_dat {
+					pinmux = <PINMUX_GPIO60__FUNC_SPI1_CLK>;
+					drive-strength = <2>;
+				};
+			};
+gpio_uff_mosi_6mA: gpio_uff_mosi_6mA {
+				pins_cmd_dat {
+					pinmux = <PINMUX_GPIO62__FUNC_SPI1_MO>;
+					drive-strength = <2>;
+				};
+			};
+gpio_uff_miso_6mA: gpio_uff_miso_6mA {
+				pins_cmd_dat {
+					pinmux = <PINMUX_GPIO63__FUNC_SPI1_MI>;
+					drive-strength = <2>;
+				};
+			};
+
+gpio_uff_cs_6mA: gpio_uff_cs_6mA {
+				pins_cmd_dat {
+					pinmux = <PINMUX_GPIO61__FUNC_SPI1_CSB>;
+					drive-strength = <2>;
+				};
+			};
+
+gpio_uff_cs_func: gpio_uff_cs_func {
+					pins_cmd_dat {
+					pinmux = <PINMUX_GPIO61__FUNC_SPI1_CSB>;
+					drive-strength = <2>;
+				};
+			};
+
+gpio_uff_cs_pull_down:gpio_uff_cs_pull_down{
+                    pins_cmd_dat{
+                    pinmux = <PINMUX_GPIO61__FUNC_GPIO61>;
+                    slew-rate = <1>;
+                    output-low;
+                };
+            };
+
+	hw_pins_default:default@hw_sub_id {
+	};
+
+	aboard_pin_gpio0_sleep:sleep@id0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO111__FUNC_GPIO111>;
+			slew-rate = <0>;
+			bias-pull-down;
+			input-enable;
+		};
+	};
+
+	aboard_pin_gpio0_active:active@id0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO111__FUNC_GPIO111>;
+			slew-rate = <0>;
+			bias-pull-up;
+			input-enable;
+		};
+	};
+
+	aboard_pin_gpio0_idle:idle@id0 {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO111__FUNC_GPIO111>;
+			slew-rate = <0>;
+			bias-disable;
+			input-enable;
+		};
+	};
+};
+/* FINGERPRINT end */
+#include <oplus6835_23604/cust.dtsi>
+#include "mediatek/cust_mt6835_chongqing_thermal.dtsi"
+/*#include "mediatek/cust_mt6985_luna_thermal.dtsi"*/
+/*End of this file, DO NOT ADD ANYTHING HERE*/

@@ -19,11 +19,13 @@
 #include <mt-plat/mtk_gpu_utility.h>
 #include "ged_notify_sw_vsync.h"
 #include "ged_log.h"
+#include "ged_tracepoint.h"
 #include "ged_base.h"
 #include "ged_monitor_3D_fence.h"
 #include "ged.h"
 #include "ged_dvfs.h"
 #include "ged_dcs.h"
+#include "ged_kpi.h"
 
 #if defined(CONFIG_MTK_GPUFREQ_V2)
 #include <ged_gpufreq_v2.h>
@@ -67,7 +69,7 @@ struct GED_NOTIFY_SW_SYNC {
 struct GED_NOTIFY_SW_SYNC loading_base_notify[MAX_NOTIFY_CNT];
 int notify_index;
 static enum gpu_dvfs_policy_state g_policy_state = POLICY_STATE_INIT;
-static enum gpu_dvfs_policy_state g_policy_state_pre = POLICY_STATE_INIT;
+static enum gpu_dvfs_policy_state g_prev_policy_state = POLICY_STATE_INIT;
 
 int (*ged_sw_vsync_event_fp)(bool bMode) = NULL;
 EXPORT_SYMBOL(ged_sw_vsync_event_fp);
@@ -115,15 +117,19 @@ enum gpu_dvfs_policy_state ged_get_policy_state(void)
 	return g_policy_state;
 }
 
-enum gpu_dvfs_policy_state ged_get_policy_state_pre(void)
+enum gpu_dvfs_policy_state ged_get_prev_policy_state(void)
 {
-	return g_policy_state_pre;
+	return g_prev_policy_state;
 }
 
 void ged_set_policy_state(enum gpu_dvfs_policy_state state)
 {
-	g_policy_state_pre = g_policy_state;
 	g_policy_state = state;
+}
+
+void ged_set_prev_policy_state(enum gpu_dvfs_policy_state state)
+{
+	g_prev_policy_state = state;
 }
 
 static unsigned long long sw_vsync_ts;
@@ -182,6 +188,11 @@ static void ged_notify_sw_sync_work_handle(struct work_struct *psWork)
 		}
 		mutex_unlock(&gsPolicyLock);
 	}
+#if defined(MTK_GPU_FW_IDLE)
+	/* set initial idle time to 5ms if runtime policy stay default flavor */
+	if (ged_kpi_is_fw_idle_policy_enable() == -1)
+		mtk_set_gpu_idle(5);
+#endif /* MTK_GPU_FW_IDLE */
 }
 
 #define GED_VSYNC_MISS_QUANTUM_NS 16666666
@@ -189,7 +200,6 @@ static void ged_notify_sw_sync_work_handle(struct work_struct *psWork)
 #ifdef ENABLE_COMMON_DVFS
 static unsigned long long hw_vsync_ts;
 #endif
-static unsigned long long g_ns_gpu_on_ts;
 static unsigned long long g_ns_gpu_off_ts;
 
 static bool g_timer_on;
@@ -234,9 +244,6 @@ void ged_set_backup_timer_timeout(u64 time_out)
 		g_fallback_time_out = time_out;
 	else
 		g_fallback_time_out = GED_DVFS_FB_TIMER_TIMEOUT;
-
-	ged_log_perf_trace_counter("lb_timer",
-		(long long)g_fallback_time_out / 1000000, 5566, 0, 0);
 }
 
 
@@ -490,8 +497,10 @@ void ged_dvfs_gpu_clock_switch_notify(enum ged_gpu_power_state power_state)
 			ged_log_buf_print(ghLogBuf_DVFS,
 				"[GED_K] Timer Already Start");
 		} else {
+			mutex_lock(&gsPolicyLock);
 			hrtimer_start(&g_HT_hwvsync_emu,
-			ns_to_ktime(GED_DVFS_TIMER_TIMEOUT), HRTIMER_MODE_REL);
+				ns_to_ktime(GED_DVFS_TIMER_TIMEOUT), HRTIMER_MODE_REL);
+			mutex_unlock(&gsPolicyLock);
 			ged_log_buf_print(ghLogBuf_DVFS,
 				"[GED_K] HW Start Timer");
 			timer_switch(true);
@@ -503,7 +512,7 @@ void ged_dvfs_gpu_clock_switch_notify(enum ged_gpu_power_state power_state)
 		ged_log_buf_print(ghLogBuf_DVFS, "[GED_K] Buck-off");
 	}
 	// Update power on/off state
-	ged_log_perf_trace_counter("gpu_state", power_state, 5566, 0, 0);
+	trace_tracing_mark_write(5566, "gpu_state", power_state);
 }
 EXPORT_SYMBOL(ged_dvfs_gpu_clock_switch_notify);
 

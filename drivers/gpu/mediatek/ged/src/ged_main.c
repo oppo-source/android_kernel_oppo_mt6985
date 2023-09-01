@@ -27,6 +27,7 @@
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
+#include <linux/nvmem-consumer.h>
 
 #ifdef GED_DEBUG_FS
 #include "ged_debugFS.h"
@@ -43,6 +44,7 @@
 #include "ged_gpu_tuner.h"
 #include "ged_eb.h"
 #include "ged_global.h"
+#include "ged_type.h"
 #include "ged_dcs.h"
 #include "mtk_drm_arr.h"
 #if defined(CONFIG_MTK_GPUFREQ_V2)
@@ -136,6 +138,8 @@ unsigned int g_fastdvfs_mode;
 unsigned int g_fastdvfs_margin;
 #define GED_TARGET_UNLIMITED_FPS 240
 unsigned int vGed_Tmp;
+unsigned int g_ged_segment_id;
+unsigned int g_ged_efuse_id;
 
 /******************************************************************************
  * GED File operations
@@ -188,47 +192,42 @@ static long ged_dispatch(struct file *pFile,
 
 	/* We make sure the both size are GE 0 integer.
 	 */
-	if (psBridgePackageKM->i32InBufferSize >= 0
-		&& psBridgePackageKM->i32OutBufferSize >= 0) {
+	if (psBridgePackageKM->i32InBufferSize > 0 &&
+		psBridgePackageKM->i32OutBufferSize > 0) {
+		int32_t inputBufferSize =
+				psBridgePackageKM->i32InBufferSize;
 
-		if (psBridgePackageKM->i32InBufferSize > 0) {
-			int32_t inputBufferSize =
-					psBridgePackageKM->i32InBufferSize;
-
-			if (GED_BRIDGE_COMMAND_GE_ALLOC ==
-					GED_GET_BRIDGE_ID(
-					psBridgePackageKM->ui32FunctionID)) {
-				inputBufferSize = sizeof(int) +
-				sizeof(uint32_t) * GE_ALLOC_STRUCT_NUM;
-				// hardcode region_num = GE_ALLOC_STRUCT_NUM,
-				// need check input buffer size
-				if (psBridgePackageKM->i32InBufferSize !=
-					inputBufferSize) {
-					GED_LOGE("Failed to regoin_num,it must be %d\n",
-						GE_ALLOC_STRUCT_NUM);
-					goto dispatch_exit;
-				}
-			}
-			pvIn = kmalloc(inputBufferSize, GFP_KERNEL);
-
-			if (pvIn == NULL)
-				goto dispatch_exit;
-
-			if (ged_copy_from_user(pvIn,
-				psBridgePackageKM->pvParamIn,
-				inputBufferSize) != 0) {
-				GED_LOGE("Failed to ged_copy_from_user\n");
+		if (GED_BRIDGE_COMMAND_GE_ALLOC ==
+				GED_GET_BRIDGE_ID(
+				psBridgePackageKM->ui32FunctionID)) {
+			inputBufferSize = sizeof(int) +
+			sizeof(uint32_t) * GE_ALLOC_STRUCT_NUM;
+			// hardcode region_num = GE_ALLOC_STRUCT_NUM,
+			// need check input buffer size
+			if (psBridgePackageKM->i32InBufferSize <
+				inputBufferSize) {
+				GED_LOGE("Failed to region_num, it must be %d\n",
+					GE_ALLOC_STRUCT_NUM);
 				goto dispatch_exit;
 			}
 		}
 
-		if (psBridgePackageKM->i32OutBufferSize > 0) {
-			pvOut = kzalloc(psBridgePackageKM->i32OutBufferSize,
-				GFP_KERNEL);
+		pvIn = kmalloc(inputBufferSize, GFP_KERNEL);
+		if (pvIn == NULL)
+			goto dispatch_exit;
 
-			if (pvOut == NULL)
-				goto dispatch_exit;
+		if (ged_copy_from_user(pvIn,
+			psBridgePackageKM->pvParamIn,
+			inputBufferSize) != 0) {
+			GED_LOGE("Failed to ged_copy_from_user\n");
+			goto dispatch_exit;
 		}
+
+		pvOut = kzalloc(psBridgePackageKM->i32OutBufferSize,
+			GFP_KERNEL);
+		if (pvOut == NULL)
+			goto dispatch_exit;
+
 		/* Make sure that the UM will never break the KM.
 		 * Check IO size are both matched the size of IO sturct.
 		 */
@@ -346,11 +345,9 @@ static long ged_dispatch(struct file *pFile,
 			break;
 		}
 
-		if (psBridgePackageKM->i32OutBufferSize > 0) {
-			if (ged_copy_to_user(psBridgePackageKM->pvParamOut,
+		if (ged_copy_to_user(psBridgePackageKM->pvParamOut,
 			pvOut, psBridgePackageKM->i32OutBufferSize) != 0) {
-				goto dispatch_exit;
-			}
+			goto dispatch_exit;
 		}
 	}
 
@@ -486,6 +483,52 @@ GED_ERROR check_eb_config(void)
 /******************************************************************************
  * Module related
  *****************************************************************************/
+static int ged_segment_id_init(struct platform_device *pdev)
+{
+	int ret = GED_OK;
+
+	struct nvmem_cell *efuse_cell;
+	unsigned int *efuse_buf;
+	size_t efuse_len;
+
+	efuse_cell = nvmem_cell_get(&pdev->dev, "mt6985_efuse_segment_cell");
+	if (IS_ERR(efuse_cell)) {
+		GED_LOGE("fail to get mt6985_efuse_segment_cell (%ld)", PTR_ERR(efuse_cell));
+		//ret = PTR_ERR(efuse_cell);
+		g_ged_segment_id = NO_SEGMENT;
+		goto done;
+	}
+
+	efuse_buf = (unsigned int *)nvmem_cell_read(efuse_cell, &efuse_len);
+	nvmem_cell_put(efuse_cell);
+	if (IS_ERR(efuse_buf)) {
+		GED_LOGE("fail to get efuse_buf (%ld)", PTR_ERR(efuse_buf));
+		ret = PTR_ERR(efuse_buf);
+		goto done;
+	}
+
+	g_ged_efuse_id = (*efuse_buf & 0xFF);
+	kfree(efuse_buf);
+
+	switch (g_ged_efuse_id) {
+	case 0x1:
+		g_ged_segment_id = MT6985W_CZA_SEGMENT;
+		break;
+	case 0x3:
+		g_ged_segment_id = MT6985W_TCZA_SEGMENT;
+		break;
+	default:
+		g_ged_segment_id = MT6985W_CZA_SEGMENT;
+		break;
+	}
+
+done:
+	GED_LOGI("efuse_id: 0x%x, segment_id: %d", g_ged_efuse_id, g_ged_segment_id);
+
+	return ret;
+}
+
+
 /*
  * ged driver probe
  */
@@ -553,9 +596,21 @@ static int ged_pdrv_probe(struct platform_device *pdev)
 	}
 #endif
 
+	err = ged_segment_id_init(pdev);
+	if (unlikely(err != GED_OK)) {
+		GED_LOGE("Failed to init segment id!\n");
+		goto ERROR;
+	}
+
 	err = ged_gpufreq_init();
 	if (unlikely(err != GED_OK)) {
 		GED_LOGE("Failed to init GPU Freq!\n");
+		goto ERROR;
+	}
+
+	err = ged_dvfs_init_opp_cost();
+	if (unlikely(err != GED_OK)) {
+		GED_LOGE("failed to init opp cost\n");
 		goto ERROR;
 	}
 

@@ -28,7 +28,20 @@
 #include "mtk_drm_fb.h"
 #include "mtk_layering_rule.h"
 #include "mtk_drm_trace.h"
+#include "mtk_disp_rdma.h"
+#include "platform/mtk_drm_platform.h"
 //#include "swpm_me.h"
+#ifdef OPLUS_FEATURE_DISPLAY
+#include <soc/oplus/system/oplus_mm_kevent_fb.h>
+#endif
+
+#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+#include "oplus_adfr.h"
+
+unsigned long long last_rdma_start_time = 0;
+extern int g_commit_pid;
+extern int oplus_adfr_cancel_fakeframe(void);
+#endif  /* OPLUS_FEATURE_DISPLAY_ADFR */
 
 int disp_met_set(void *data, u64 val);
 
@@ -216,26 +229,6 @@ enum GS_RDMA_FLD {
 	GS_RDMA_FLD_NUM,
 };
 
-struct mtk_disp_rdma_data {
-	/* golden setting */
-	unsigned int fifo_size;
-	unsigned int pre_ultra_low_us;
-	unsigned int pre_ultra_high_us;
-	unsigned int ultra_low_us;
-	unsigned int ultra_high_us;
-	unsigned int urgent_low_us;
-	unsigned int urgent_high_us;
-
-	void (*sodi_config)(struct drm_device *drm, enum mtk_ddp_comp_id id,
-			    struct cmdq_pkt *handle, void *data);
-	unsigned int shadow_update_reg;
-	bool support_shadow;
-	bool need_bypass_shadow;
-	bool has_greq_urg_num;
-	bool is_support_34bits;
-	bool dsi_buffer;
-};
-
 struct mtk_rdma_backup_info {
 	dma_addr_t addr;
 };
@@ -279,6 +272,7 @@ static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
 	struct mtk_drm_crtc *mtk_crtc = NULL;
 	unsigned int val = 0;
 	unsigned int ret = 0;
+	ktime_t cur_time;
 
 	if (IS_ERR_OR_NULL(priv))
 		return IRQ_NONE;
@@ -349,13 +343,22 @@ static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
 				atomic_set(&mtk_crtc->signal_irq_for_pre_fence, 1);
 				wake_up_interruptible(&(mtk_crtc->signal_irq_for_pre_fence_wq));
 			}
+
+			#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+			/* add for mux switch control */
+			if (oplus_adfr_is_support() && (oplus_adfr_get_vsync_mode() == OPLUS_EXTERNAL_TE_TP_VSYNC)) {
+				oplus_adfr_frame_done_vsync_switch(mtk_crtc);
+			}
+			#endif /*  OPLUS_FEATURE_DISPLAY_ADFR  */
 		}
 		mtk_drm_refresh_tag_end(&priv->ddp_comp);
 	}
 
 	if (val & (1 << 1)) {
-		if (rdma->id == DDP_COMPONENT_RDMA0)
+		if (rdma->id == DDP_COMPONENT_RDMA0) {
+			cur_time = ktime_get();
 			DRM_MMP_EVENT_START(rdma0, val, 0);
+		}
 		DDPIRQ("[IRQ] %s: frame start!\n", mtk_dump_comp_str(rdma));
 		mtk_drm_refresh_tag_start(&priv->ddp_comp);
 		MMPathTraceDRM(rdma);
@@ -368,13 +371,29 @@ static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
 				struct drm_crtc *crtc = &mtk_crtc->base;
 				unsigned int crtc_idx = drm_crtc_index(crtc);
 				unsigned int pf_idx;
+				int vrefresh = 0;
 
+				vrefresh = drm_mode_vrefresh(
+						&mtk_crtc->base.state->adjusted_mode);
+				if (vrefresh > 0 &&
+				    ktime_to_us(cur_time - mtk_crtc->pf_time) >=
+				     (500000 / vrefresh)) {
+					mtk_crtc->pf_time = cur_time;
+				}
 				pf_idx = readl(mtk_get_gce_backup_slot_va(mtk_crtc,
 					DISP_SLOT_PRESENT_FENCE(crtc_idx)));
 				atomic_set(&drm_priv->crtc_rel_present[crtc_idx], pf_idx);
 				atomic_set(&mtk_crtc->pf_event, 1);
 				wake_up_interruptible(&mtk_crtc->present_fence_wq);
 			}
+			#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+			last_rdma_start_time = sched_clock();
+			mtk_drm_trace_c("%d|rdmastart|%d", g_commit_pid, 1);
+			mtk_drm_trace_c("%d|rdmastart|%d", g_commit_pid, 0);
+			if (oplus_adfr_fakeframe_is_enable()) {
+				oplus_adfr_cancel_fakeframe();
+			}
+			#endif /* OPLUS_FEATURE_DISPLAY_ADFR  */
 		}
 	}
 
@@ -410,6 +429,11 @@ static irqreturn_t mtk_disp_rdma_irq_handler(int irq, void *dev_id)
 				DDPAEE("%s: underflow! cnt=%d\n",
 				       mtk_dump_comp_str(rdma),
 				       priv->underflow_cnt);
+#ifdef OPLUS_FEATURE_DISPLAY
+				       if ((priv->underflow_cnt) < 5) {
+				       mm_fb_display_kevent("DisplayDriverID@@502$$", MM_FB_KEY_RATELIMIT_1H, "underflow cnt=%d", priv->underflow_cnt);
+				       }
+#endif
 			}
 		}
 
@@ -1808,6 +1832,8 @@ static const struct of_device_id mtk_disp_rdma_driver_dt_match[] = {
 	 .data = &mt6879_rdma_driver_data},
 	{.compatible = "mediatek,mt6855-disp-rdma",
 	 .data = &mt6855_rdma_driver_data},
+	{.compatible = "mediatek,mt6835-disp-rdma",
+	 .data = &mt6835_rdma_driver_data},
 	{},
 };
 MODULE_DEVICE_TABLE(of, mtk_disp_rdma_driver_dt_match);

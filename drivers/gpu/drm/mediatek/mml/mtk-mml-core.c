@@ -604,6 +604,10 @@ static s32 core_enable(struct mml_task *task, u32 pipe)
 	cmdq_util_prebuilt_init(CMDQ_PREBUILT_MML);
 #endif
 
+	/* callback disp for later config ddren in dispsys */
+	if (pipe == 0)
+		task->config->task_ops->dispen(task, true);
+
 	task->pipe[pipe].en.clk = true;
 	mml_clock_unlock(task->config->mml);
 
@@ -646,6 +650,10 @@ static s32 core_disable(struct mml_task *task, u32 pipe)
 	mml_trace_ex_begin("%s_%s_%u", __func__, "cmdq", pipe);
 	cmdq_mbox_disable(((struct cmdq_client *)task->pkts[pipe]->cl)->chan);
 	mml_trace_ex_end();
+
+	/* callback disp to turn off dispsys */
+	if (pipe == 0)
+		task->config->task_ops->dispen(task, false);
 
 	/* reset back to disabled */
 	task->pipe[pipe].en.clk = false;
@@ -823,7 +831,7 @@ static void mml_core_dvfs_begin(struct mml_task *task, u32 pipe)
 	boost_time = div_u64((u64)cfg->dvfs_boost_time.tv_sec * 1000000000 +
 		cfg->dvfs_boost_time.tv_nsec, 1000);
 	mml_trace_begin("%u_%llu_%llu", throughput, duration, boost_time);
-
+	task->freq_time[pipe] = sched_clock();
 	path_clt->throughput = throughput;
 	tput_up = mml_qos_update_tput(cfg->mml);
 
@@ -834,6 +842,7 @@ static void mml_core_dvfs_begin(struct mml_task *task, u32 pipe)
 		goto done;
 	/* clear so that qos set api report max bw */
 	task_pipe_tmp->bandwidth = 0;
+	task->bw_time[pipe] = sched_clock();
 	mml_core_qos_set(task_pipe_tmp->task, pipe, throughput, tput_up);
 
 	mml_trace_end();
@@ -1476,6 +1485,7 @@ static s32 core_flush(struct mml_task *task, u32 pipe)
 	core_enable(task, pipe);
 
 	/* before flush, wait buffer fence being signaled */
+	task->wait_fence_time[pipe] = sched_clock();
 	wait_dma_fence("src", task->buf.src.fence, task->job.jobid);
 	if (task->config->info.dest[0].pq_config.en_region_pq)
 		wait_dma_fence("src", task->buf.seg_map.fence,
@@ -1561,6 +1571,7 @@ static s32 core_flush(struct mml_task *task, u32 pipe)
 	mml_core_dvfs_begin(task, pipe);
 
 	mml_trace_ex_begin("%s_cmdq", __func__);
+	task->flush_time[pipe] = sched_clock();
 	mml_mmp(flush, MMPROFILE_FLAG_PULSE, task->job.jobid,
 		(unsigned long)task->pkts[pipe]);
 	ret = cmdq_pkt_flush_async(pkt, core_taskdone_cb, (void *)task->pkts[pipe]);
@@ -1579,6 +1590,7 @@ static void core_config_pipe(struct mml_task *task, u32 pipe)
 	s32 err;
 
 	mml_trace_ex_begin("%s_%u", __func__, pipe);
+	task->config_pipe_time[pipe] = sched_clock();
 
 	err = core_config(task, pipe);
 	if (err < 0) {
@@ -1808,9 +1820,12 @@ void mml_core_deinit_config(struct mml_frame_config *cfg)
 
 	/* make command, engine allocated private data */
 	for (pipe = 0; pipe < MML_PIPE_CNT; pipe++) {
-		for (i = 0; i < cfg->path[pipe]->node_cnt; i++)
-			kfree(cfg->cache[pipe].cfg[i].data);
-		destroy_tile_output(cfg->tile_output[pipe]);
+		if (cfg->path[pipe]) {
+			for (i = 0; i < cfg->path[pipe]->node_cnt; i++)
+				kfree(cfg->cache[pipe].cfg[i].data);
+		}
+		if (cfg->tile_output[pipe])
+			destroy_tile_output(cfg->tile_output[pipe]);
 	}
 	core_destroy_wq(&cfg->wq_done);
 }

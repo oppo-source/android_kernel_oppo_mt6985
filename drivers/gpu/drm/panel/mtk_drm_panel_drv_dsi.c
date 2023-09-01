@@ -6,9 +6,9 @@
 #include <linux/sched.h>
 #include "mtk_drm_panel_drv.h"
 
-#ifdef CONFIG_MTK_ROUND_CORNER_SUPPORT
-#include "../mediatek/mtk_corner_pattern/mtk_data_hw_roundedpattern.h"
-#endif
+// #ifdef CONFIG_MTK_ROUND_CORNER_SUPPORT
+// #include "../mediatek/mtk_corner_pattern/mtk_data_hw_roundedpattern.h"
+// #endif
 
 #define MAX_PANEL_OPERATION_NAME (256)
 #define MTK_DRM_PANEL_DEBUG

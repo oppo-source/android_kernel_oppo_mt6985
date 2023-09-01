@@ -26,13 +26,16 @@
 #include "mtk_drm_graphics_base.h"
 #include "mtk_drm_helper.h"
 #include "mtk_drm_drv.h"
+#include "mtk_disp_ovl.h"
 #include "mtk_disp_pmqos.h"
+#include "mtk_drm_assert.h"
 #ifdef IF_ZERO
 #include "mtk_iommu_ext.h"
 #endif
 #include "mtk_layer_layout_trace.h"
 #include "mtk_drm_mmp.h"
 #include "mtk_drm_gem.h"
+#include "platform/mtk_drm_platform.h"
 
 #include "slbc_ops.h"
 #include "../mml/mtk-mml.h"
@@ -226,6 +229,7 @@ int mtk_dprec_mmp_dump_ovl_layer(struct mtk_plane_state *plane_state);
 #define DISP_REG_OVL_CLRFMT_EXT (0x2D0UL)
 #define FLD_Ln_CLRFMT_NB(n) REG_FLD_MSB_LSB((n)*4 + 1, (n)*4)
 #define FLD_ELn_CLRFMT_NB(n) REG_FLD_MSB_LSB((n)*4 + 17, (n)*4 + 16)
+#define DISP_REG_OVL_WCG_CFG0 (0x2D4UL)
 #define DISP_REG_OVL_WCG_CFG1 (0x2D8UL)
 #define FLD_Ln_IGAMMA_EN(n) REG_FLD_MSB_LSB((n)*4, (n)*4)
 #define FLD_Ln_CSC_EN(n) REG_FLD_MSB_LSB((n)*4 + 1, (n)*4 + 1)
@@ -251,7 +255,6 @@ int mtk_dprec_mmp_dump_ovl_layer(struct mtk_plane_state *plane_state);
 #define DISP_REG_OVL_EL0_CLR(n) (0x390UL + 0x4 * (n))
 #define DISP_REG_OVL_ADDR_MT2701 0x0040
 #define DISP_REG_OVL_ADDR_MT6779 0x0f40
-#define DISP_REG_OVL_ADDR_BASE 0x0f40
 #define DISP_REG_OVL_ADDR_MT8173 0x0f40
 #define DISP_REG_OVL_ADDR(module, n) ((module)->data->addr + 0x20 * (n))
 
@@ -441,46 +444,6 @@ enum mtk_ovl_transfer { DECLARE_MTK_OVL_TRANSFER(DECLARE_NUM) };
 static const char * const mtk_ovl_transfer_str[] = {
 	DECLARE_MTK_OVL_TRANSFER(DECLARE_STR)};
 
-struct compress_info {
-	/* naming rule: tech_version_MTK_sub-version,
-	 * i.e.: PVRIC_V3_1_MTK_1
-	 * sub-version is used when compression version is the same
-	 * but mtk decoder is different among platforms.
-	 */
-	const char name[25];
-
-	bool (*l_config)(struct mtk_ddp_comp *comp,
-			unsigned int idx, struct mtk_plane_state *state,
-			struct cmdq_pkt *handle);
-};
-
-struct mtk_disp_ovl_data {
-	unsigned int addr;
-	unsigned int el_addr_offset;
-	unsigned int el_hdr_addr;
-	unsigned int el_hdr_addr_offset;
-	bool fmt_rgb565_is_0;
-	unsigned int fmt_uyvy;
-	unsigned int fmt_yuyv;
-	const struct compress_info *compr_info;
-	bool support_shadow;
-	bool need_bypass_shadow;
-	/* golden setting */
-	unsigned int preultra_th_dc;
-	unsigned int fifo_size;
-	unsigned int issue_req_th_dl;
-	unsigned int issue_req_th_dc;
-	unsigned int issue_req_th_urg_dl;
-	unsigned int issue_req_th_urg_dc;
-	unsigned int greq_num_dl;
-	bool is_support_34bits;
-	unsigned int (*aid_sel_mapping)(struct mtk_ddp_comp *comp);
-	bool aid_per_layer_setting;
-	resource_size_t (*mmsys_mapping)(struct mtk_ddp_comp *comp);
-	unsigned int source_bpc;
-	bool support_pq_selfloop;
-};
-
 #define MAX_LAYER_NUM 4
 struct mtk_ovl_backup_info {
 	unsigned int layer;
@@ -501,6 +464,7 @@ struct mtk_disp_ovl {
 	struct mtk_ddp_comp ddp_comp;
 	const struct mtk_disp_ovl_data *data;
 	unsigned int underflow_cnt;
+	bool ovl_dis;
 	int bg_w, bg_h;
 	struct clk *fbdc_clk;
 	struct mtk_ovl_backup_info backup_info[MAX_LAYER_NUM];
@@ -724,6 +688,104 @@ unsigned int mtk_ovl_aid_sel_MT6879(struct mtk_ddp_comp *comp)
 	}
 }
 
+bool is_right_ovl_comp_MT6985(struct mtk_ddp_comp *comp)
+{
+	switch (comp->id) {
+	case DDP_COMPONENT_OVL0_2L:
+	case DDP_COMPONENT_OVL1_2L:
+	case DDP_COMPONENT_OVL2_2L:
+	case DDP_COMPONENT_OVL3_2L:
+		return false;
+	case DDP_COMPONENT_OVL4_2L:
+	case DDP_COMPONENT_OVL5_2L:
+	case DDP_COMPONENT_OVL6_2L:
+	case DDP_COMPONENT_OVL7_2L:
+		return true;
+	default:
+		DDPPR_ERR("%s invalid ovl module=%d\n", __func__, comp->id);
+		return false;
+	}
+}
+
+/* following ULTRA_SEL define combine ULTRA and PREULTRA bitfield in fact */
+#define MT6985_FLD_OVL0_2L_RDMA_ULTRA_SEL	REG_FLD_MSB_LSB(5, 2)
+#define MT6985_FLD_OVL1_2L_RDMA_ULTRA_SEL	REG_FLD_MSB_LSB(9, 6)
+#define MT6985_FLD_OVL2_2L_RDMA_ULTRA_SEL	REG_FLD_MSB_LSB(13, 10)
+#define MT6985_FLD_OVL3_2L_RDMA_ULTRA_SEL	REG_FLD_MSB_LSB(17, 14)
+#define MT6985_DISP0_DSI_BUFFER		((0x0 << 2) | 0x0)
+#define MT6985_DISP1_DSI_BUFFER		((0x1 << 2) | 0x1)
+#define MT6985_DISP0_DP_BUFFER		((0x2 << 2) | 0x2)
+#define MT6985_DEFAULT_BUFFER		((0x3 << 2) | 0x3)
+static void mtk_ovl_ultra_src_sel_MT6985(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
+{
+	struct mtk_disp_ovl *ovl = comp_to_ovl(comp);
+	struct drm_crtc *crtc;
+	struct mtk_drm_crtc *mtk_crtc;
+	struct mtk_ddp_comp *output_comp;
+	resource_size_t mmsys_reg = 0;
+	unsigned int i_value = 0, i_mask = 0, value, mask;
+
+
+	if (unlikely(ovl == NULL)) {
+		DDPPR_ERR("%s invalid ovl\n", __func__);
+		return;
+	}
+
+	if (unlikely(ovl->data == NULL)) {
+		DDPPR_ERR("%s invalid ovl->data\n", __func__);
+		return;
+	}
+	if (unlikely(ovl->data->mmsys_mapping == NULL)) {
+		DDPPR_ERR("%s invalid ovl->data->mmsys_mapping\n", __func__);
+		return;
+	}
+	mtk_crtc = comp->mtk_crtc;
+	if (unlikely(mtk_crtc == NULL)) {
+		DDPPR_ERR("%s invalid mtk_crtc\n", __func__);
+		return;
+	}
+	crtc = &mtk_crtc->base;
+
+	output_comp = mtk_ddp_comp_request_output(comp->mtk_crtc);
+	if (output_comp) {
+		if (mtk_ddp_comp_get_type(output_comp->id) == MTK_DSI)
+			i_value = (output_comp->id == DDP_COMPONENT_DSI0) ?
+				MT6985_DISP0_DSI_BUFFER : MT6985_DISP1_DSI_BUFFER;
+		else if (mtk_ddp_comp_get_type(output_comp->id) == MTK_DP_INTF)
+			i_value = MT6985_DISP0_DP_BUFFER;
+		else
+			i_value = MT6985_DEFAULT_BUFFER;
+	}
+	switch (comp->id) {
+	case DDP_COMPONENT_OVL0_2L:
+	case DDP_COMPONENT_OVL4_2L:
+		i_mask = MT6985_FLD_OVL0_2L_RDMA_ULTRA_SEL;
+		break;
+	case DDP_COMPONENT_OVL1_2L:
+	case DDP_COMPONENT_OVL5_2L:
+		i_mask = MT6985_FLD_OVL1_2L_RDMA_ULTRA_SEL;
+		break;
+	case DDP_COMPONENT_OVL2_2L:
+	case DDP_COMPONENT_OVL6_2L:
+		i_mask = MT6985_FLD_OVL2_2L_RDMA_ULTRA_SEL;
+		break;
+	case DDP_COMPONENT_OVL3_2L:
+	case DDP_COMPONENT_OVL7_2L:
+		i_mask = MT6985_FLD_OVL3_2L_RDMA_ULTRA_SEL;
+		break;
+	default:
+		DDPPR_ERR("%s:%d invalid OVL comp %u\n", __func__, __LINE__, comp->id);
+		break;
+	}
+
+	value = 0;
+	mask = 0;
+	SET_VAL_MASK(value, mask, i_value, i_mask);
+	mmsys_reg = ovl->data->mmsys_mapping(comp);
+
+	cmdq_pkt_write(handle, comp->cmdq_base, mmsys_reg + MMSYS_MISC, value, mask);
+}
+
 int mtk_ovl_aid_bit(struct mtk_ddp_comp *comp, bool is_ext, int id)
 {
 	if (is_ext)
@@ -894,6 +956,9 @@ static irqreturn_t mtk_disp_ovl_irq_handler(int irq, void *dev_id)
 		DDPIRQ("[IRQ] %s: frame done!\n", mtk_dump_comp_str(ovl));
 
 		dump_ovl_layer_trace(mtk_crtc, ovl);
+
+		if ((ovl->id == DDP_COMPONENT_OVL0_2L) && mtk_crtc_is_frame_trigger_mode(&mtk_crtc->base))
+		   atomic_set(&mtk_crtc->esd_ctx->target_time, 0);
 	}
 	if ((ovl->id == DDP_COMPONENT_OVL0_2L) && (val & (1 << 15))) {
 		DDPIRQ("[IRQ] %s: OVL target line\n", mtk_dump_comp_str(ovl));
@@ -1006,6 +1071,13 @@ static void mtk_ovl_start(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
 
 	mtk_ovl_io_cmd(comp, handle, IRQ_LEVEL_NORMAL, NULL);
 
+	cmdq_pkt_write(handle, comp->cmdq_base,
+				comp->regs_pa + DISP_REG_OVL_RST, BIT(0), BIT(0));
+	cmdq_pkt_write(handle, comp->cmdq_base,
+				comp->regs_pa + DISP_REG_OVL_RST, 0x0, BIT(0));
+	cmdq_pkt_write(handle, comp->cmdq_base,
+			comp->regs_pa + DISP_REG_OVL_INTSTA, 0, ~0);
+
 	cmdq_pkt_write(handle, comp->cmdq_base, comp->regs_pa + DISP_REG_OVL_EN,
 		       0x1, 0x1);
 
@@ -1036,6 +1108,9 @@ static void mtk_ovl_start(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
 		       comp->regs_pa + DISP_REG_OVL_DATAPATH_CON,
 		       value, mask);
 
+	if (ovl->data->ultra_src_sel)
+		ovl->data->ultra_src_sel(comp, handle);
+
 	/* Enable feedback real BW consumed from OVL */
 	cmdq_pkt_write(handle, comp->cmdq_base,
 		comp->regs_pa + DISP_REG_OVL_GDRDY_PRD,
@@ -1046,18 +1121,12 @@ static void mtk_ovl_start(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
 
 static void mtk_ovl_stop(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
 {
-	DDPDBG("%s+\n", __func__);
+	DDPDBG("%s+ %s\n", __func__, mtk_dump_comp_str(comp));
 
 	cmdq_pkt_write(handle, comp->cmdq_base,
 			comp->regs_pa + DISP_REG_OVL_INTEN, 0, ~0);
 	cmdq_pkt_write(handle, comp->cmdq_base, comp->regs_pa + DISP_REG_OVL_EN,
 		       0x0, 0x1);
-	cmdq_pkt_write(handle, comp->cmdq_base,
-			comp->regs_pa + DISP_REG_OVL_RST, 1, ~0);
-	cmdq_pkt_write(handle, comp->cmdq_base,
-			comp->regs_pa + DISP_REG_OVL_INTSTA, 0, ~0);
-	cmdq_pkt_write(handle, comp->cmdq_base,
-			comp->regs_pa + DISP_REG_OVL_RST, 0, ~0);
 
 	mtk_ovl_all_layer_off(comp, handle, 0);
 
@@ -1069,9 +1138,9 @@ static void mtk_ovl_stop(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
 
 static void mtk_ovl_reset(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
 {
-	DDPDBG("%s+ OVL%d\n", __func__, comp->id);
+	DDPDBG("%s+ %s\n", __func__, mtk_dump_comp_str(comp));
 	cmdq_pkt_write(handle, comp->cmdq_base,
-			comp->regs_pa + DISP_REG_OVL_RST, 1, ~0);
+			comp->regs_pa + DISP_REG_OVL_RST, BIT(0) | BIT(28), ~0);
 	cmdq_pkt_write(handle, comp->cmdq_base,
 			comp->regs_pa + DISP_REG_OVL_RST, 0, ~0);
 	DDPDBG("%s-\n", __func__);
@@ -1109,10 +1178,17 @@ static void mtk_ovl_config(struct mtk_ddp_comp *comp,
 	struct mtk_drm_private *priv = crtc->dev->dev_private;
 	unsigned long crtc_idx = (unsigned long)drm_crtc_index(crtc);
 	int fps = drm_mode_vrefresh(&crtc->state->adjusted_mode);
+	struct mtk_disp_ovl *ovl = comp_to_ovl(comp);
 
-	if (comp->mtk_crtc->is_dual_pipe)
-		width = cfg->w / 2;
-	else
+	if (comp->mtk_crtc->is_dual_pipe) {
+		if (cfg->tile_overhead.is_support) {
+			if (ovl->data->is_right_ovl_comp && ovl->data->is_right_ovl_comp(comp))
+				width = cfg->tile_overhead.right_in_width;
+			else
+				width = cfg->tile_overhead.left_in_width;
+		} else
+			width = cfg->w / 2;
+	} else
 		width = cfg->w;
 
 	if (cfg->w != 0 && cfg->h != 0) {
@@ -1675,6 +1751,26 @@ void mtk_ovl_get_ovl_csc_data(struct drm_crtc *crtc,
 	}
 }
 
+static int mtk_ovl_y2r_clamp(struct mtk_ddp_comp *comp, unsigned int idx,
+			     unsigned int ext_idx, struct cmdq_pkt *handle)
+{
+	struct drm_crtc *crtc = &comp->mtk_crtc->base;
+
+	if (!(mtk_drm_dal_enable() && drm_crtc_index(crtc) == 0))
+		return 0;
+
+	if (ext_idx != LYE_NORMAL) {
+		cmdq_pkt_write(handle, comp->cmdq_base,
+		       comp->regs_pa + DISP_REG_OVL_WCG_CFG0, BIT(ext_idx),
+		       BIT(ext_idx));
+	} else {
+		cmdq_pkt_write(handle, comp->cmdq_base,
+		       comp->regs_pa + DISP_REG_OVL_WCG_CFG0, BIT(idx),
+		       BIT(idx));
+	}
+	return 0;
+}
+
 static int mtk_ovl_color_manage(struct mtk_ddp_comp *comp, unsigned int idx,
 			struct mtk_plane_state *state, struct cmdq_pkt *handle)
 {
@@ -1688,7 +1784,7 @@ static int mtk_ovl_color_manage(struct mtk_ddp_comp *comp, unsigned int idx,
 	u32 wcg_mask = 0, wcg_value = 0, sel_mask = 0, sel_value = 0, reg = 0;
 	enum mtk_drm_color_mode lcm_cm;
 	enum mtk_drm_dataspace lcm_ds = 0, plane_ds = 0;
-	struct mtk_panel_params *params;
+	struct mtk_panel_params *params = NULL;
 	int i;
 	int ovl_csc_en_cur = 0;
 	unsigned int ocfbn = 0;
@@ -1724,15 +1820,28 @@ static int mtk_ovl_color_manage(struct mtk_ddp_comp *comp, unsigned int idx,
 	if ((mtk_drm_helper_get_opt(priv->helper_opt, MTK_DRM_OPT_OVL_WCG) && /* WCG condition */
 		pending->enable) ||	/* WCG condition */
 	    ovl_csc_en_cur) {	/* ovl csc condition */
-		params = mtk_drm_get_lcm_ext_params(crtc);
+		//sync dx-1 patch to fixed wcg bug
+		//params = mtk_drm_get_lcm_ext_params(crtc);
 		if (params)
 			lcm_cm = params->lcm_color_mode;
 		else
 			lcm_cm = MTK_DRM_COLOR_MODE_NATIVE;
-
 		lcm_ds = mtk_ovl_map_lcm_color_mode(lcm_cm);
 		plane_ds =
 			(enum mtk_drm_dataspace)pending->prop_val[PLANE_PROP_DATASPACE];
+		if (plane_ds == MTK_DRM_DATASPACE_DISPLAY_P3) {
+			lcm_ds = MTK_DRM_DATASPACE_DISPLAY_P3;
+		}
+
+		#ifdef OPLUS_FEATURE_DISPLAY_PANELCHAPLIN
+		lcm_cm = (enum mtk_drm_color_mode)to_mtk_crtc(crtc)->blendspace;
+		lcm_ds = mtk_ovl_map_lcm_color_mode(lcm_cm);
+		if (pending->prop_val[PLANE_PROP_IS_BT2020]) {
+			//since bt2020 is not support in ovl,will replace as bt709
+			plane_ds = lcm_ds;
+		}
+		#endif
+
 		DDPDBG("%s+ idx:%d ds:0x%08x->0x%08x\n", __func__, idx, plane_ds,
 		       lcm_ds);
 
@@ -2199,9 +2308,20 @@ static void mtk_ovl_layer_config(struct mtk_ddp_comp *comp, unsigned int idx,
 		pending->enable = false;
 		DDPINFO("%s: DRM_FORMAT_RGB332 not support, so skip it\n", __func__);
 	}
+	if (ovl->ovl_dis == true && pending->enable == true) {
+		if (priv->data->mmsys_id == MMSYS_MT6985 &&
+			mtk_crtc_is_frame_trigger_mode(crtc))
+			pending->enable = false;
 
+		DDPPR_ERR("%s, %s, idx:%d, lye_idx:%d, ext_idx:%d, en:%d\n",
+			__func__, mtk_dump_comp_str_id(comp->id), idx, lye_idx,
+			ext_lye_idx, pending->enable);
+		ovl->ovl_dis = false;
+	}
 	if (!pending->enable)
 		mtk_ovl_layer_off(comp, lye_idx, ext_lye_idx, handle);
+	if (priv->data->mmsys_id == MMSYS_MT6835)
+		mtk_ovl_y2r_clamp(comp, lye_idx, ext_lye_idx, handle);
 
 	mtk_ovl_color_manage(comp, idx, state, handle);
 
@@ -2337,10 +2457,10 @@ static void mtk_ovl_layer_config(struct mtk_ddp_comp *comp, unsigned int idx,
 		}
 	}
 
-	DDPINFO("%s+ id %s, idx:%d, lye_idx:%d, ext_idx:%d, enable:%d, fmt:0x%x\n",
+	DDPINFO("%s id %s, idx:%d, lye_idx:%d, ext_idx:%d, en:%d, fmt:0x%x\n",
 		__func__, mtk_dump_comp_str_id(comp->id), idx, lye_idx, ext_lye_idx,
 		pending->enable, pending->format);
-	DDPINFO("addr 0x%lx, compr %d, con 0x%x, mask 0x%x, mml_mode %d\n",
+	DDPINFO("addr 0x%lx, compr %d, con 0x%x, mask 0x%x, mml %d\n",
 		(unsigned long)pending->addr,
 		(unsigned int)pending->prop_val[PLANE_PROP_COMPRESS], con, mask,
 		pending->mml_mode);
@@ -2757,13 +2877,14 @@ static bool compr_l_config_PVRIC_V3_1(struct mtk_ddp_comp *comp,
 	return 0;
 }
 
-static bool compr_l_config_AFBC_V1_2(struct mtk_ddp_comp *comp,
+bool compr_l_config_AFBC_V1_2(struct mtk_ddp_comp *comp,
 			unsigned int idx, struct mtk_plane_state *state,
 			struct cmdq_pkt *handle)
 {
 	/* input config */
 	struct mtk_plane_pending_state *pending = &state->pending;
 	dma_addr_t addr = pending->addr;
+	bool enable = pending->enable;
 	unsigned int pitch = pending->pitch & 0xffff;
 	unsigned int vpitch = (unsigned int)pending->prop_val[PLANE_PROP_VPITCH];
 	unsigned int src_x = pending->src_x, src_y = pending->src_y;
@@ -2789,7 +2910,6 @@ static bool compr_l_config_AFBC_V1_2(struct mtk_ddp_comp *comp,
 	unsigned int src_buf_tile_num = 0;
 	unsigned int buf_size = 0;
 	unsigned int buf_total_size = 0;
-
 
 	/* variable to config into register */
 	unsigned int lx_fbdc_en;
@@ -3054,6 +3174,12 @@ static bool compr_l_config_AFBC_V1_2(struct mtk_ddp_comp *comp,
 				       comp->regs_pa + DISP_REG_OVL_SRC_SIZE(lye_idx), lx_src_size,
 				       ~0);
 
+		if (ovl->ovl_dis == false && enable == 1 && compress == 1 &&
+			((lx_src_size&0xffff) * (lx_src_size>>16) == 0)) {
+			DDPPR_ERR("%s, %s, idx=%d, en=%d, size:0x%08x\n", __func__,
+				mtk_dump_comp_str_id(comp->id), lye_idx, enable, lx_src_size);
+			ovl->ovl_dis = true;
+		}
 		cmdq_pkt_write(handle, comp->cmdq_base,
 			comp->regs_pa + DISP_REG_OVL_CLIP(lye_idx),
 			lx_clip, ~0);
@@ -3665,7 +3791,8 @@ static int mtk_ovl_io_cmd(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle,
 	struct mtk_drm_private *priv;
 
 	if (!(comp->mtk_crtc && comp->mtk_crtc->base.dev)) {
-		DDPPR_ERR("%s %s has invalid CRTC or device\n", __func__, mtk_dump_comp_str(comp));
+		DDPINFO("%s %s %u has invalid CRTC or device\n",
+				__func__, mtk_dump_comp_str(comp), io_cmd);
 		return -INVALID;
 	}
 
@@ -4439,15 +4566,16 @@ mtk_ovl_config_trigger(struct mtk_ddp_comp *comp, struct cmdq_pkt *pkt,
 	switch (flag) {
 	case MTK_TRIG_FLAG_PRE_TRIGGER:
 	{
-		DDPINFO("%s+ %s\n", __func__, mtk_dump_comp_str(comp));
+	/* may cause side effect, need check
 		if (comp->blank_mode)
 			break;
+		DDPINFO("%s+ %s\n", __func__, mtk_dump_comp_str(comp));
 
 		cmdq_pkt_write(pkt, comp->cmdq_base,
 				comp->regs_pa + DISP_REG_OVL_RST, 0x1, 0x1);
 		cmdq_pkt_write(pkt, comp->cmdq_base,
 				comp->regs_pa + DISP_REG_OVL_RST, 0x0, 0x1);
-
+	*/
 		break;
 	}
 #ifdef IF_ZERO /* not ready for dummy register method */
@@ -4838,6 +4966,8 @@ static const struct mtk_disp_ovl_data mt6985_ovl_driver_data = {
 	.mmsys_mapping = &mtk_ovl_mmsys_mapping_MT6985,
 	.source_bpc = 10,
 	.support_pq_selfloop = true, /* pq in out self loop */
+	.is_right_ovl_comp = &is_right_ovl_comp_MT6985,
+	.ultra_src_sel = &mtk_ovl_ultra_src_sel_MT6985,
 };
 
 static const struct compress_info compr_info_mt6895  = {
@@ -5079,6 +5209,8 @@ static const struct of_device_id mtk_disp_ovl_driver_dt_match[] = {
 	 .data = &mt6879_ovl_driver_data},
 	{.compatible = "mediatek,mt6855-disp-ovl",
 	 .data = &mt6855_ovl_driver_data},
+	{.compatible = "mediatek,mt6835-disp-ovl",
+	 .data = &mt6835_ovl_driver_data},
 	{},
 };
 MODULE_DEVICE_TABLE(of, mtk_disp_ovl_driver_dt_match);

@@ -700,8 +700,14 @@ static struct subdrv_static_ctx static_ctx = {
 	.sensor_mode_num = ARRAY_SIZE(mode_struct),
 	.list = feature_control_list,
 	.list_len = ARRAY_SIZE(feature_control_list),
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	.chk_s_off_sta = 1,
 	.chk_s_off_end = 0,
+	#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+	.chk_s_off_before_s_on = 0,
+	.chk_s_off_before_control = 1,
+	.chk_s_off_after_s_off = 0,
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 	.checksum_value = 0xE4087030,
 };

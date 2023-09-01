@@ -109,7 +109,7 @@ int mtk_session_set_mode(struct drm_device *dev, unsigned int session_mode)
 	const struct mtk_session_mode_tb *mode_tb = private->data->mode_tb;
 	unsigned int session_id;
 
-	mutex_lock(&private->commit.lock);
+	DDP_MUTEX_LOCK(&private->commit.lock, __func__, __LINE__);
 	if (session_mode >= MTK_DRM_SESSION_NUM) {
 		DDPPR_ERR("%s Invalid session mode:%d\n",
 			  __func__, session_mode);
@@ -130,6 +130,13 @@ int mtk_session_set_mode(struct drm_device *dev, unsigned int session_mode)
 
 	DDPMSG("%s from %u to %u\n", __func__,
 		private->session_mode, session_mode);
+
+	if (of_property_read_bool(private->mmsys_dev->of_node,
+				"enable-output-int-switch")) {
+		DDPMSG("%s ignore set mode because of output switch\n", __func__);
+		private->session_mode = session_mode;
+		goto success;
+	}
 
 	if (mtk_drm_helper_get_opt(private->helper_opt,
 		MTK_DRM_OPT_VDS_PATH_SWITCH) &&
@@ -194,11 +201,11 @@ int mtk_session_set_mode(struct drm_device *dev, unsigned int session_mode)
 			session_mode);
 
 success:
-	mutex_unlock(&private->commit.lock);
+	DDP_MUTEX_UNLOCK(&private->commit.lock, __func__, __LINE__);
 	return 0;
 
 error:
-	mutex_unlock(&private->commit.lock);
+	DDP_MUTEX_UNLOCK(&private->commit.lock, __func__, __LINE__);
 	return -EINVAL;
 }
 

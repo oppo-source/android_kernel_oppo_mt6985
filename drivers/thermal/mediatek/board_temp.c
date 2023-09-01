@@ -90,7 +90,26 @@ unsigned int tia2_rc_sel_to_value(unsigned int sel)
 	return resistance;
 }
 
+unsigned int tia3_rc_sel_to_value(unsigned int sel)
+{
+	unsigned int resistance;
+
+	switch (sel) {
+	case 0:
+	default:
+		resistance = 100000; /* 100K */
+		break;
+	}
+
+	return resistance;
+}
+
 unsigned long long mt6685_adc2volt(unsigned int adc_raw)
+{
+	return ((unsigned long long)adc_raw * 184000) >> 15;
+}
+
+unsigned long long mt6377_adc2volt(unsigned int adc_raw)
 {
 	return ((unsigned long long)adc_raw * 184000) >> 15;
 }
@@ -102,6 +121,13 @@ static struct tia_data tia2_data = {
 	.rc_sel_to_value = tia2_rc_sel_to_value,
 };
 
+static struct tia_data tia3_data = {
+	.valid_bit = 15,
+	.rc_offset = 16,
+	.rc_mask = GENMASK(17, 16),
+	.rc_sel_to_value = tia3_rc_sel_to_value,
+};
+
 static struct pmic_auxadc_data mt6685_pmic_auxadc_data = {
 	.default_pullup_v = 184000,
 	.num_of_pullup_r_type = 3,
@@ -110,10 +136,22 @@ static struct pmic_auxadc_data mt6685_pmic_auxadc_data = {
 	.tia_param = &tia2_data,
 };
 
+static struct pmic_auxadc_data mt6377_pmic_auxadc_data = {
+	.default_pullup_v = 184000,
+	.num_of_pullup_r_type = 1,
+	.pullup_r_calibration = NULL,
+	.adc2volt = mt6377_adc2volt,
+	.tia_param = &tia3_data,
+};
+
 static const struct of_device_id board_ntc_of_match[] = {
 	{
 		.compatible = "mediatek,mt6685-tia-ntc",
 		.data = (void *)&mt6685_pmic_auxadc_data,
+	},
+	{
+		.compatible = "mediatek,mt6377-tia-ntc",
+		.data = (void *)&mt6377_pmic_auxadc_data,
 	},
 	{},
 };
@@ -170,6 +208,9 @@ static int board_ntc_get_temp(void *data, int *temp)
 	unsigned int val, r_type, r_ntc, dbg_reg, en_reg, count = 0;
 	unsigned long long v_in;
 	bool is_val_valid, is_rtype_valid;
+	static DEFINE_RATELIMIT_STATE(ratelimit, 5 * HZ, 10);
+
+	ratelimit_set_flags(&ratelimit, RATELIMIT_MSG_ON_RELEASE);
 
 	while (count < READ_TIA_REG_COUNT_MAX) {
 		val = readl(ntc_info->data_reg);
@@ -228,9 +269,10 @@ RETRY:
 		*temp = board_ntc_r_to_temp(ntc_info, r_ntc);
 	}
 
-	dev_dbg_ratelimited(ntc_info->dev, "val=0x%x, v_in/r_type/r_ntc/t=%d/%d/%d/%d\n",
+	if (__ratelimit(&ratelimit)) {
+		dev_info(ntc_info->dev, "val=0x%x, v_in/r_type/r_ntc/t=%d/%d/%d/%d\n",
 		val, v_in, r_type, r_ntc, *temp);
-
+	}
 	return 0;
 }
 

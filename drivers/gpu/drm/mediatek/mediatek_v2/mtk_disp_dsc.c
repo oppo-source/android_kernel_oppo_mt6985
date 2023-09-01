@@ -24,6 +24,8 @@
 #include "mtk_drm_gem.h"
 #include "mtk_drm_fb.h"
 #include "mtk_dp_api.h"
+#include "mtk_disp_dsc.h"
+#include "platform/mtk_drm_platform.h"
 
 #define DISP_REG_DSC_CON			0x0000
 	#define DSC_EN BIT(0)
@@ -33,6 +35,7 @@
 	#define DSC_RELAY BIT(5)
 	#define DSC_EMPTY_FLAG_SEL REG_FLD_MSB_LSB(15, 14)
 	#define DSC_UFOE_SEL BIT(16)
+	#define DSC_OUTPUT_SWAP BIT(18)
 	#define CON_FLD_DSC_EN		REG_FLD_MSB_LSB(0, 0)
 	#define CON_FLD_DISP_DSC_BYPASS		REG_FLD_MSB_LSB(4, 4)
 
@@ -111,13 +114,8 @@
 #define RC_BUF_THRESH_NUM (14)
 #define RANGE_BPG_OFS_NUM (15)
 
-struct mtk_disp_dsc_data {
-	bool support_shadow;
-	bool need_bypass_shadow;
-	bool need_obuf_sw;
-	bool dsi_buffer;
-};
-
+#define DISP_REG_DSC1_OFFSET        0x0400
+#define DISP_REG_SHADOW_CTRL(module)	((module)->data->shadow_ctrl_reg)
 
 /**
  * struct mtk_disp_dsc - DISP_DSC driver structure
@@ -221,22 +219,15 @@ static void mtk_dsc_stop(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
 static void mtk_dsc_prepare(struct mtk_ddp_comp *comp)
 {
 	struct mtk_disp_dsc *dsc = comp_to_dsc(comp);
-	struct drm_crtc *crtc = &(comp->mtk_crtc->base);
-	struct mtk_drm_private *priv = crtc->dev->dev_private;
 
 	mtk_ddp_comp_clk_prepare(comp);
 
 	/* Bypass shadow register and read shadow register */
 	if (dsc->data->need_bypass_shadow) {
-		if (priv->data->mmsys_id == MMSYS_MT6983 ||
-			priv->data->mmsys_id == MMSYS_MT6985 ||
-			priv->data->mmsys_id == MMSYS_MT6895 ||
-			priv->data->mmsys_id == MMSYS_MT6886)
-			mtk_ddp_write_mask_cpu(comp, DSC_BYPASS_SHADOW,
-				MT6983_DISP_REG_SHADOW_CTRL, DSC_BYPASS_SHADOW);
-		else
-			mtk_ddp_write_mask_cpu(comp, DSC_BYPASS_SHADOW,
-				DISP_REG_DSC_SHADOW, DSC_BYPASS_SHADOW);
+		mtk_ddp_write_mask_cpu(comp, DSC_BYPASS_SHADOW,
+			DISP_REG_SHADOW_CTRL(dsc), DSC_BYPASS_SHADOW);
+		mtk_ddp_write_mask_cpu(comp, DSC_BYPASS_SHADOW,
+			DISP_REG_SHADOW_CTRL(dsc) + DISP_REG_DSC1_OFFSET, DSC_BYPASS_SHADOW);
 	}
 }
 
@@ -428,8 +419,15 @@ static void mtk_dsc_config(struct mtk_ddp_comp *comp,
 		else
 			dsc_con = 0x4000;
 		dsc_con |= DSC_UFOE_SEL;
-		if (comp->mtk_crtc->is_dual_pipe)
-			dsc_con |= DSC_IN_SRC_SEL;
+		if (comp->mtk_crtc->is_dual_pipe) {
+			if (comp->mtk_crtc->panel_ext->params->output_mode
+				== MTK_PANEL_DUAL_PORT)
+				dsc_con |= DSC_DUAL_INOUT;
+			else
+				dsc_con |= DSC_IN_SRC_SEL;
+		}
+		if (comp->mtk_crtc->is_dsc_output_swap)
+			dsc_con |= DSC_OUTPUT_SWAP;
 
 		mtk_ddp_write_relaxed(comp,
 			dsc_con, DISP_REG_DSC_CON, handle);
@@ -562,21 +560,89 @@ static void mtk_dsc_config(struct mtk_ddp_comp *comp,
 		DDPINFO("%s, bit_per_channel:%d\n",
 			mtk_dump_comp_str(comp), dsc_params->bit_per_channel);
 		if (dsc_params->bit_per_channel == 10) {
-			//10bpc_to_8bpp_20_slice_h
-			mtk_ddp_write(comp, 0x20001007, DISP_REG_DSC_PPS6, handle);
-			mtk_ddp_write(comp, 0x330F0F06, DISP_REG_DSC_PPS7, handle);
+#ifdef OPLUS_FEATURE_DISPLAY
+			if (dsc_params->pic_height == 2772) {
+				//10bpc_to_8bpp_20_slice_h DSC1.2 rc_10bpc_10bpp.cfg for NT37705
+				mtk_ddp_write(comp, 0x20001007, DISP_REG_DSC_PPS6, handle);
+				mtk_ddp_write(comp, 0x330F0F06, DISP_REG_DSC_PPS7, handle);
+				mtk_ddp_write(comp, 0x382a1c0e, DISP_REG_DSC_PPS8, handle);
+				mtk_ddp_write(comp, 0x69625446, DISP_REG_DSC_PPS9, handle);
+				mtk_ddp_write(comp, 0x7b797770, DISP_REG_DSC_PPS10, handle);
+				mtk_ddp_write(comp, 0x00007e7d, DISP_REG_DSC_PPS11, handle);
+				mtk_ddp_write(comp, 0x01040900, DISP_REG_DSC_PPS12, handle);
+				mtk_ddp_write(comp, 0xF9450125, DISP_REG_DSC_PPS13, handle);
+				mtk_ddp_write(comp, 0xE967F167, DISP_REG_DSC_PPS14, handle);
+				mtk_ddp_write(comp, 0xE187E167, DISP_REG_DSC_PPS15, handle);
+				mtk_ddp_write(comp, 0xD9C8E1A7, DISP_REG_DSC_PPS16, handle);
+				mtk_ddp_write(comp, 0xD9E9D9C9, DISP_REG_DSC_PPS17, handle);
+				mtk_ddp_write(comp, 0xD20CD1E9, DISP_REG_DSC_PPS18, handle);
+				mtk_ddp_write(comp, 0x0000D230, DISP_REG_DSC_PPS19, handle);
+			} else if (44 == dsc_params->dsc_scr_version) {
+				//10bpc_to_8bpp_20_slice_h DSC1.2 for flip NT37705
+				mtk_ddp_write(comp, 0x20001007, DISP_REG_DSC_PPS6, handle);
+				mtk_ddp_write(comp, 0x330F0F06, DISP_REG_DSC_PPS7, handle);
+				mtk_ddp_write(comp, 0x382a1c0e, DISP_REG_DSC_PPS8, handle);
+				mtk_ddp_write(comp, 0x69625446, DISP_REG_DSC_PPS9, handle);
+				mtk_ddp_write(comp, 0x7b797770, DISP_REG_DSC_PPS10, handle);
+				mtk_ddp_write(comp, 0x00007e7d, DISP_REG_DSC_PPS11, handle);
+				mtk_ddp_write(comp, 0x01040900, DISP_REG_DSC_PPS12, handle);
+				mtk_ddp_write(comp, 0xF9450125, DISP_REG_DSC_PPS13, handle);
+				mtk_ddp_write(comp, 0xE967F167, DISP_REG_DSC_PPS14, handle);
+				mtk_ddp_write(comp, 0xE187E167, DISP_REG_DSC_PPS15, handle);
+				mtk_ddp_write(comp, 0xD9C8E1A7, DISP_REG_DSC_PPS16, handle);
+				mtk_ddp_write(comp, 0xD1E9D9C9, DISP_REG_DSC_PPS17, handle);
+				mtk_ddp_write(comp, 0xD20CD1E9, DISP_REG_DSC_PPS18, handle);
+				mtk_ddp_write(comp, 0x0000D230, DISP_REG_DSC_PPS19, handle);
+			} else {
+				//10bpc_to_8bpp_20_slice_h
+				mtk_ddp_write(comp, 0x20001007, DISP_REG_DSC_PPS6, handle);
+				mtk_ddp_write(comp, 0x330F0F06, DISP_REG_DSC_PPS7, handle);
+				mtk_ddp_write(comp, 0x382a1c0e, DISP_REG_DSC_PPS8, handle);
+				mtk_ddp_write(comp, 0x69625446, DISP_REG_DSC_PPS9, handle);
+				mtk_ddp_write(comp, 0x7b797770, DISP_REG_DSC_PPS10, handle);
+				mtk_ddp_write(comp, 0x00007e7d, DISP_REG_DSC_PPS11, handle);
+				mtk_ddp_write(comp, 0x01040900, DISP_REG_DSC_PPS12, handle);
+				mtk_ddp_write(comp, 0xF9450125, DISP_REG_DSC_PPS13, handle);
+				mtk_ddp_write(comp, 0xE967F167, DISP_REG_DSC_PPS14, handle);
+				mtk_ddp_write(comp, 0xE187E167, DISP_REG_DSC_PPS15, handle);
+				mtk_ddp_write(comp, 0xD9C7E1A7, DISP_REG_DSC_PPS16, handle);
+				mtk_ddp_write(comp, 0xD1E9D9C9, DISP_REG_DSC_PPS17, handle);
+				mtk_ddp_write(comp, 0xD20DD1E9, DISP_REG_DSC_PPS18, handle);
+				mtk_ddp_write(comp, 0x0000D230, DISP_REG_DSC_PPS19, handle);
+			}
+		} else if (4 == dsc_params->dsc_scr_version) {
+			//8bpc_to_8bpp_20_slice_h
+			mtk_ddp_write(comp, 0x20000c03, DISP_REG_DSC_PPS6, handle);
+			mtk_ddp_write(comp, 0x330b0b06, DISP_REG_DSC_PPS7, handle);
 			mtk_ddp_write(comp, 0x382a1c0e, DISP_REG_DSC_PPS8, handle);
 			mtk_ddp_write(comp, 0x69625446, DISP_REG_DSC_PPS9, handle);
 			mtk_ddp_write(comp, 0x7b797770, DISP_REG_DSC_PPS10, handle);
 			mtk_ddp_write(comp, 0x00007e7d, DISP_REG_DSC_PPS11, handle);
-			mtk_ddp_write(comp, 0x01040900, DISP_REG_DSC_PPS12, handle);
-			mtk_ddp_write(comp, 0xF9450125, DISP_REG_DSC_PPS13, handle);
-			mtk_ddp_write(comp, 0xE967F167, DISP_REG_DSC_PPS14, handle);
-			mtk_ddp_write(comp, 0xE187E167, DISP_REG_DSC_PPS15, handle);
-			mtk_ddp_write(comp, 0xD9C7E1A7, DISP_REG_DSC_PPS16, handle);
-			mtk_ddp_write(comp, 0xD1E9D9C9, DISP_REG_DSC_PPS17, handle);
-			mtk_ddp_write(comp, 0xD20DD1E9, DISP_REG_DSC_PPS18, handle);
-			mtk_ddp_write(comp, 0x0000D230, DISP_REG_DSC_PPS19, handle);
+			mtk_ddp_write(comp, 0x00800880, DISP_REG_DSC_PPS12, handle);
+			mtk_ddp_write(comp, 0xf8c100a1, DISP_REG_DSC_PPS13, handle);
+			mtk_ddp_write(comp, 0xe8e3f0e3, DISP_REG_DSC_PPS14, handle);
+			mtk_ddp_write(comp, 0xe103e0e3, DISP_REG_DSC_PPS15, handle);
+			mtk_ddp_write(comp, 0xd943e123,	DISP_REG_DSC_PPS16, handle);
+			mtk_ddp_write(comp, 0xd165d945,	DISP_REG_DSC_PPS17, handle);
+			mtk_ddp_write(comp, 0xd189d165,	DISP_REG_DSC_PPS18, handle);
+			mtk_ddp_write(comp, 0x0000d1ac,	DISP_REG_DSC_PPS19, handle);
+		} else if (44 == dsc_params->dsc_scr_version) {
+			//8bpc_to_8bpp_20_slice_h
+			mtk_ddp_write(comp, 0x20000c03, DISP_REG_DSC_PPS6, handle);
+			mtk_ddp_write(comp, 0x330b0b06, DISP_REG_DSC_PPS7, handle);
+			mtk_ddp_write(comp, 0x382a1c0e, DISP_REG_DSC_PPS8, handle);
+			mtk_ddp_write(comp, 0x69625446, DISP_REG_DSC_PPS9, handle);
+			mtk_ddp_write(comp, 0x7b797770, DISP_REG_DSC_PPS10, handle);
+			mtk_ddp_write(comp, 0x00007e7d, DISP_REG_DSC_PPS11, handle);
+			mtk_ddp_write(comp, 0x00800880, DISP_REG_DSC_PPS12, handle);
+			mtk_ddp_write(comp, 0xf8c100a1, DISP_REG_DSC_PPS13, handle);
+			mtk_ddp_write(comp, 0xe8e3f0e3, DISP_REG_DSC_PPS14, handle);
+			mtk_ddp_write(comp, 0xe103e0e3, DISP_REG_DSC_PPS15, handle);
+			mtk_ddp_write(comp, 0xd944e123,	DISP_REG_DSC_PPS16, handle);
+			mtk_ddp_write(comp, 0xd965d945,	DISP_REG_DSC_PPS17, handle);
+			mtk_ddp_write(comp, 0xd188d165,	DISP_REG_DSC_PPS18, handle);
+			mtk_ddp_write(comp, 0x0000d1ac,	DISP_REG_DSC_PPS19, handle);
+#endif
 		} else {
 			//8bpc_to_8bpp_20_slice_h
 			mtk_ddp_write(comp, 0x20000c03, DISP_REG_DSC_PPS6, handle);
@@ -690,7 +756,15 @@ static void mtk_dsc_config(struct mtk_ddp_comp *comp,
 		/*enable dsc relay mode*/
 		mtk_ddp_write_mask(comp, DSC_RELAY, DISP_REG_DSC_CON,
 				DSC_RELAY, handle);
-		dsc->enable = false;
+		mtk_ddp_write_relaxed(comp, cfg->w, DISP_REG_DSC_PIC_W, handle);
+		mtk_ddp_write_relaxed(comp, (cfg->h - 1), DISP_REG_DSC_PIC_H, handle);
+		mtk_ddp_write_relaxed(comp, cfg->w, DISP_REG_DSC_SLICE_W, handle);
+		mtk_ddp_write_relaxed(comp, (cfg->h - 1), DISP_REG_DSC_SLICE_H, handle);
+
+		if (comp->mtk_crtc->is_dsc_output_swap)
+			mtk_ddp_write_mask(comp, DSC_OUTPUT_SWAP, DISP_REG_DSC_CON,
+				DSC_OUTPUT_SWAP, handle);
+		dsc->enable = true;    /*need to enable dsc in relay mode*/
 	}
 }
 
@@ -858,6 +932,7 @@ static const struct mtk_disp_dsc_data mt6885_dsc_driver_data = {
 	.support_shadow     = false,
 	.need_bypass_shadow = false,
 	.dsi_buffer = false,
+	.shadow_ctrl_reg = 0x0200,
 };
 
 static const struct mtk_disp_dsc_data mt6983_dsc_driver_data = {
@@ -865,6 +940,7 @@ static const struct mtk_disp_dsc_data mt6983_dsc_driver_data = {
 	.need_bypass_shadow = false,
 	.need_obuf_sw = true,
 	.dsi_buffer = true,
+	.shadow_ctrl_reg = 0x0228,
 };
 
 static const struct mtk_disp_dsc_data mt6985_dsc_driver_data = {
@@ -872,6 +948,7 @@ static const struct mtk_disp_dsc_data mt6985_dsc_driver_data = {
 	.need_bypass_shadow = false,
 	.need_obuf_sw = true,
 	.dsi_buffer = true,
+	.shadow_ctrl_reg = 0x0228,
 };
 
 static const struct mtk_disp_dsc_data mt6895_dsc_driver_data = {
@@ -879,6 +956,7 @@ static const struct mtk_disp_dsc_data mt6895_dsc_driver_data = {
 	.need_bypass_shadow = false,
 	.need_obuf_sw = false,
 	.dsi_buffer = true,
+	.shadow_ctrl_reg = 0x0228,
 };
 
 static const struct mtk_disp_dsc_data mt6886_dsc_driver_data = {
@@ -886,30 +964,35 @@ static const struct mtk_disp_dsc_data mt6886_dsc_driver_data = {
 	.need_bypass_shadow = false,
 	.need_obuf_sw = false,
 	.dsi_buffer = true,
+	.shadow_ctrl_reg = 0x0228,
 };
 
 static const struct mtk_disp_dsc_data mt6873_dsc_driver_data = {
 	.support_shadow     = false,
 	.need_bypass_shadow = true,
 	.dsi_buffer = false,
+	.shadow_ctrl_reg = 0x0200,
 };
 
 static const struct mtk_disp_dsc_data mt6853_dsc_driver_data = {
 	.support_shadow     = false,
 	.need_bypass_shadow = true,
 	.dsi_buffer = false,
+	.shadow_ctrl_reg = 0x0200,
 };
 
 static const struct mtk_disp_dsc_data mt6879_dsc_driver_data = {
 	.support_shadow = false,
 	.need_bypass_shadow = false,
 	.dsi_buffer = true,
+	.shadow_ctrl_reg = 0x0200,
 };
 
 static const struct mtk_disp_dsc_data mt6855_dsc_driver_data = {
 	.support_shadow = false,
 	.need_bypass_shadow = false,
 	.dsi_buffer = false,
+	.shadow_ctrl_reg = 0x0200,
 };
 
 static const struct of_device_id mtk_disp_dsc_driver_dt_match[] = {

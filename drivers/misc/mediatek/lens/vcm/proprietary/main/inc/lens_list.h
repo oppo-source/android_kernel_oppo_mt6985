@@ -230,6 +230,34 @@ extern int GT9764AF_PowerDown(struct i2c_client *pstAF_I2Cclient,
 				int *pAF_Opened);
 extern int GT9764AF_GetFileName(unsigned char *pFileName);
 
+#define PD9151AF_SetI2Cclient PD9151AF_SetI2Cclient_Main
+#define PD9151AF_Ioctl PD9151AF_Ioctl_Main
+#define PD9151AF_Release PD9151AF_Release_Main
+#define PD9151AF_PowerDown PD9151AF_PowerDown_Main
+#define PD9151AF_GetFileName PD9151AF_GetFileName_Main
+extern int PD9151AF_SetI2Cclient(struct i2c_client *pstAF_I2Cclient,
+				spinlock_t *pAF_SpinLock, int *pAF_Opened);
+extern long PD9151AF_Ioctl(struct file *a_pstFile, unsigned int a_u4Command,
+				unsigned long a_u4Param);
+extern int PD9151AF_Release(struct inode *a_pstInode, struct file *a_pstFile);
+extern int PD9151AF_PowerDown(struct i2c_client *pstAF_I2Cclient,
+				int *pAF_Opened);
+extern int PD9151AF_GetFileName(unsigned char *pFileName);
+
+#define FP5513E4AF_SetI2Cclient FP5513E4AF_SetI2Cclient_Main
+#define FP5513E4AF_Ioctl FP5513E4AF_Ioctl_Main
+#define FP5513E4AF_Release FP5513E4AF_Release_Main
+#define FP5513E4AF_PowerDown FP5513E4AF_PowerDown_Main
+#define FP5513E4AF_GetFileName FP5513E4AF_GetFileName_Main
+extern int FP5513E4AF_SetI2Cclient(struct i2c_client *pstAF_I2Cclient,
+				spinlock_t *pAF_SpinLock, int *pAF_Opened);
+extern long FP5513E4AF_Ioctl(struct file *a_pstFile, unsigned int a_u4Command,
+				unsigned long a_u4Param);
+extern int FP5513E4AF_Release(struct inode *a_pstInode, struct file *a_pstFile);
+extern int FP5513E4AF_PowerDown(struct i2c_client *pstAF_I2Cclient,
+				int *pAF_Opened);
+extern int FP5513E4AF_GetFileName(unsigned char *pFileName);
+
 #define LC898122AF_SetI2Cclient LC898122AF_SetI2Cclient_Main
 #define LC898122AF_Ioctl LC898122AF_Ioctl_Main
 #define LC898122AF_Release LC898122AF_Release_Main

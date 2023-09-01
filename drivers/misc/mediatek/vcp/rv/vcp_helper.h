@@ -16,7 +16,12 @@
 #include "vcp.h"
 
 #define ROUNDUP(a, b)		        (((a) + ((b)-1)) & ~((b)-1))
-#define VCP_SYNC_TIMEOUT_MS		(100)
+#define VCP_SYNC_TIMEOUT_MS		(200)
+
+/* vcp dram shared memory */
+#define DRAM_VDEC_VSI_BUF_LEN		(480 * 1024)
+#define DRAM_VENC_VSI_BUF_LEN		(32 * 1024)
+#define DRAM_LOG_BUF_LEN		(1 * 1024 * 1024)
 
 /* vcp config reg. definition*/
 #define VCP_TCM_SIZE		(vcpreg.total_tcmsize)
@@ -51,7 +56,7 @@ struct VCP_IRQ_AST_INFO {
 /* reset ID */
 #define VCP_ALL_ENABLE	0x00
 #define VCP_ALL_REBOOT	0x01
-#define VCP_ALL_SUSPEND	0x10
+#define VCP_ALL_RESUME	0x10
 
 #define VCP_PACK_IOVA(addr)     ((uint32_t)((addr) | (((addr) >> 32) & 0xF)))
 #define VCP_UNPACK_IOVA(addr)   \
@@ -101,6 +106,7 @@ enum mtk_tinysys_vcp_kernel_op {
 	MTK_TINYSYS_VCP_KERNEL_OP_DUMP_POLLING,
 	MTK_TINYSYS_VCP_KERNEL_OP_RESET_SET,
 	MTK_TINYSYS_VCP_KERNEL_OP_RESET_RELEASE,
+	MTK_TINYSYS_VCP_KERNEL_OP_SET_SRAMLOGBUF_INFO,
 	MTK_TINYSYS_VCP_KERNEL_OP_NUM,
 };
 
@@ -160,6 +166,12 @@ struct vcp_region_info_st {
 	uint32_t regdump_start;
 	uint32_t regdump_size;
 	uint32_t ap_params_start;
+	uint32_t sramlog_buf_offset;
+	uint32_t sramlog_end_idx_offset;
+	uint32_t sramlog_buf_maxlen;
+	uint32_t ap_loader_start_PA;
+	uint32_t coredump_offset;
+	uint32_t coredump_dram_offset;
 };
 
 /* vcp helper varriable */
@@ -184,6 +196,8 @@ extern struct bin_attribute bin_attr_vcp_dump;
 /* vcp loggger */
 extern int vcp_logger_init(phys_addr_t start, phys_addr_t limit);
 extern void vcp_logger_uninit(void);
+extern int vcp_logger_wakeup_handler(unsigned int id,
+	void *prdata, void *data, unsigned int len);
 
 extern void vcp_logger_stop(void);
 extern void vcp_logger_cleanup(void);
@@ -219,6 +233,7 @@ extern phys_addr_t vcp_mem_base_virt;
 extern phys_addr_t vcp_mem_size;
 extern atomic_t vcp_reset_status;
 extern spinlock_t vcp_awake_spinlock;
+extern struct mutex  vcp_pw_clk_mutex;
 extern struct tasklet_struct vcp_A_irq0_tasklet;
 extern struct tasklet_struct vcp_A_irq1_tasklet;
 

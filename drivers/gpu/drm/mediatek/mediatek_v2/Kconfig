@@ -29,6 +29,15 @@ config MTK_DRE30_SUPPORT
 	  display visual enhancement ver.3.
 	  This feature requires the cowork of AAL user-space algorithm process.
 
+config MTK_ROUND_CORNER_SUPPORT
+         bool "enable medietak display round corner"
+         default n
+         help
+           define CONFIG_MTK_ROUND_CORNER_SUPPORT to enable Mediatek Round Corner on display.
+           If you want to use Meditek Round Corner on display, please make sure it is Y in xxx_defconfig.mk.
+           This feature require round corner pattern provided in lcm driver folder.
+           If unsure, set N.
+
 config MTK_DISP_LOGGER
 	bool "Default enable display logger function"
 	help
@@ -44,3 +53,11 @@ config MTK_DISP_DEBUG
 	help
 	  Used to debug for display module, only needed by developers.
 	  The function sould be disabled in user load for security.
+
+config MTK_MT6382_BDG
+	tristate "Support Bridge IC 6382"
+	help
+	  This config decide if device with BridgeIC 6382
+	  BridgeIC 6382 can support VESA-1.2 DSC, compressing display framedata
+	  Normal project will disable it first
+	  If you are not sure about this, do not set it to y

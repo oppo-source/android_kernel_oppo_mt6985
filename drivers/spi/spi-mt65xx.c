@@ -19,6 +19,10 @@
 #include <linux/spi/spi.h>
 #include <linux/dma-mapping.h>
 #include <linux/pm_qos.h>
+//#ifdef OPLUS_FEATURE_DISPLAY
+#include <linux/time.h>
+#include <linux/timekeeping.h>
+//#endif /* OPLUS_FEATURE_DISPLAY */
 
 #define SPI_CFG0_REG                      0x0000
 #define SPI_CFG1_REG                      0x0004
@@ -112,6 +116,9 @@
 #define DMA_ADDR_EXT_BITS (36)
 #define DMA_ADDR_DEF_BITS (32)
 
+/*reference to core layer timeout (ns) */
+#define MTK_SPI_TRANSFER_TIMEOUT (200000000)
+
 struct mtk_spi_compatible {
 	bool need_pad_sel;
 	/* Must explicitly send dummy Rx bytes to do Tx only transfer */
@@ -150,6 +157,9 @@ struct mtk_spi {
 	 */
 	u32 auto_suspend_delay;
 	bool suspend_delay_update;
+//#ifdef OPLUS_FEATURE_DISPLAY
+	u32 is_fifo_polling;
+//#endif /* OPLUS_FEATURE_DISPLAY */
 };
 
 static const struct mtk_spi_compatible mtk_common_compat;
@@ -454,23 +464,6 @@ static int mtk_spi_prepare_message(struct spi_master *master,
 	spi_debug("cpha:%d cpol:%d. chip_config as below\n", cpha, cpol);
 	spi_dump_config(master, msg);
 
-	/*set tick delay*/
-	if (mdata->dev_comp->enhance_timing) {
-		if (mdata->dev_comp->ipm_design) {
-			reg_val = readl(mdata->base + SPI_CMD_REG);
-			reg_val &= ~SPI_CMD_GET_TICKDLY_MASK;
-			reg_val |= (chip_config->tick_delay & 0x7)
-				   << SPI_CMD_GET_TICKDLY_OFFSET;
-			writel(reg_val, mdata->base + SPI_CMD_REG);
-		} else {
-			reg_val = readl(mdata->base + SPI_CFG1_REG);
-			reg_val &= ~SPI_CFG1_GET_TICK_DLY_MASK;
-			reg_val |= (chip_config->tick_delay & 0x7)
-				   << SPI_CFG1_GET_TICK_DLY_OFFSET;
-			writel(reg_val, mdata->base + SPI_CFG1_REG);
-		}
-	}
-
 	reg_val = readl(mdata->base + SPI_CMD_REG);
 	if (mdata->dev_comp->ipm_design) {
 		/* SPI transfer without idle time until packet length done */
@@ -545,17 +538,27 @@ static int mtk_spi_prepare_message(struct spi_master *master,
 		       mdata->base + SPI_PAD_SEL_REG);
 
 	/* tick delay */
-	reg_val = readl(mdata->base + SPI_CFG1_REG);
 	if (mdata->dev_comp->enhance_timing) {
-		reg_val &= ~SPI_CFG1_GET_TICK_DLY_MASK;
-		reg_val |= ((chip_config->tick_delay & 0x7)
-			    << SPI_CFG1_GET_TICK_DLY_OFFSET);
+		if (mdata->dev_comp->ipm_design) {
+			reg_val = readl(mdata->base + SPI_CMD_REG);
+			reg_val &= ~SPI_CMD_GET_TICKDLY_MASK;
+			reg_val |= ((chip_config->tick_delay & 0x7)
+				    << SPI_CMD_GET_TICKDLY_OFFSET);
+			writel(reg_val, mdata->base + SPI_CMD_REG);
+		} else {
+			reg_val = readl(mdata->base + SPI_CFG1_REG);
+			reg_val &= ~SPI_CFG1_GET_TICK_DLY_MASK;
+			reg_val |= ((chip_config->tick_delay & 0x7)
+				    << SPI_CFG1_GET_TICK_DLY_OFFSET);
+			writel(reg_val, mdata->base + SPI_CFG1_REG);
+		}
 	} else {
+		reg_val = readl(mdata->base + SPI_CFG1_REG);
 		reg_val &= ~SPI_CFG1_GET_TICK_DLY_MASK_V1;
 		reg_val |= ((chip_config->tick_delay & 0x3)
 			    << SPI_CFG1_GET_TICK_DLY_OFFSET_V1);
+		writel(reg_val, mdata->base + SPI_CFG1_REG);
 	}
-	writel(reg_val, mdata->base + SPI_CFG1_REG);
 
 	/* set hw cs timing */
 	mtk_spi_set_hw_cs_timing(spi);
@@ -784,8 +787,12 @@ static int mtk_spi_fifo_transfer(struct spi_master *master,
 				 struct spi_device *spi,
 				 struct spi_transfer *xfer)
 {
-	int cnt, remainder;
-	u32 reg_val;
+//#ifdef OPLUS_FEATURE_DISPLAY
+	/*int cnt, remainder;
+	u32 reg_val;*/
+	u32 reg_val, cnt, remainder, len, irq_status;
+	u64 cur_time;
+//#endif /* OPLUS_FEATURE_DISPLAY */
 	struct mtk_spi *mdata = spi_master_get_devdata(master);
 
 	mdata->cur_transfer = xfer;
@@ -807,10 +814,78 @@ static int mtk_spi_fifo_transfer(struct spi_master *master,
 
 	spi_debug("spi setting Done.Dump reg before Transfer start:\n");
 	spi_dump_reg(mdata, master);
+//#ifdef OPLUS_FEATURE_DISPLAY
+	if (!mdata->is_fifo_polling) {
+		mtk_spi_enable_transfer(master);
+		return 1;
+	}
+
+	reg_val = readl(mdata->base + SPI_CMD_REG);
+	reg_val &= ~(SPI_CMD_FINISH_IE | SPI_CMD_PAUSE_IE);
+	writel(reg_val, mdata->base + SPI_CMD_REG);
 
 	mtk_spi_enable_transfer(master);
 
-	return 1;
+	/*return 1;*/
+	cur_time = ktime_get_ns();
+	while (1) {
+
+		do {
+			irq_status = readl(mdata->base+SPI_STATUS1_REG);
+			/*Reference to core layer timeout (ns) */
+			if (ktime_get_ns() - cur_time > 200000000) {
+				return -ETIMEDOUT;
+			}
+			cpu_relax();
+		} while (!irq_status);
+
+		reg_val = readl(mdata->base + SPI_STATUS0_REG);
+		if (reg_val & MTK_SPI_PAUSE_INT_STATUS)
+			mdata->state = MTK_SPI_PAUSED;
+		else
+			mdata->state = MTK_SPI_IDLE;
+
+		if (xfer->rx_buf) {
+			cnt = mdata->xfer_len / 4;
+			ioread32_rep(mdata->base + SPI_RX_DATA_REG,
+					xfer->rx_buf + mdata->num_xfered, cnt);
+			remainder = mdata->xfer_len % 4;
+			if (remainder > 0) {
+				reg_val = readl(mdata->base + SPI_RX_DATA_REG);
+				memcpy(xfer->rx_buf +
+					mdata->num_xfered +
+					(cnt * 4),
+					&reg_val,
+					remainder);
+			}
+		}
+		mdata->num_xfered += mdata->xfer_len;
+		if (mdata->num_xfered == xfer->len)
+			break;
+
+		len = xfer->len - mdata->num_xfered;
+		mdata->xfer_len = min(MTK_SPI_MAX_FIFO_SIZE, len);
+		mtk_spi_setup_packet(master);
+
+		if (xfer->tx_buf) {
+			cnt = mdata->xfer_len / 4;
+			iowrite32_rep(mdata->base + SPI_TX_DATA_REG,
+					xfer->tx_buf + mdata->num_xfered, cnt);
+
+			remainder = mdata->xfer_len % 4;
+			if (remainder > 0) {
+				reg_val = 0;
+				memcpy(&reg_val,
+				xfer->tx_buf + (cnt * 4) + mdata->num_xfered,
+				remainder);
+				writel(reg_val, mdata->base + SPI_TX_DATA_REG);
+			}
+		}
+
+		mtk_spi_enable_transfer(master);
+	}
+	return 0;
+//#endif /* OPLUS_FEATURE_DISPLAY */
 }
 
 static int mtk_spi_dma_transfer(struct spi_master *master,
@@ -853,9 +928,20 @@ static int mtk_spi_dma_transfer(struct spi_master *master,
 	mtk_spi_update_mdata_len(master);
 	mtk_spi_setup_packet(master);
 	mtk_spi_setup_dma_addr(master, xfer);
-
+	if (mdata->is_fifo_polling) {
+		//enable irq
+		cmd |= SPI_CMD_FINISH_IE | SPI_CMD_PAUSE_IE;
+		writel(cmd, mdata->base + SPI_CMD_REG);
+	}
+	/* make sure all reg setting done before transfer */
+	mb();
 	spi_debug("spi setting Done.Dump reg before Transfer start:\n");
 	spi_dump_reg(mdata, master);
+	if (mdata->is_fifo_polling) {
+		//enable irq
+		cmd |= SPI_CMD_FINISH_IE | SPI_CMD_PAUSE_IE;
+		writel(cmd, mdata->base + SPI_CMD_REG);
+	}
 
 	mtk_spi_enable_transfer(master);
 
@@ -907,7 +993,6 @@ static irqreturn_t mtk_spi_interrupt(int irq, void *dev_id)
 		mdata->state = MTK_SPI_PAUSED;
 	else
 		mdata->state = MTK_SPI_IDLE;
-
 	if (!master->can_dma(master, NULL, trans)) {
 		if (trans->rx_buf) {
 			cnt = mdata->xfer_len / 4;
@@ -954,6 +1039,7 @@ static irqreturn_t mtk_spi_interrupt(int irq, void *dev_id)
 
 		return IRQ_HANDLED;
 	}
+
 
 	if (mdata->tx_sgl)
 		trans->tx_dma += mdata->xfer_len;
@@ -1183,18 +1269,23 @@ static int mtk_spi_probe(struct platform_device *pdev)
 			   addr_bits, ret);
 
 	ret = of_property_read_u32_index(
-				pdev->dev.of_node, "mediatek,autosuspend_delay",
+				pdev->dev.of_node, "mediatek,autosuspend-delay",
 				0, &mdata->auto_suspend_delay);
-	if (ret < 0) {
-		dev_info(&pdev->dev,
-				"get 'mediatek,autosuspend_delay' fail[%d], set 0\n", ret);
+	if (ret < 0)
 		mdata->auto_suspend_delay = 0;
-	}
 	pm_runtime_set_autosuspend_delay(&pdev->dev, mdata->auto_suspend_delay);
 	dev_info(&pdev->dev, "SPI probe, set auto_suspend delay = %dmS!\n",
 				mdata->auto_suspend_delay);
 	pm_runtime_use_autosuspend(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
+
+	ret = of_property_read_u32_index(
+				pdev->dev.of_node, "mediatek,fifo-polling",
+				0, &mdata->is_fifo_polling);
+		printk("--------print spi fifo_polling:%d\n",ret);
+
+	if (ret < 0)
+		mdata->is_fifo_polling = 0;
 
 	if (mdata->dev_comp->no_need_unprepare) {
 		ret = clk_prepare(mdata->spi_clk);

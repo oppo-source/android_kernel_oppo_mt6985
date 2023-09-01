@@ -19,8 +19,10 @@ char * const imgsensor_hw_pin_names[] = {
 	"rst",
 	"vcama",
 	"vcama1",
+	"vcamaf",
 	"vcamd",
 	"vcamio",
+	"vcama1_gpio",
 	"mipi_switch_en",
 	"mipi_switch_sel",
 	"mclk"
@@ -30,7 +32,8 @@ char * const imgsensor_hw_pin_names[] = {
 char * const imgsensor_hw_id_names[] = {
 	"mclk",
 	"regulator",
-	"gpio"
+	"gpio",
+	"wl2866d"
 };
 
 enum IMGSENSOR_RETURN imgsensor_hw_init(struct IMGSENSOR_HW *phw)
@@ -336,7 +339,7 @@ enum IMGSENSOR_RETURN imgsensor_hw_power(
 		? "NULL"
 		: phw->enable_sensor_by_index[(uint32_t)sensor_idx]);
 
-	if (phw->enable_sensor_by_index[(uint32_t)sensor_idx] &&
+	if (!phw->enable_sensor_by_index[(uint32_t)sensor_idx] ||
 	!strstr(phw->enable_sensor_by_index[(uint32_t)sensor_idx], curr_sensor_name))
 		return IMGSENSOR_RETURN_ERROR;
 

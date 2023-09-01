@@ -69,11 +69,11 @@ struct vmm_notifier_data {
 static struct vmm_notifier_data global_data[PD_NUM];
 
 /* VDE user coount */
-struct mutex vde_mutex;
+static DEFINE_MUTEX(vde_mutex);
 static int vde_user_counter;
 
 /* Camera user count */
-struct mutex ctrl_mutex;
+static DEFINE_MUTEX(ctrl_mutex);
 static int vmm_genpd_user_counter;
 static int vmm_user_counter;
 static int vmm_locked_isp_open(bool genpd_update)
@@ -85,15 +85,21 @@ static int vmm_locked_isp_open(bool genpd_update)
 	}
 
 	vmm_user_counter++;
-#ifdef TODO_CALL_VMM_CEIL_API
 	if (vmm_user_counter == 1)
-		mtk_mmdvfs_genpd_notify(VMM_USR_CAM, true);
-#endif
+		mtk_mmdvfs_camera_notify(true);
 	return 0;
 }
 
 static int vmm_locked_isp_close(bool genpd_update)
 {
+	/* no need to counter down at probe stage */
+	if (vmm_user_counter == 0)
+		return 0;
+
+	vmm_user_counter--;
+	if (vmm_user_counter == 0)
+		mtk_mmdvfs_camera_notify(false);
+
 	if (genpd_update) {
 		if (vmm_genpd_user_counter == 0)
 			return 0;
@@ -101,15 +107,6 @@ static int vmm_locked_isp_close(bool genpd_update)
 		if (vmm_genpd_user_counter == 0)
 			mtk_mmdvfs_genpd_notify(VMM_USR_CAM, false);
 	}
-
-	/* no need to counter down at probe stage */
-	if (vmm_user_counter == 0)
-		return 0;
-	vmm_user_counter--;
-#ifdef TODO_CALL_VMM_CEIL_API
-	if (vmm_user_counter == 0)
-		mtk_mmdvfs_genpd_notify(VMM_USR_CAM, false);
-#endif
 
 	return 0;
 }
@@ -290,9 +287,6 @@ static int vmm_notifier_probe(struct platform_device *pdev)
 	const char *reg_name;
 	struct vmm_notifier_data *data;
 	struct resource *res;
-
-	mutex_init(&ctrl_mutex);
-	mutex_init(&vde_mutex);
 
 	ret = of_property_read_u32(dev->of_node, "pd-id", &pd_id);
 	if (ret) {

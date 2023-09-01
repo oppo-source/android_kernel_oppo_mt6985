@@ -17,8 +17,23 @@
 #include <sched/pelt.h>
 #include <linux/stop_machine.h>
 #include <linux/kthread.h>
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+#include <../kernel/oplus_cpu/sched/sched_assist/sa_fair.h>
+#include <../kernel/oplus_cpu/sched/sched_assist/sa_common.h>
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FAKE_CAP)
+#include <../kernel/oplus_cpu/sched/eas_opt/fake_cap.h>
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+#include <../kernel/oplus_cpu/sched/frame_boost/frame_group.h>
+#endif
+
 #if IS_ENABLED(CONFIG_MTK_THERMAL_INTERFACE)
 #include <thermal_interface.h>
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_CPU_AUDIO_PERF)
+#include <../kernel/oplus_cpu/sched/sched_assist/sa_audio.h>
 #endif
 
 #define CREATE_TRACE_POINTS
@@ -69,7 +84,9 @@ static inline unsigned long _task_util_est(struct task_struct *p)
 
 static inline unsigned long task_util_est(struct task_struct *p)
 {
-	return max(task_util(p), _task_util_est(p));
+	if (sched_feat(UTIL_EST) && is_util_est_enable())
+		return max(task_util(p), _task_util_est(p));
+	return task_util(p);
 }
 
 #ifdef CONFIG_UCLAMP_TASK
@@ -105,7 +122,7 @@ unsigned long cpu_util(int cpu)
 	cfs_rq = &cpu_rq(cpu)->cfs;
 	util = READ_ONCE(cfs_rq->avg.util_avg);
 
-	if (sched_feat(UTIL_EST))
+	if (sched_feat(UTIL_EST) && is_util_est_enable())
 		util = max(util, READ_ONCE(cfs_rq->avg.util_est.enqueued));
 
 	return min_t(unsigned long, util, capacity_orig_of(cpu));
@@ -132,7 +149,7 @@ static unsigned long cpu_util_next(int cpu, struct task_struct *p, int dst_cpu)
 	else if (task_cpu(p) != cpu && dst_cpu == cpu)
 		util += task_util(p);
 
-	if (sched_feat(UTIL_EST)) {
+	if (sched_feat(UTIL_EST) && is_util_est_enable()) {
 		util_est = READ_ONCE(cfs_rq->avg.util_est.enqueued);
 
 		/*
@@ -174,7 +191,7 @@ static unsigned long mtk_cpu_util_next(int cpu, struct task_struct *p, int dst_c
 	else if (task_cpu(p) != cpu && dst_cpu == cpu)
 		util_freq += task_util(p);
 
-	if (sched_feat(UTIL_EST)) {
+	if (sched_feat(UTIL_EST) && is_util_est_enable()) {
 
 		/*
 		 * During wake-up, the task isn't enqueued yet and doesn't
@@ -212,6 +229,14 @@ mtk_compute_energy(struct task_struct *p, int dst_cpu, struct perf_domain *pd,
 	int cpu;
 	int cpu_temp[NR_CPUS];
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FAKE_CAP)
+	struct rq *rq = NULL;
+	unsigned int avg_nr_running = 1;
+	unsigned int count_cpu = 0;
+	int cluster_id = topology_physical_package_id(cpumask_first(pd_mask));
+	unsigned long util_thresh = 0;
+	unsigned long capacity = _cpu_cap;
+#endif
 	_cpu_cap -= arch_scale_thermal_pressure(cpumask_first(pd_mask));
 
 
@@ -234,7 +259,7 @@ mtk_compute_energy(struct task_struct *p, int dst_cpu, struct perf_domain *pd,
 		struct util_rq util_rq_energy, util_rq_freq;
 #endif
 
-		if (sched_feat(UTIL_EST))
+		if (sched_feat(UTIL_EST) && is_util_est_enable())
 			util_est = READ_ONCE(cfs_rq->avg.util_est.enqueued);
 
 		util_freq_base = mtk_cpu_util_next(cpu, p, -1, util_freq, util_est);
@@ -341,7 +366,31 @@ mtk_compute_energy(struct task_struct *p, int dst_cpu, struct perf_domain *pd,
 		/* get temperature for each cpu*/
 		cpu_temp[cpu] = get_cpu_temp(cpu);
 		cpu_temp[cpu] /= 1000;
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FAKE_CAP)
+		rq = cpu_rq(cpu);
+		avg_nr_running += rq->nr_running;
+		count_cpu++;
+#endif
 	}
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FAKE_CAP)
+	if (eas_opt_enable && (util_thresh_percent[cluster_id] != 100) && count_cpu) {
+		unsigned long max_util_base_bak = max_util_base;
+		unsigned long max_util_cur_bak = max_util_cur;
+		util_thresh = capacity * util_thresh_cvt[cluster_id] >> SCHED_CAPACITY_SHIFT;
+		avg_nr_running = mult_frac(avg_nr_running, 1, count_cpu);
+		max_util_base = (util_thresh < max_util_base) ?
+			(util_thresh + ((avg_nr_running * (max_util_base - util_thresh)* nr_fake_cap_multiple[cluster_id]) >> SCHED_CAPACITY_SHIFT)) : max_util_base;
+		max_util_cur = (util_thresh < max_util_cur) ?
+			(util_thresh + ((avg_nr_running * (max_util_cur - util_thresh)* nr_fake_cap_multiple[cluster_id]) >> SCHED_CAPACITY_SHIFT)) : max_util_cur;
+		if (unlikely(eas_opt_debug_enable))
+			trace_printk("[eas_opt]: cluster_id: %d, capacity: %d, util_thresh: %d, avg_nr_running: %d, "
+				"origin_max_util_base: %d, max_util_base: %d, origin_max_util_cur: %d, max_util_cur: %d, util_thresh_percent: %d\n",
+				cluster_id, capacity, util_thresh, avg_nr_running, max_util_base_bak,
+				max_util_base, max_util_cur_bak, max_util_cur, util_thresh_percent[cluster_id]);
+	}
+#endif
 
 	energy_base = mtk_em_cpu_energy(pd->em_pd, max_util_base, sum_util_base,
 		_cpu_cap, cpu_temp);
@@ -579,7 +628,7 @@ int mtk_find_energy_efficient_cpu_in_interrupt(struct task_struct *p, bool laten
 			 * Find the CPU with the maximum spare capacity in
 			 * the performance domain
 			 */
-			if (spare_cap > max_spare_cap_cpu_per_gear) {
+			if (spare_cap > max_spare_cap_per_gear) {
 				max_spare_cap_per_gear = spare_cap;
 				max_spare_cap_cpu_per_gear = cpu;
 			}
@@ -716,7 +765,10 @@ int mtk_find_energy_efficient_cpu_in_interrupt(struct task_struct *p, bool laten
 		ts[6] = sched_clock();
 #endif
 		/*select cpu in allowed_cpu_mask, not paused, and no rt running */
-		target_cpu = cpumask_any(&allowed_cpu_mask);
+		if (cpumask_empty(&allowed_cpu_mask))
+			target_cpu = this_cpu;
+		else
+			target_cpu = cpumask_any(&allowed_cpu_mask);
 		select_reason = LB_IRQ_BACKUP_ALLOWED;
 	}
 
@@ -783,6 +835,13 @@ void mtk_find_energy_efficient_cpu(void *data, struct task_struct *p, int prev_c
 					uclamp_latency_sensitive(p);
 	}
 
+#if IS_ENABLED(CONFIG_OPLUS_CPU_AUDIO_PERF)
+	oplus_sched_assist_audio_latency_sensitive(p, &latency_sensitive);
+#endif
+
+	if (!latency_sensitive)
+		latency_sensitive = get_task_idle_prefer_by_task(p);
+
 	pd = rcu_dereference(rd->pd);
 	if (!pd || READ_ONCE(rd->overutilized)) {
 		select_reason = LB_FAIL;
@@ -834,6 +893,16 @@ void mtk_find_energy_efficient_cpu(void *data, struct task_struct *p, int prev_c
 
 			if (!cpumask_test_cpu(cpu, p->cpus_ptr))
 				continue;
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+			if (should_ux_task_skip_cpu(p, cpu))
+				continue;
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FAKE_CAP)
+			if (adjust_group_task(p, cpu))
+				continue;
+#endif
 
 			if (cpu_paused(cpu))
 				continue;
@@ -974,14 +1043,21 @@ unlock:
 
 	*new_cpu = -1;
 done:
-	if (trace_sched_find_energy_efficient_cpu_enabled())
-		trace_sched_find_energy_efficient_cpu(best_delta, best_energy_cpu,
-				best_idle_cpu, idle_max_spare_cap_cpu, sys_max_spare_cap_cpu);
-	if (trace_sched_select_task_rq_enabled())
-		trace_sched_select_task_rq(p, select_reason, prev_cpu, *new_cpu,
-				task_util(p), task_util_est(p), uclamp_task_util(p),
-				latency_sensitive, sync);
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	if (set_frame_group_task_to_perfer_cpu(p, new_cpu))
+		select_reason = LB_FBT_PREFER;
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+	if (set_ux_task_to_prefer_cpu(p, new_cpu)) {
+		select_reason = LB_UX_PREFER;
+	}
+#endif
+	trace_sched_find_energy_efficient_cpu(best_delta, best_energy_cpu,
+			best_idle_cpu, idle_max_spare_cap_cpu, sys_max_spare_cap_cpu);
+	trace_sched_select_task_rq(p, select_reason, prev_cpu, *new_cpu,
+			task_util(p), task_util_est(p), uclamp_task_util(p),
+			latency_sensitive, sync);
 }
 #endif
 
@@ -1009,6 +1085,15 @@ static struct task_struct *detach_a_hint_task(struct rq *src_rq, int dst_cpu)
 		if (task_running(src_rq, p))
 			continue;
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_ASSIST)
+		if (should_ux_task_skip_cpu(p, dst_cpu))
+			continue;
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+		if (fbg_skip_migration(p, cpu_of(src_rq), dst_cpu))
+			continue;
+#endif
 		task_util = uclamp_task_util(p);
 
 		if (!uclamp_min_ls)
@@ -1017,6 +1102,13 @@ static struct task_struct *detach_a_hint_task(struct rq *src_rq, int dst_cpu)
 			latency_sensitive = (p->uclamp_req[UCLAMP_MIN].value > 0 ? 1 : 0) ||
 					uclamp_latency_sensitive(p);
 		}
+
+#if IS_ENABLED(CONFIG_OPLUS_CPU_AUDIO_PERF)
+		oplus_sched_assist_audio_latency_sensitive(p, &latency_sensitive);
+#endif
+
+		if (!latency_sensitive)
+			latency_sensitive = get_task_idle_prefer_by_task(p);
 
 		if (latency_sensitive && !cpumask_test_cpu(dst_cpu, &system_cpumask))
 			continue;
@@ -1051,6 +1143,9 @@ inline bool is_task_latency_sensitive(struct task_struct *p)
 		latency_sensitive = (p->uclamp_req[UCLAMP_MIN].value > 0 ? 1 : 0) ||
 					uclamp_latency_sensitive(p);
 	}
+	if (!latency_sensitive)
+		latency_sensitive = get_task_idle_prefer_by_task(p);
+
 	rcu_read_unlock();
 
 	return latency_sensitive;
@@ -1190,6 +1285,10 @@ void mtk_sched_newidle_balance(void *data, struct rq *this_rq, struct rq_flags *
 	 * re-start the picking loop.
 	 */
 	rq_unpin_lock(this_rq, rf);
+#if IS_ENABLED(CONFIG_OPLUS_CPU_AUDIO_PERF)
+	if (oplus_sched_assist_audio_idle_balance(this_rq))
+		goto audio_pulled;
+#endif
 	raw_spin_rq_unlock(this_rq);
 
 	this_cpu = this_rq->cpu;
@@ -1248,6 +1347,9 @@ void mtk_sched_newidle_balance(void *data, struct rq *this_rq, struct rq_flags *
 	if (best_running_task)
 		put_task_struct(best_running_task);
 	raw_spin_rq_lock(this_rq);
+#if IS_ENABLED(CONFIG_OPLUS_CPU_AUDIO_PERF)
+audio_pulled:
+#endif
 	/*
 	 * While browsing the domains, we released the rq lock, a task could
 	 * have been enqueued in the meantime. Since we're not going idle,

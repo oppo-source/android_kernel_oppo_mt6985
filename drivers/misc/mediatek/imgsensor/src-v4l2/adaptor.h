@@ -167,6 +167,17 @@ struct adaptor_ctx {
 	struct wakeup_source *sensor_ws;
 	unsigned int aov_pm_ops_flag;	/* flag for aov pm ops */
 	unsigned int aov_mclk_ulposc_flag;	/* flag for aov switch mclk to ulposc */
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+/*Added by rentianzhi@CamDrv, release the hw resource for Explorer AON driver, 20220124*/
+	unsigned int support_explorer_aon_fl;//1:use explorer AON driver
+	int aon_irq_gpio;
+	int pid;
+	int irq_cnt;
+	struct work_struct aon_wq;
+	struct mutex hw_mutex;
+#endif
+	unsigned int aov_i2c_bus_scl_switch_en;	/* flag for aov switch i2c bus scl */
+	unsigned int aov_i2c_bus_sda_switch_en;	/* flag for aov switch i2c bus sda */
 };
 
 #endif

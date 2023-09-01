@@ -26,6 +26,10 @@
 #define MT6373_PLG_CFG_ELR1		0x3ab
 #define MT6373_ELR_MASK			0xc
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus Add for usbtemp check */
+struct regmap *oplus_regmap;
+#endif
 /*
  * MT6373 regulators' information
  *
@@ -730,6 +734,57 @@ static bool mt6373_bypass_register(struct mt6373_regulator_info *info)
 	return info->desc.id == MT6373_ID_VBUCK4_UFS;
 }
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus Add for usbtemp check */
+/*
+	0x989: Push-pull output1 for MOSFET driver
+	bit[2]: RG_MOSCON1_DRVSEL
+		0: 7.5mA (default)
+		1: 15mA
+	bit[1]:RG_MOSCON1_EN is for PAD_MOSCON1 function high / low control
+		1: PAD_MOSCON1 is pulled high to VBBSNS
+		0: PAD_MOSCON1 is pulled low to GND
+	bit[0]: Selects reset pin output driving capability
+		0: 7.5mA (default)
+		1: 15mA
+*/
+#define MT6373_PMIC_RG_MOS_CON1_ADDR	0x989
+#define MT6373_PMIC_RG_MOS_CON1_EN_MASK	0x7
+
+int oplus_chg_set_dischg_enable(bool en)
+{
+	int ret;
+
+	if (!oplus_regmap) {
+		pr_err("%s, oplus_regmap is null!!!\n", __func__);
+		return -1;
+	}
+
+	if (en) {
+		ret = regmap_update_bits(oplus_regmap,
+			MT6373_PMIC_RG_MOS_CON1_ADDR,
+			MT6373_PMIC_RG_MOS_CON1_EN_MASK,
+			0x2);
+		if (ret < 0) {
+			pr_err("%s, enable dischg failed.\n", __func__);
+			return ret;
+		}
+	} else {
+		ret = regmap_update_bits(oplus_regmap,
+			MT6373_PMIC_RG_MOS_CON1_ADDR,
+			MT6373_PMIC_RG_MOS_CON1_EN_MASK,
+			0x0);
+		if (ret < 0) {
+			pr_err("%s, disable dischg failed.\n", __func__);
+			return ret;
+		}
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(oplus_chg_set_dischg_enable);
+#endif
+
 static int mt6373_regulator_probe(struct platform_device *pdev)
 {
 	struct regulator_config config = {};
@@ -776,6 +831,14 @@ static int mt6373_regulator_probe(struct platform_device *pdev)
 			continue;
 		}
 	}
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus Add for usbtemp check */
+	oplus_regmap = dev_get_regmap(pdev->dev.parent, NULL);
+	if (!oplus_regmap) {
+		dev_err(&pdev->dev, "get oplus_regmap failed\n");
+	}
+#endif
 
 	return 0;
 }

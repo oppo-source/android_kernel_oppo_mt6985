@@ -53,7 +53,9 @@ void notify_fsync_mgr_update_min_fl(struct adaptor_ctx *ctx);
 void notify_fsync_mgr_set_extend_framelength(
 	struct adaptor_ctx *ctx, u64 ext_fl);
 
-void notify_fsync_mgr_seamless_switch(struct adaptor_ctx *ctx);
+void notify_fsync_mgr_seamless_switch(struct adaptor_ctx *ctx,
+	u32 *ae_exp_arr, u32 ae_exp_max_cnt,
+	u32 orig_readout_time_us, u32 target_scenario_id);
 
 void notify_fsync_mgr_n_1_en(struct adaptor_ctx *ctx, u64 n, u64 en);
 
@@ -75,6 +77,10 @@ void notify_fsync_mgr_sync_frame(struct adaptor_ctx *ctx,
  * ext ctrl
  ******************************************************************************/
 void notify_fsync_mgr_vsync(struct adaptor_ctx *ctx);
+
+
+void notify_fsync_mgr_g_fl_record_info(struct adaptor_ctx *ctx,
+	struct mtk_fs_frame_length_info *p_fl_info);
 
 
 /*******************************************************************************
