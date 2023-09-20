@@ -104,6 +104,7 @@
 		algorithm_support;
 		snr_read_support;
 		palm_to_sleep_support;
+		tp_data_record_support;
 		/*
 		 *Virtual Key Config:
 		 *1:touchpanel,button-type: <virtualkey_type  supportted_button-map>
@@ -178,6 +179,7 @@
 			prevention,finger_hold_max_rx_exit_distance = <5 350 2300>;
 			prevention,max_rx_exit_distance = <1 5 150 350 2000>;
 			prevention,dynamic_finger_hold_exit_distance = <1 350 2300 450>;
+                        tp_data_record_support;
 		};
 	};
 

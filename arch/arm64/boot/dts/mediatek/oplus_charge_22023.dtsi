@@ -210,7 +210,6 @@
 		qcom,modify-soc-smooth;
 		qcom,gauge_num = <0>;
 		oplus,capacity-pct = <73>;
-		oplus,enable_sleep_mode;
 		oplus,ic_type = <OPLUS_CHG_IC_GAUGE>;
 		oplus,ic_index = <0>;
 		//qcom,bq28z610_need_balancing;
@@ -228,7 +227,6 @@
 		qcom,modify-soc-smooth;
 		qcom,gauge_num = <1>;
 		oplus,capacity-pct = <27>;
-		oplus,enable_sleep_mode;
 		oplus,ic_type = <OPLUS_CHG_IC_GAUGE>;
 		oplus,ic_index = <1>;
 		oplus,i2c_rst_ext;

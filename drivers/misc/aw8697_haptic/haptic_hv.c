@@ -626,7 +626,7 @@ static char aw_rtp_name_162Hz[][AW_RTP_NAME_MAX] = {
 	{"aw8697_fingerprint_effect7_RTP_116.bin"},
 	{"aw8697_fingerprint_effect8_RTP_117.bin"},
 	{"aw8697_breath_simulation_RTP_118_162Hz.bin"},
-	{"aw8697_reserved_119.bin"},
+	{"aw8697_Telcel_Torreblanca_RTP_119_162Hz.bin"},
 
 	{"aw8697_Miss_RTP_120.bin"},
 	{"aw8697_Scenic_RTP_121_162Hz.bin"},
@@ -966,7 +966,7 @@ static char aw_rtp_name_166Hz[][AW_RTP_NAME_MAX] = {
 	{"aw8697_fingerprint_effect7_RTP_116.bin"},
 	{"aw8697_fingerprint_effect8_RTP_117.bin"},
 	{"aw8697_breath_simulation_RTP_118_166Hz.bin"},
-	{"aw8697_reserved_119.bin"},
+	{"aw8697_Telcel_Torreblanca_RTP_119_166Hz.bin"},
 
 	{"aw8697_Miss_RTP_120.bin"},
 	{"aw8697_Scenic_RTP_121_166Hz.bin"},
@@ -1304,7 +1304,7 @@ static char aw_rtp_name_174Hz[][AW_RTP_NAME_MAX] = {
 	{"aw8697_fingerprint_effect7_RTP_116.bin"},
 	{"aw8697_fingerprint_effect8_RTP_117.bin"},
 	{"aw8697_breath_simulation_RTP_118_174Hz.bin"},
-	{"aw8697_reserved_119.bin"},
+	{"aw8697_Telcel_Torreblanca_RTP_119_174Hz.bin"},
 
 	{"aw8697_Miss_RTP_120.bin"},
 	{"aw8697_Scenic_RTP_121_174Hz.bin"},
@@ -1644,7 +1644,7 @@ static char aw_rtp_name_178Hz[][AW_RTP_NAME_MAX] = {
 	{"aw8697_fingerprint_effect7_RTP_116.bin"},
 	{"aw8697_fingerprint_effect8_RTP_117.bin"},
 	{"aw8697_breath_simulation_RTP_118_178Hz.bin"},
-	{"aw8697_reserved_119.bin"},
+	{"aw8697_Telcel_Torreblanca_RTP_119_178Hz.bin"},
 
 	{"aw8697_Miss_RTP_120.bin"},
 	{"aw8697_Scenic_RTP_121_178Hz.bin"},
@@ -2210,7 +2210,7 @@ static char aw_rtp_name[][AW_RTP_NAME_MAX] = {
 	{"aw8697_fingerprint_effect7_RTP_116.bin"},
 	{"aw8697_fingerprint_effect8_RTP_117.bin"},
 	{"aw8697_breath_simulation_RTP_118.bin"},
-	{"aw8697_reserved_119.bin"},
+	{"aw8697_Telcel_Torreblanca_RTP_119.bin"},
 
 	{"aw8697_Miss_RTP_120.bin"},
 	{"aw8697_Scenic_RTP_121.bin"},
