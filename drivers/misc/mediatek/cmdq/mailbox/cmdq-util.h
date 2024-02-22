@@ -161,6 +161,7 @@ struct cmdq_util_platform_fp {
 };
 
 void cmdq_util_set_fp(struct cmdq_util_platform_fp *cust_cmdq_platform);
+bool cmdq_util_check_hw_trace_work(u8 hwid);
 const char *cmdq_util_event_module_dispatch(phys_addr_t gce_pa, const u16 event, s32 thread);
 const char *cmdq_util_thread_module_dispatch(phys_addr_t gce_pa, s32 thread);
 u32 cmdq_util_get_hw_id(u32 pa);
@@ -177,6 +178,7 @@ void cmdq_util_dump_unlock(void);
 s32 cmdq_util_error_save_lst(const char *format, va_list args, u8 hwid);
 s32 cmdq_util_error_save(const char *format, ...);
 void cmdq_util_enable_disp_va(void);
+void cmdq_util_disp_smc_cmd(u32 crtc_idx, u32 cmd);
 bool cmdq_util_is_prebuilt_client(struct cmdq_client *client);
 void cmdq_util_prebuilt_set_client(const u16 hwid, struct cmdq_client *client);
 bool cmdq_util_is_secure_client(struct cmdq_client *client);

@@ -63,6 +63,7 @@ struct mmdvfs_drv_data {
 	u32 voltages[MAX_OPP_NUM];
 	u32 num_voltages;
 	struct mutex lp_mutex;
+	struct mutex dbg_mutex;
 	bool lp_mode;
 	u32 last_opp_level;
 };
@@ -78,6 +79,19 @@ struct mmdvfs_opp_record {
 };
 
 static struct mmdvfs_opp_record *mmdvfs_dbg;
+
+struct mmdvfs_dbg_data {
+	struct mmdvfs_drv_data *drv_data;
+	struct regulator *reg;
+	s32 force_step;
+	s32 vote_step;
+	bool is_notifier_registered;
+	bool is_aov_enable;
+	bool is_aov_mux_enable;
+	struct clk *aov_clk[AOV_CLK_NUM];
+};
+
+struct mmdvfs_dbg_data *dbg_data;
 
 static u32 log_level;
 enum mmdvfs_log_level {
@@ -217,6 +231,21 @@ static void set_all_clk(struct mmdvfs_drv_data *drv_data,
 		if (opp_level == drv_data->last_opp_level)
 			break;
 
+		if (dbg_data->is_aov_enable && dbg_data->aov_clk[AOV_MUX]) {
+			if (opp_level == 0 && drv_data->last_opp_level != MAX_OPP_NUM) {
+				if (dbg_data->is_aov_mux_enable) {
+					pr_notice("mmdvfs disable AOV MUX\n");
+					clk_disable_unprepare(dbg_data->aov_clk[AOV_MUX]);
+					dbg_data->is_aov_mux_enable = false;
+				}
+			} else if (drv_data->last_opp_level == 0 ||
+				(drv_data->last_opp_level == MAX_OPP_NUM && opp_level != 0)) {
+				pr_notice("mmdvfs enable AOV MUX\n");
+				clk_prepare_enable(dbg_data->aov_clk[AOV_MUX]);
+				dbg_data->is_aov_mux_enable = true;
+			}
+		}
+
 		switch (drv_data->action) {
 		/* Voltage Increase: Hopping First, Decrease: MUX First*/
 		case ACTION_IHDM:
@@ -315,18 +344,6 @@ static const struct of_device_id of_mmdvfs_match_tbl[] = {
 	{}
 };
 
-struct mmdvfs_dbg_data {
-	struct mmdvfs_drv_data *drv_data;
-	struct regulator *reg;
-	s32 force_step;
-	s32 vote_step;
-	bool is_notifier_registered;
-	bool is_aov_enable;
-	struct clk *aov_clk[AOV_CLK_NUM];
-};
-
-struct mmdvfs_dbg_data *dbg_data;
-
 /**
  * unregister_mmdvfs_notifier - unregister multimedia clk changing notifier
  * @nb: notifier block
@@ -404,12 +421,26 @@ int mmdvfs_dbg_clk_set(int step, bool is_force)
 		return -EINVAL;
 	}
 
+	mutex_lock(&drv_data->dbg_mutex);
 	if (is_force) {
+		if (dbg_data->vote_step >= 0) {
+			pr_notice("%s: vote_step is in process, skip force_step (v:%d,f:%d)\n",
+				__func__, dbg_data->vote_step, step);
+			mutex_unlock(&drv_data->dbg_mutex);
+			return 0;
+		}
 		last_force_step = dbg_data->force_step;
 		dbg_data->force_step = step;
 	} else {
+		if (dbg_data->force_step >= 0) {
+			pr_notice("%s: force_step is in process, skip vote_step (v:%d,f:%d)\n",
+				__func__, step, dbg_data->force_step);
+			mutex_unlock(&drv_data->dbg_mutex);
+			return 0;
+		}
 		dbg_data->vote_step = step;
 	}
+	mutex_unlock(&drv_data->dbg_mutex);
 
 	if (step < 0) {
 		if (is_force && !dbg_data->is_notifier_registered) {
@@ -728,6 +759,7 @@ static int mmdvfs_probe(struct platform_device *pdev)
 		num_lp_clksrc++;
 	}
 	mutex_init(&drv_data->lp_mutex);
+	mutex_init(&drv_data->dbg_mutex);
 	drv_data->last_opp_level = MAX_OPP_NUM;
 	mmdvfs_dbg = kzalloc(sizeof(*mmdvfs_dbg), GFP_KERNEL);
 	if (!mmdvfs_dbg)
@@ -744,6 +776,11 @@ void mtk_mmdvfs_aov_enable(const bool enable)
 	if (!dbg_data)
 		return;
 	dbg_data->is_aov_enable = enable;
+	if (!enable && dbg_data->aov_clk[AOV_MUX] && dbg_data->is_aov_mux_enable) {
+		pr_notice("%s disable AOV MUX\n", __func__);
+		clk_disable_unprepare(dbg_data->aov_clk[AOV_MUX]);
+		dbg_data->is_aov_mux_enable = false;
+	}
 }
 EXPORT_SYMBOL_GPL(mtk_mmdvfs_aov_enable);
 
@@ -775,7 +812,6 @@ static int mmdvfs_set_aov_clk(bool is_sys_resume)
 				__func__, err, is_sys_resume);
 		clk_disable_unprepare(dbg_data->aov_clk[AOV_MUX]);
 		pr_notice("%s: is_sys_resume=%d\n", __func__, is_sys_resume);
-
 	}
 
 	return err;

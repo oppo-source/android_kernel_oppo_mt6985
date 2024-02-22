@@ -1,6 +1,12 @@
 # SPDX-License-Identifier: GPL-2.0-only
 menu "SOC (System On Chip) specific Drivers"
 
+config OPLUS_SYSTEM_KERNEL
+  bool "config oplus system feature "
+  default y
+  help
+	define this config to add oplus sytstem kernel feature
+
 source "drivers/soc/actions/Kconfig"
 source "drivers/soc/amlogic/Kconfig"
 source "drivers/soc/aspeed/Kconfig"
@@ -24,4 +30,49 @@ source "drivers/soc/ux500/Kconfig"
 source "drivers/soc/versatile/Kconfig"
 source "drivers/soc/xilinx/Kconfig"
 
+#ifdef OPLUS_FEATURE_OEM_OCDT
+source "drivers/soc/oplus/system/Kconfig"
+#endif /* OPLUS_FEATURE_OEM_OCDT */
+
+#ifdef OPLUS_TP_BASIC
+source "drivers/soc/oplus/device_info/Kconfig"
+#endif /*#ifdef OPLUS_TP_BASIC*/
+
+#ifdef OPLUS_DFR_FEATURE
+source "drivers/soc/oplus/dfr/Kconfig"
+#endif /* OPLUS_DFR_FEATURE */
+
+#ifdef OPLUS_BOOT_FEATURE
+source "drivers/soc/oplus/boot/Kconfig"
+#endif /* OPLUS_BOOT_FEATURE */
+
+#ifdef OPLUS_DFT_FEATURE
+source "drivers/soc/oplus/dft/Kconfig"
+#endif /* OPLUS_DFT_FEATURE */
+
+source "kernel/oplus_cpu/oplus_omrg/Kconfig"
+
+source "kernel/oplus_cpu/cpufreq_bouncing/Kconfig"
+
+source "kernel/oplus_cpu/cpufreq_health/Kconfig"
+
+source "kernel/oplus_cpu/thermal/Kconfig"
+
+source "kernel/oplus_cpu/uad/Kconfig"
+
+#ifdef OPLUS_FEATURE_MM_FEEDBACK
+source "drivers/soc/oplus/oplus_mm_fb/Kconfig"
+#endif /* OPLUS_FEATURE_MM_FEEDBACK */
+
+source "kernel/oplus_cpu/sched/Kconfig"
+
+#ifdef OPLUS_FEATURE_ABNORMAL_FLAG
+source "kernel/oplus_cpu/oplus_overload/Kconfig"
+#endif /* OPLUS_FEATURE_ABNORMAL_FLAgit G */
+
+#ifdef OPLUS_FEATURE_MIDAS
+source "drivers/soc/oplus/midas/Kconfig"
+#endif /*OPLUS_FEATURE_MIDAS*/
+
+source "drivers/soc/oplus/storage/Kconfig"
 endmenu

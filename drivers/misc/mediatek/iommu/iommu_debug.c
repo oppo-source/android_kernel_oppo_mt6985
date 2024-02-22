@@ -10,6 +10,7 @@
  * If you need to do some special config, you can also use this macro.
  */
 #define IOMMU_BRING_UP	(0)
+//#define IOMMU_SECURE_DEBUG
 
 #include <linux/bitfield.h>
 #include <linux/bits.h>
@@ -535,6 +536,129 @@ static const struct mtk_iommu_port mm_port_mt6873[] = {
 	MM_IOMMU_FAKE_PORT_INIT("L22_CCU0", 0, 22, 0x1c, 0, CCU_FAKE),
 	/*Larb23  -- 1(192) */
 	MM_IOMMU_FAKE_PORT_INIT("L23_CCU1", 0, 23, 0x18, 0, CCU_FAKE),
+
+	MM_IOMMU_PORT_INIT("MM_UNKNOWN", 0, 0, 0, 0)
+};
+
+static const struct mtk_iommu_port mm_port_mt6835[] = {
+	/* Larb0 */
+	MM_IOMMU_PORT_INIT("L0_DISP_POSTMASK0", DISP_IOMMU, 0, 0x0, 0),
+	MM_IOMMU_PORT_INIT("L0_OVL_RDMA0", DISP_IOMMU, 0, 0x0, 1),
+	MM_IOMMU_PORT_INIT("L0_OVL_RDMA0_HDR", DISP_IOMMU, 0, 0x0, 2),
+	MM_IOMMU_PORT_INIT("L0_DISP_WDMA0", DISP_IOMMU, 0, 0x0, 3),
+	MM_IOMMU_PORT_INIT("L0_DISP_FAKE1", DISP_IOMMU, 0, 0x0, 4),
+
+	/* Larb1 */
+	MM_IOMMU_PORT_INIT("L1_DISP_RDMA0", DISP_IOMMU, 1, 0x8, 0),
+	MM_IOMMU_PORT_INIT("L1_OVL_2L_RDMA0", DISP_IOMMU, 1, 0x8, 1),
+	MM_IOMMU_PORT_INIT("L1_OVL_2L_RDMA0_HDR", DISP_IOMMU, 1, 0x8, 2),
+	MM_IOMMU_PORT_INIT("L1_DISP_UFBC_WDMA0", DISP_IOMMU, 1, 0x8, 3),
+	MM_IOMMU_PORT_INIT("L1_DISP_FAKE1", DISP_IOMMU, 1, 0x8, 4),
+
+	/* larb2 */
+	MM_IOMMU_PORT_INIT("L2_MDP_RDMA0", DISP_IOMMU, 2, 0x12, 0),
+	MM_IOMMU_PORT_INIT("L2_MDP_WROT0", DISP_IOMMU, 2, 0x12, 1),
+	MM_IOMMU_PORT_INIT("L2_MDP_WROT2", DISP_IOMMU, 2, 0x12, 2),
+	MM_IOMMU_PORT_INIT("L2_MDP_FAKE0", DISP_IOMMU, 2, 0x12, 3),
+
+	/* larb4 */
+	MM_IOMMU_PORT_INIT("L4_HW_VDEC_MC_EXT", DISP_IOMMU, 4, 0x28, 0),
+	MM_IOMMU_PORT_INIT("L4_HW_VDEC_PP_EXT", DISP_IOMMU, 4, 0x28, 2),
+	MM_IOMMU_PORT_INIT("L4_HW_VDEC_PRED_RD_EXT", DISP_IOMMU, 4, 0x28, 3),
+	MM_IOMMU_PORT_INIT("L4_HW_VDEC_PRED_WR_EXT", DISP_IOMMU, 4, 0x28, 4),
+	MM_IOMMU_PORT_INIT("L4_HW_VDEC_PPWRAP_EXT", DISP_IOMMU, 4, 0x28, 5),
+	MM_IOMMU_PORT_INIT("L4_HW_VDEC_TILE_EXT", DISP_IOMMU, 4, 0x28, 6),
+	MM_IOMMU_PORT_INIT("L4_HW_VDEC_VLD_EXT", DISP_IOMMU, 4, 0x28, 7),
+	MM_IOMMU_PORT_INIT("L4_HW_VDEC_VLD2_EXT", DISP_IOMMU, 4, 0x28, 8),
+	MM_IOMMU_PORT_INIT("L4_HW_VDEC_AVC_MV_EXT", DISP_IOMMU, 4, 0x28, 9),
+
+	/* larb7 */
+	MM_IOMMU_PORT_INIT("L7_VENC_RCPU", DISP_IOMMU, 7, 0x20, 0),
+	MM_IOMMU_PORT_INIT("L7_VENC_REC", DISP_IOMMU, 7, 0x20, 1),
+	MM_IOMMU_PORT_INIT("L7_VENC_BSDMA", DISP_IOMMU, 7, 0x20, 2),
+	MM_IOMMU_PORT_INIT("L7_VENC_SV_COMV", DISP_IOMMU, 7, 0x20, 3),
+	MM_IOMMU_PORT_INIT("L7_VENC_RD_COMV", DISP_IOMMU, 7, 0x20, 4),
+	MM_IOMMU_PORT_INIT("L7_VENC_CUR_LUMA", DISP_IOMMU, 7, 0x20, 5),
+	MM_IOMMU_PORT_INIT("L7_VENC_CUR_CHROMA", DISP_IOMMU, 7, 0x20, 6),
+	MM_IOMMU_PORT_INIT("L7_VENC_REF_LUMA", DISP_IOMMU, 7, 0x20, 7),
+	MM_IOMMU_PORT_INIT("L7_VENC_REF_CHROMA", DISP_IOMMU, 7, 0x20, 8),
+	MM_IOMMU_PORT_INIT("L7_JPGENC_Y_RDMA", DISP_IOMMU, 7, 0x20, 9),
+	MM_IOMMU_PORT_INIT("L7_JPGENC_C_RDMA", DISP_IOMMU, 7, 0x20, 10),
+	MM_IOMMU_PORT_INIT("L7_JPGENC_Q_TABLE", DISP_IOMMU, 7, 0x20, 11),
+	MM_IOMMU_PORT_INIT("L7_JPGENC_BSDMA", DISP_IOMMU, 7, 0x20, 12),
+
+	/* larb9 */
+	MM_IOMMU_PORT_INIT("L9_IMGI_D1", DISP_IOMMU, 9, 0x1a, 0),
+	MM_IOMMU_PORT_INIT("L9_IMGBI_D1", DISP_IOMMU, 9, 0x1a, 1),
+	MM_IOMMU_PORT_INIT("L9_DMGI_D1", DISP_IOMMU, 9, 0x1a, 2),
+	MM_IOMMU_PORT_INIT("L9_UFDI_D1", DISP_IOMMU, 9, 0x1a, 3),
+	MM_IOMMU_PORT_INIT("L9_LCEI_D1", DISP_IOMMU, 9, 0x1a, 4),
+	MM_IOMMU_PORT_INIT("L9_SMTI_D1", DISP_IOMMU, 9, 0x1a, 5),
+	MM_IOMMU_PORT_INIT("L9_SMTO_D2", DISP_IOMMU, 9, 0x1a, 6),
+	MM_IOMMU_PORT_INIT("L9_SMTO_D1", DISP_IOMMU, 9, 0x1a, 7),
+	MM_IOMMU_PORT_INIT("L9_CRZO_D1", DISP_IOMMU, 9, 0x1a, 8),
+	MM_IOMMU_PORT_INIT("L9_IMG3O_D1", DISP_IOMMU, 9, 0x1a, 9),
+	MM_IOMMU_PORT_INIT("L9_VIPI_D1", DISP_IOMMU, 9, 0x1a, 10),
+	MM_IOMMU_PORT_INIT("L9_SMTI_D5", DISP_IOMMU, 9, 0x1a, 11),
+	MM_IOMMU_PORT_INIT("L9_TIMGO_D1", DISP_IOMMU, 9, 0x1a, 12),
+
+	/* larb13 */
+	MM_IOMMU_PORT_INIT("L13_CAMSV_TOP_1_IMGO", DISP_IOMMU, 13, 0x30, 6),
+	MM_IOMMU_PORT_INIT("L13_CAMSV_TOP_2_IMGO", DISP_IOMMU, 13, 0x30, 7),
+	MM_IOMMU_PORT_INIT("L13_CAMSV_TOP_3_IMGO", DISP_IOMMU, 13, 0x30, 8),
+	MM_IOMMU_PORT_INIT("L13_FAKE", DISP_IOMMU, 13, 0x30, 11),
+
+	/* larb16 */
+	MM_IOMMU_PORT_INIT("L16_IMGO_R1_A", DISP_IOMMU, 16, 0x39, 0),
+	MM_IOMMU_PORT_INIT("L16_RRZO_R1_A", DISP_IOMMU, 16, 0x39, 1),
+	MM_IOMMU_PORT_INIT("L16_CQI_R1_A", DISP_IOMMU, 16, 0x39, 2),
+	MM_IOMMU_PORT_INIT("L16_BPCI_R1_A", DISP_IOMMU, 16, 0x39, 3),
+	MM_IOMMU_PORT_INIT("L16_YUVO_R1_A", DISP_IOMMU, 16, 0x39, 4),
+	MM_IOMMU_PORT_INIT("L16_UFDI_R2_A", DISP_IOMMU, 16, 0x39, 5),
+	MM_IOMMU_PORT_INIT("L16_RAWI_R2_A", DISP_IOMMU, 16, 0x39, 6),
+	MM_IOMMU_PORT_INIT("L16_RAWI_R3_A", DISP_IOMMU, 16, 0x39, 7),
+	MM_IOMMU_PORT_INIT("L16_AAO_R1_A", DISP_IOMMU, 16, 0x39, 8),
+	MM_IOMMU_PORT_INIT("L16_AFO_R1_A", DISP_IOMMU, 16, 0x39, 9),
+	MM_IOMMU_PORT_INIT("L16_FLKO_R1_A", DISP_IOMMU, 16, 0x39, 10),
+	MM_IOMMU_PORT_INIT("L16_LCESO_R1_A", DISP_IOMMU, 16, 0x39, 11),
+	MM_IOMMU_PORT_INIT("L16_CRZO_R1_A", DISP_IOMMU, 16, 0x39, 12),
+	MM_IOMMU_PORT_INIT("L16_LTMSO_R1_A", DISP_IOMMU, 16, 0x39, 13),
+	MM_IOMMU_PORT_INIT("L16_RSSO_R1_A", DISP_IOMMU, 16, 0x39, 14),
+	MM_IOMMU_PORT_INIT("L16_AAHO_R1_A", DISP_IOMMU, 16, 0x39, 15),
+	MM_IOMMU_PORT_INIT("L16_LSCI_R1_A", DISP_IOMMU, 16, 0x39, 16),
+
+	/* larb17 */
+	MM_IOMMU_PORT_INIT("L17_IMGO_R1_B", DISP_IOMMU, 17, 0x31, 0),
+	MM_IOMMU_PORT_INIT("L17_RRZO_R1_B", DISP_IOMMU, 17, 0x31, 1),
+	MM_IOMMU_PORT_INIT("L17_CQI_R1_B", DISP_IOMMU, 17, 0x31, 2),
+	MM_IOMMU_PORT_INIT("L17_BPCI_R1_B", DISP_IOMMU, 17, 0x31, 3),
+	MM_IOMMU_PORT_INIT("L17_YUVO_R1_B", DISP_IOMMU, 17, 0x31, 4),
+	MM_IOMMU_PORT_INIT("L17_UFDI_R2_B", DISP_IOMMU, 17, 0x31, 5),
+	MM_IOMMU_PORT_INIT("L17_RAWI_R2_B", DISP_IOMMU, 17, 0x31, 6),
+	MM_IOMMU_PORT_INIT("L17_RAWI_R3_B", DISP_IOMMU, 17, 0x31, 7),
+	MM_IOMMU_PORT_INIT("L17_AAO_R1_B", DISP_IOMMU, 17, 0x31, 8),
+	MM_IOMMU_PORT_INIT("L17_AFO_R1_B", DISP_IOMMU, 17, 0x31, 9),
+	MM_IOMMU_PORT_INIT("L17_FLKO_R1_B", DISP_IOMMU, 17, 0x31, 10),
+	MM_IOMMU_PORT_INIT("L17_LCESO_R1_B", DISP_IOMMU, 17, 0x31, 11),
+	MM_IOMMU_PORT_INIT("L17_CRZO_R1_B", DISP_IOMMU, 17, 0x31, 12),
+	MM_IOMMU_PORT_INIT("L17_LTMSO_R1_B", DISP_IOMMU, 17, 0x31, 13),
+	MM_IOMMU_PORT_INIT("L17_RSSO_R1_B", DISP_IOMMU, 17, 0x31, 14),
+	MM_IOMMU_PORT_INIT("L17_AAHO_R1_B", DISP_IOMMU, 17, 0x31, 15),
+	MM_IOMMU_PORT_INIT("L17_LSCI_R1_B", DISP_IOMMU, 17, 0x31, 16),
+
+	/* larb20 */
+	MM_IOMMU_PORT_INIT("L20_FDVT_RDA", DISP_IOMMU, 20, 0x19, 0),
+	MM_IOMMU_PORT_INIT("L20_FDVT_RDB", DISP_IOMMU, 20, 0x19, 1),
+	MM_IOMMU_PORT_INIT("L20_FDVT_WRA", DISP_IOMMU, 20, 0x19, 2),
+	MM_IOMMU_PORT_INIT("L20_FDVT_WRB", DISP_IOMMU, 20, 0x19, 3),
+
+	/* Larb21 -- 3 */
+	MM_IOMMU_FAKE_PORT_INIT("VIDEO_uP", DISP_IOMMU, 21, 0x8, 0,
+				GCE_VIDEOUP_FAKE),
+	MM_IOMMU_FAKE_PORT_INIT("GCE_D_M", DISP_IOMMU, 21, 0x8, 1,
+				GCE_VIDEOUP_FAKE),
+	MM_IOMMU_FAKE_PORT_INIT("GCE_M_M", DISP_IOMMU, 21, 0x8, 2,
+				GCE_VIDEOUP_FAKE),
 
 	MM_IOMMU_PORT_INIT("MM_UNKNOWN", 0, 0, 0, 0)
 };
@@ -4356,11 +4480,15 @@ struct iova_map_list {
 
 static struct iova_map_list map_list = {.init_flag = ATOMIC_INIT(0)};
 
+static bool bypass_iova_evt = true;
 void mtk_iova_map(int tab_id, u64 iova, size_t size)
 {
 	u32 id = (iova >> 32);
 	unsigned long flags;
 	struct iova_map_info *iova_buf;
+
+	if (bypass_iova_evt)
+		return;
 
 	if (id >= MTK_IOVA_SPACE_NUM) {
 		pr_err("out of iova space: 0x%llx\n", iova);
@@ -4393,6 +4521,9 @@ void mtk_iova_unmap(int tab_id, u64 iova, size_t size)
 	unsigned long flags;
 	struct iova_map_info *plist;
 	struct iova_map_info *tmp_plist;
+
+	if (bypass_iova_evt)
+		return;
 
 	if (id >= MTK_IOVA_SPACE_NUM) {
 		pr_err("out of iova space: 0x%llx\n", iova);
@@ -4434,6 +4565,9 @@ static void mtk_iommu_iova_map_dump(struct seq_file *s, u64 iova, u32 tab_id)
 	unsigned long flags;
 	struct iova_map_info *plist = NULL;
 	struct iova_map_info *n = NULL;
+
+	if (bypass_iova_evt)
+		return;
 
 	if (id >= MTK_IOVA_SPACE_NUM) {
 		pr_err("out of iova space: 0x%llx\n", iova);
@@ -4868,6 +5002,7 @@ static int m4u_debug_set(void *data, u64 val)
 	case 1:	/* show help info */
 		ret = mtk_iommu_debug_help(NULL);
 		break;
+#ifdef IOMMU_SECURE_DEBUG
 	case 2: /* mm translation fault test */
 		report_custom_iommu_fault(0, 0, 0x500000f, MM_IOMMU, 0);
 		break;
@@ -4895,17 +5030,26 @@ static int m4u_debug_set(void *data, u64 val)
 	case 10:
 		ret = ao_secure_dbg_switch_by_atf(MM_IOMMU, DISP_IOMMU, 0);
 		break;
+#endif
 	case 11:	/* enable trace log */
 		event_mgr[IOMMU_ALLOC].dump_log = 1;
 		event_mgr[IOMMU_FREE].dump_log = 1;
 		event_mgr[IOMMU_MAP].dump_log = 1;
 		event_mgr[IOMMU_UNMAP].dump_log = 1;
+		event_mgr[IOMMU_SUSPEND].dump_log = 1;
+		event_mgr[IOMMU_RESUME].dump_log = 1;
+		event_mgr[IOMMU_POWER_ON].dump_log = 1;
+		event_mgr[IOMMU_POWER_OFF].dump_log = 1;
 		break;
 	case 12:	/* disable trace log */
 		event_mgr[IOMMU_ALLOC].dump_log = 0;
 		event_mgr[IOMMU_FREE].dump_log = 0;
 		event_mgr[IOMMU_MAP].dump_log = 0;
 		event_mgr[IOMMU_UNMAP].dump_log = 0;
+		event_mgr[IOMMU_SUSPEND].dump_log = 0;
+		event_mgr[IOMMU_RESUME].dump_log = 0;
+		event_mgr[IOMMU_POWER_ON].dump_log = 0;
+		event_mgr[IOMMU_POWER_OFF].dump_log = 0;
 		break;
 	case 13:	/* enable trace dump */
 		event_mgr[IOMMU_ALLOC].dump_trace = 1;
@@ -4914,6 +5058,10 @@ static int m4u_debug_set(void *data, u64 val)
 		event_mgr[IOMMU_UNMAP].dump_trace = 1;
 		event_mgr[IOMMU_SYNC].dump_trace = 1;
 		event_mgr[IOMMU_UNSYNC].dump_trace = 1;
+		event_mgr[IOMMU_SUSPEND].dump_trace = 1;
+		event_mgr[IOMMU_RESUME].dump_trace = 1;
+		event_mgr[IOMMU_POWER_ON].dump_trace = 1;
+		event_mgr[IOMMU_POWER_OFF].dump_trace = 1;
 		break;
 	case 14:	/* disable trace dump */
 		event_mgr[IOMMU_ALLOC].dump_trace = 0;
@@ -4922,18 +5070,30 @@ static int m4u_debug_set(void *data, u64 val)
 		event_mgr[IOMMU_UNMAP].dump_trace = 0;
 		event_mgr[IOMMU_SYNC].dump_trace = 0;
 		event_mgr[IOMMU_UNSYNC].dump_trace = 0;
+		event_mgr[IOMMU_SUSPEND].dump_trace = 0;
+		event_mgr[IOMMU_RESUME].dump_trace = 0;
+		event_mgr[IOMMU_POWER_ON].dump_trace = 0;
+		event_mgr[IOMMU_POWER_OFF].dump_trace = 0;
 		break;
 	case 15:	/* reset to default trace log & dump */
 		event_mgr[IOMMU_ALLOC].dump_trace = 1;
 		event_mgr[IOMMU_FREE].dump_trace = 1;
 		event_mgr[IOMMU_SYNC].dump_trace = 1;
 		event_mgr[IOMMU_UNSYNC].dump_trace = 1;
+		event_mgr[IOMMU_SUSPEND].dump_trace = 1;
+		event_mgr[IOMMU_RESUME].dump_trace = 1;
+		event_mgr[IOMMU_POWER_ON].dump_trace = 1;
+		event_mgr[IOMMU_POWER_OFF].dump_trace = 1;
 		event_mgr[IOMMU_MAP].dump_trace = 0;
 		event_mgr[IOMMU_UNMAP].dump_trace = 0;
 		event_mgr[IOMMU_ALLOC].dump_log = 0;
 		event_mgr[IOMMU_FREE].dump_log = 0;
 		event_mgr[IOMMU_MAP].dump_log = 0;
 		event_mgr[IOMMU_UNMAP].dump_log = 0;
+		event_mgr[IOMMU_SUSPEND].dump_log = 0;
+		event_mgr[IOMMU_RESUME].dump_log = 0;
+		event_mgr[IOMMU_POWER_ON].dump_log = 0;
+		event_mgr[IOMMU_POWER_OFF].dump_log = 0;
 		break;
 	case 16:	/* dump iova trace */
 		mtk_iommu_trace_dump(NULL);
@@ -4946,7 +5106,7 @@ static int m4u_debug_set(void *data, u64 val)
 		mtk_iommu_iova_map_dump(NULL, 0, MM_TABLE);
 		mtk_iommu_iova_map_dump(NULL, 0, APU_TABLE);
 		break;
-#if IS_ENABLED(CONFIG_MTK_IOMMU_DEBUG)
+#ifdef IOMMU_SECURE_DEBUG
 	case 19:
 		mtk_iommu_dump_bank_base();
 		break;
@@ -5048,11 +5208,6 @@ static void mtk_iommu_trace_init(struct mtk_m4u_data *data)
 	event_mgr[IOMMU_RESUME].dump_trace = 1;
 	event_mgr[IOMMU_POWER_ON].dump_trace = 1;
 	event_mgr[IOMMU_POWER_OFF].dump_trace = 1;
-
-	event_mgr[IOMMU_SUSPEND].dump_log = 1;
-	event_mgr[IOMMU_RESUME].dump_log = 1;
-	event_mgr[IOMMU_POWER_ON].dump_log = 1;
-	event_mgr[IOMMU_POWER_OFF].dump_log = 1;
 
 	iommu_globals.record = vmalloc(total_size);
 	if (!iommu_globals.record) {
@@ -5282,6 +5437,9 @@ static void mtk_iommu_iova_alloc_dump_top(
 	int total_cnt = 0, dom_count = 0, tab_id = -1, dom_id = -1, i = 0;
 	u64 size = 0, total_size = 0, dom_size = 0;
 
+	if (bypass_iova_evt)
+		return;
+
 	/* check fwspec by device */
 	if (dev != NULL) {
 		fwspec = dev_iommu_fwspec_get(dev);
@@ -5340,6 +5498,9 @@ static void mtk_iommu_iova_alloc_dump(struct seq_file *s, struct device *dev)
 	struct iova_info *plist = NULL;
 	struct iova_info *n = NULL;
 
+	if (bypass_iova_evt)
+		return;
+
 	if (dev != NULL) {
 		fwspec = dev_iommu_fwspec_get(dev);
 		if (fwspec == NULL) {
@@ -5371,6 +5532,9 @@ static void mtk_iova_dbg_alloc(struct device *dev,
 	struct iova_info *iova_buf;
 	struct iommu_fwspec *fwspec = dev_iommu_fwspec_get(dev);
 	u32 tab_id, dom_id;
+
+	if (bypass_iova_evt)
+		return;
 
 	if (!fwspec) {
 		pr_info("%s fail, dev(%s) is not iommu-dev\n",
@@ -5415,6 +5579,9 @@ static void mtk_iova_dbg_free(
 	struct iova_info *tmp_plist;
 	struct device *dev = NULL;
 	u32 tab_id = PGTBALE_NUM;
+
+	if (bypass_iova_evt)
+		return;
 
 	spin_lock(&iova_list.lock);
 	list_for_each_entry_safe(plist, tmp_plist,
@@ -5484,6 +5651,14 @@ static int mtk_m4u_dbg_probe(struct platform_device *pdev)
 	return 0;
 }
 
+static int mt6835_tf_is_gce_videoup(u32 port_tf, u32 vld_tf)
+{
+	return F_MMU_INT_TF_LARB(port_tf) ==
+	       FIELD_GET(GENMASK(12, 8), vld_tf) &&
+	       F_MMU_INT_TF_PORT(port_tf) ==
+	       FIELD_GET(GENMASK(1, 0), vld_tf);
+}
+
 static int mt6855_tf_is_gce_videoup(u32 port_tf, u32 vld_tf)
 {
 	return F_MMU_INT_TF_LARB(port_tf) ==
@@ -5529,6 +5704,15 @@ static const struct mtk_m4u_plat_data mt6779_data = {
 	.port_list[MM_IOMMU] = iommu_port_mt6779,
 	.port_nr[MM_IOMMU]   = ARRAY_SIZE(iommu_port_mt6779),
 	.mm_tf_ccu_support   = 1,
+};
+
+static const struct mtk_m4u_plat_data mt6835_data = {
+	.port_list[MM_IOMMU] = mm_port_mt6835,
+	.port_nr[MM_IOMMU]   = ARRAY_SIZE(mm_port_mt6835),
+	.mm_tf_is_gce_videoup = mt6835_tf_is_gce_videoup,
+	.mm_tf_ccu_support = 0,
+	.mau_config	= mau_config_default,
+	.mau_config_nr = ARRAY_SIZE(mau_config_default),
 };
 
 static const struct mtk_m4u_plat_data mt6873_data = {
@@ -5623,6 +5807,7 @@ static const struct mtk_m4u_plat_data mt6985_data = {
 
 static const struct of_device_id mtk_m4u_dbg_of_ids[] = {
 	{ .compatible = "mediatek,mt6779-iommu-debug", .data = &mt6779_data},
+	{ .compatible = "mediatek,mt6835-iommu-debug", .data = &mt6835_data},
 	{ .compatible = "mediatek,mt6853-iommu-debug", .data = &mt6853_data},
 	{ .compatible = "mediatek,mt6855-iommu-debug", .data = &mt6855_data},
 	{ .compatible = "mediatek,mt6873-iommu-debug", .data = &mt6873_data},

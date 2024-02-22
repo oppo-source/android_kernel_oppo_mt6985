@@ -1229,10 +1229,14 @@ DPE_GetIRQState(unsigned int type, unsigned int userNumber, unsigned int stus,
 	unsigned long flags;
 
 	p = ProcessID % IRQ_USER_NUM_MAX;
+	LOG_INF("GetIRQState p= %d,stus  %d DPE_I.NT_ST= %lu\n", p, stus, DPE_INT_ST);
 	spin_lock_irqsave(&(DPEInfo.SpinLockIrq[type]), flags);
 	if (stus & DPE_INT_ST) {
+		LOG_INF("GetIRQSta DpeIrqCnt = %d,ProcessID[p] = %d,ProcessID = %d\n",
+		DPEInfo.IrqInfo.DpeIrqCnt[p], DPEInfo.IrqInfo.ProcessID[p], ProcessID);
 		ret = ((DPEInfo.IrqInfo.DpeIrqCnt[p] > 0) &&
 		       (DPEInfo.IrqInfo.ProcessID[p] == ProcessID));
+		LOG_INF("GetIRQSta ret = %d\n", ret);
 	} else {
 		LOG_ERR("EWIRQ,type:%d,u:%d,stat:%d,wReq:%d,PID:0x%x\n",
 			type, userNumber, stus, p, ProcessID);
@@ -3299,16 +3303,19 @@ signed int CmdqDPEHW(struct frame *frame)
 	unsigned int dma_bandwidth, trig_num;
 #endif
 
-	if (frame == NULL || frame->data == NULL)
+	if (frame == NULL || frame->data == NULL) {
+		LOG_INF("Cmdq frame Null or frame data null\n");
 		return -1;
+	}
 
-	LOG_DBG("%s request sent to CMDQ driver", __func__);
+
+	LOG_INF("%s request sent to CMDQ driver", __func__);
 	pDpeUserConfig = (struct DPE_Config *) frame->data;
 
 
 	pDpeConfig = &DpeConfig;
 /************** Pass User info to DPE_Kernel_Config **************/
-
+	LOG_INF("Cmdq Dpe_engineSelect = %d\n", pDpeUserConfig->Dpe_engineSelect);
 	if (pDpeUserConfig->Dpe_engineSelect == MODE_DVS_DVP_BOTH) {
 		DPE_Config_DVS(pDpeUserConfig, pDpeConfig);
 		DPE_Config_DVP(pDpeUserConfig, pDpeConfig);
@@ -5991,32 +5998,53 @@ unsigned int dpe_fop_poll(struct file *file, poll_table *wait)
 	//struct DPE_Kernel_Config *pDpeConfig;
 	//struct DPE_Kernel_Config DpeConfig;
 	struct DPE_USER_INFO_STRUCT *pUserInfo;
-	unsigned int buf_rdy;
+	//unsigned int buf_rdy;
+	unsigned int DVS_buf_rdy = 0;
+	unsigned int DVP_buf_rdy = 0;
 	unsigned long flags;
 	unsigned int p;
 
-
-	if (DPE_debug_log_en == 1)
-		LOG_INF("DPE Poll\n");
+	//if (DPE_debug_log_en == 1)
+	LOG_INF("DPE Poll star\n");
 
 	//DPE_DumpUserSpaceReg(pDpeConfig);
 	//LOG_INF("DPE_DumpReg star dpe_fop_poll!\n");
 	//DPE_DumpReg();
 	pUserInfo = (struct DPE_USER_INFO_STRUCT *) (file->private_data);
 	poll_wait(file, &DPEInfo.WaitQueueHead, wait);
-	buf_rdy = DPE_GetIRQState(DPE_IRQ_TYPE_INT_DVP_ST,
+
+
+	DVS_buf_rdy = DPE_GetIRQState(DPE_IRQ_TYPE_INT_DVS_ST,
 				0x0,
 				DPE_INT_ST, DPE_PROCESS_ID_DPE,
 				pUserInfo->Pid);
+
+	DVP_buf_rdy = DPE_GetIRQState(DPE_IRQ_TYPE_INT_DVP_ST,
+				0x0,
+				DPE_INT_ST, DPE_PROCESS_ID_DPE,
+				pUserInfo->Pid);
+
+
 	p = pUserInfo->Pid % IRQ_USER_NUM_MAX;
-	LOG_INF("buf_rdy = %d\n", buf_rdy);
-	if (buf_rdy) {
+	//LOG_INF("buf_rdy = %d\n", buf_rdy);
+	LOG_INF("DVS_buf_rdy = %d, DVP_buf_rdy = %d\n",
+	DVS_buf_rdy, DVP_buf_rdy);
+
+	if (DVP_buf_rdy) {
 		spin_lock_irqsave
 		(&(DPEInfo.SpinLockIrq[DPE_IRQ_TYPE_INT_DVP_ST]), flags);
 		DPEInfo.IrqInfo.DpeIrqCnt[p]--;
-if (DPEInfo.IrqInfo.DpeIrqCnt[p] == 0)
-	DPEInfo.IrqInfo.Status[DPE_IRQ_TYPE_INT_DVP_ST] &= (~DPE_INT_ST);
-spin_unlock_irqrestore(&(DPEInfo.SpinLockIrq[DPE_IRQ_TYPE_INT_DVP_ST]), flags);
+		if (DPEInfo.IrqInfo.DpeIrqCnt[p] == 0)
+			DPEInfo.IrqInfo.Status[DPE_IRQ_TYPE_INT_DVP_ST] &= (~DPE_INT_ST);
+		spin_unlock_irqrestore(&(DPEInfo.SpinLockIrq[DPE_IRQ_TYPE_INT_DVP_ST]), flags);
+		return POLLIN | POLLRDNORM;
+	} else if (DVS_buf_rdy) {
+		spin_lock_irqsave
+		(&(DPEInfo.SpinLockIrq[DPE_IRQ_TYPE_INT_DVS_ST]), flags);
+		DPEInfo.IrqInfo.DpeIrqCnt[p]--;
+		if (DPEInfo.IrqInfo.DpeIrqCnt[p] == 0)
+			DPEInfo.IrqInfo.Status[DPE_IRQ_TYPE_INT_DVS_ST] &= (~DPE_INT_ST);
+		spin_unlock_irqrestore(&(DPEInfo.SpinLockIrq[DPE_IRQ_TYPE_INT_DVS_ST]), flags);
 		return POLLIN | POLLRDNORM;
 	} else
 		return 0;
@@ -7387,10 +7415,10 @@ static irqreturn_t ISP_Irq_DVP(signed int Irq, void *DeviceId)
 		LOG_INF("DPE Read status fail, IRQ, DvsStatus: 0x%08x, DvpStatus: 0x%08x\n",
 		DvsStatus, DvpStatus);
 
-	if (DPE_debug_log_en == 1) {
-		LOG_INF("DVP IRQ, DvsStatus: 0x%08x, DvpStatus: 0x%08x\n",
-		DvsStatus, DvpStatus);
-	}
+
+	LOG_INF("DVP IRQ, DvsStatus: 0x%08x, DvpStatus: 0x%08x\n",
+	DvsStatus, DvpStatus);
+
 	/* DPE done status may rise later, so can't use done status now  */
 	/* if (DPE_INT_ST == (DPE_INT_ST & DvpStatus)) { */
 
@@ -7484,10 +7512,10 @@ static irqreturn_t ISP_Irq_DVS(signed int Irq, void *DeviceId)
 		LOG_INF("DPE Read status fail, IRQ, DvsStatus: 0x%08x, DvpStatus: 0x%08x\n",
 		DvsStatus, DvpStatus);
 
-	if (DPE_debug_log_en == 1) {
-		LOG_INF("DVS IRQ, DvsStatus: 0x%08x, DvpStatus: 0x%08x\n",
-		DvsStatus, DvpStatus);
-	}
+
+	LOG_INF("DVS IRQ, DvsStatus: 0x%08x, DvpStatus: 0x%08x\n",
+	DvsStatus, DvpStatus);
+
 
 	/* DPE done status may rise later, so can't use done status now  */
 	/* if (DPE_INT_ST == (DPE_INT_ST & DvsStatus)) { */

@@ -45,8 +45,11 @@ struct workqueue_struct *uarthub_workqueue;
 static int g_last_err_type = -1;
 static struct timespec64 tv_now_assert, tv_end_assert;
 static int g_univpll_clk_ref_count;
+
 struct mutex g_lock_univpll_clk;
 struct mutex g_lock_dump_log;
+struct mutex g_clear_trx_req_lock;
+struct mutex g_uarthub_reset_lock;
 
 #define DBG_LOG_LEN 1024
 
@@ -62,6 +65,7 @@ struct mutex g_lock_dump_log;
 #define UARTHUB_ENABLE_UART_1_CHANNEL 1
 
 #define DUMP_AP_UART_DBG_INFO 0
+#define ISR_CLEAR_ALL_IRQ 1
 
 #if !(SUPPORT_SSPM_DRIVER)
 #ifdef INIT_UARTHUB_DEFAULT
@@ -98,11 +102,13 @@ static int uarthub_fb_notifier_callback(struct notifier_block *nb, unsigned long
 static enum hrtimer_restart dump_hrtimer_handler_cb(struct hrtimer *hrt);
 
 #if IS_ENABLED(CONFIG_OF)
+struct uarthub_ops_struct __weak mt6835_plat_data = {};
 struct uarthub_ops_struct __weak mt6886_plat_data = {};
 struct uarthub_ops_struct __weak mt6983_plat_data = {};
 struct uarthub_ops_struct __weak mt6985_plat_data = {};
 
 const struct of_device_id apuarthub_of_ids[] = {
+	{ .compatible = "mediatek,mt6835-uarthub", .data = &mt6835_plat_data },
 	{ .compatible = "mediatek,mt6886-uarthub", .data = &mt6886_plat_data },
 	{ .compatible = "mediatek,mt6983-uarthub", .data = &mt6983_plat_data },
 	{ .compatible = "mediatek,mt6985-uarthub", .data = &mt6985_plat_data },
@@ -165,11 +171,13 @@ static int mtk_uarthub_remove(struct platform_device *pdev)
 
 static int mtk_uarthub_resume(struct device *dev)
 {
+#if UARTHUB_DEBUG_LOG
 	const char *prefix = "##########";
 	const char *postfix = "##############";
 
 	pr_info("[%s] %s uarthub enter resume %s\n",
 		__func__, prefix, postfix);
+#endif
 
 #if UARTHUB_INFO_LOG
 	uarthub_core_debug_clk_info("HUB_DBG_RESUME");
@@ -307,6 +315,8 @@ static int uarthub_core_init(void)
 
 	mutex_init(&g_lock_univpll_clk);
 	mutex_init(&g_lock_dump_log);
+	mutex_init(&g_clear_trx_req_lock);
+	mutex_init(&g_uarthub_reset_lock);
 
 	hrtimer_init(&dump_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
 	dump_hrtimer.function = dump_hrtimer_handler_cb;
@@ -360,7 +370,6 @@ static int uarthub_fb_notifier_callback(struct notifier_block *nb, unsigned long
 	data = *(int *)v;
 
 	if (value == MTK_DISP_EVENT_BLANK) {
-		pr_info("%s+\n", __func__);
 		if (data == MTK_DISP_BLANK_UNBLANK) {
 			pr_info("[%s] %s uarthub enter UNBLANK %s\n",
 				__func__, prefix, postfix);
@@ -389,7 +398,6 @@ static int uarthub_fb_notifier_callback(struct notifier_block *nb, unsigned long
 			pr_info("[%s] %s data(%d) is not UNBLANK or POWERDOWN %s\n",
 				__func__, prefix, data, postfix);
 		}
-		pr_info("%s-\n", __func__);
 	}
 
 	return 0;
@@ -417,8 +425,6 @@ static irqreturn_t uarthub_irq_isr(int irq, void *arg)
 		UARTHUB_REG_WRITE_MASK(UARTHUB_INTFHUB_DEV0_IRQ_MASK(intfhub_base_remap_addr),
 			0x0, 0x3FFFF);
 	}
-
-	uarthub_core_set_trigger_uarthub_frame_error_worker();
 
 	return IRQ_HANDLED;
 }
@@ -453,7 +459,7 @@ int uarthub_core_irq_mask_ctrl(int mask)
 	return 0;
 }
 
-int uarthub_core_irq_clear_ctrl(void)
+int uarthub_core_irq_clear_ctrl(int err_type)
 {
 	if (g_uarthub_disable == 1)
 		return 0;
@@ -472,8 +478,13 @@ int uarthub_core_irq_clear_ctrl(void)
 		return -4;
 	}
 
-	UARTHUB_REG_WRITE_MASK(UARTHUB_INTFHUB_DEV0_IRQ_CLR(intfhub_base_remap_addr),
-		0x3FFFF, 0x3FFFF);
+	if (err_type < 0) {
+		UARTHUB_REG_WRITE_MASK(UARTHUB_INTFHUB_DEV0_IRQ_CLR(intfhub_base_remap_addr),
+			0x3FFFF, 0x3FFFF);
+	} else {
+		UARTHUB_SET_BIT(UARTHUB_INTFHUB_DEV0_IRQ_CLR(intfhub_base_remap_addr),
+			err_type);
+	}
 
 	return 0;
 }
@@ -531,7 +542,7 @@ int uarthub_core_irq_free(struct platform_device *pdev)
 	int irq_num = 0;
 
 	uarthub_core_irq_mask_ctrl(0);
-	uarthub_core_irq_clear_ctrl();
+	uarthub_core_irq_clear_ctrl(-1);
 
 	if (pdev)
 		node = pdev->dev.of_node;
@@ -691,7 +702,7 @@ int uarthub_core_open(void)
 	if (g_max_dev <= 0)
 		return -1;
 
-#if UARTHUB_INFO_LOG
+#if UARTHUB_DEBUG_LOG
 	pr_info("[%s] g_max_dev=[%d]\n", __func__, g_max_dev);
 #endif
 
@@ -710,6 +721,7 @@ int uarthub_core_open(void)
 	g_uarthub_open = 1;
 #endif
 
+	uarthub_core_irq_clear_ctrl(-1);
 	ret = uarthub_core_irq_register(g_uarthub_pdev);
 	if (ret)
 		return -1;
@@ -730,11 +742,12 @@ int uarthub_core_close(void)
 		return -1;
 	}
 
-#if UARTHUB_INFO_LOG
+#if UARTHUB_DEBUG_LOG
 	pr_info("[%s] g_max_dev=[%d]\n", __func__, g_max_dev);
 #endif
 
 	uarthub_core_irq_free(g_uarthub_pdev);
+	uarthub_core_irq_clear_ctrl(-1);
 
 	uarthub_core_dev0_clear_txrx_request();
 	g_uarthub_open = 0;
@@ -767,9 +780,11 @@ int uarthub_core_dev0_is_uarthub_ready(void)
 		(0x1 << 9)) >> 9);
 
 	if (state == 1) {
-		uarthub_core_irq_clear_ctrl();
-#if UARTHUB_INFO_LOG
+#if UARTHUB_DEBUG_LOG
 		uarthub_core_debug_clk_info("HUB_DBG_SetTX_E");
+#endif
+#if UARTHUB_INFO_LOG
+		uarthub_core_debug_byte_cnt_info("HUB_DBG_SetTX_E");
 #endif
 #if INIT_UARTHUB_DEFAULT
 		if (uarthub_core_is_uarthub_clk_enable() == 1) {
@@ -1060,11 +1075,18 @@ int uarthub_core_dev0_set_tx_request(void)
 		return -4;
 	}
 
+	if (mutex_lock_killable(&g_uarthub_reset_lock)) {
+		pr_notice("[%s] mutex_lock_killable g_uarthub_reset_lock fail\n", __func__);
+		return -5;
+	}
+
 #if UARTHUB_INFO_LOG
 	uarthub_core_debug_clk_info("HUB_DBG_SetTX_B");
 #endif
 
 	UARTHUB_REG_WRITE(UARTHUB_INTFHUB_DEV0_STA_SET(intfhub_base_remap_addr), 0x2);
+
+	mutex_unlock(&g_uarthub_reset_lock);
 
 	if (g_uarthub_plat_ic_ops &&
 			g_uarthub_plat_ic_ops->uarthub_plat_get_spm_sys_timer)
@@ -1130,6 +1152,11 @@ int uarthub_core_dev0_set_rx_request(void)
 		return -4;
 	}
 
+	if (mutex_lock_killable(&g_uarthub_reset_lock)) {
+		pr_notice("[%s] mutex_lock_killable g_uarthub_reset_lock fail\n", __func__);
+		return -5;
+	}
+
 #if UARTHUB_INFO_LOG
 	if (g_uarthub_plat_ic_ops &&
 			g_uarthub_plat_ic_ops->uarthub_plat_get_spm_sys_timer)
@@ -1139,6 +1166,8 @@ int uarthub_core_dev0_set_rx_request(void)
 #endif
 
 	UARTHUB_REG_WRITE(UARTHUB_INTFHUB_DEV0_STA_SET(intfhub_base_remap_addr), 0x1);
+
+	mutex_unlock(&g_uarthub_reset_lock);
 
 	return 0;
 }
@@ -1165,7 +1194,14 @@ int uarthub_core_dev0_set_txrx_request(void)
 		return -4;
 	}
 
+	if (mutex_lock_killable(&g_uarthub_reset_lock)) {
+		pr_notice("[%s] mutex_lock_killable g_uarthub_reset_lock fail\n", __func__);
+		return -5;
+	}
+
 	UARTHUB_REG_WRITE(UARTHUB_INTFHUB_DEV0_STA_SET(intfhub_base_remap_addr), 0x3);
+
+	mutex_unlock(&g_uarthub_reset_lock);
 
 #if !(SUPPORT_SSPM_DRIVER)
 	UARTHUB_SET_BIT(UARTHUB_INTFHUB_IRQ_CLR(intfhub_base_remap_addr), (0x1 << 0));
@@ -1219,17 +1255,27 @@ int uarthub_core_dev0_clear_tx_request(void)
 		return -4;
 	}
 
-#if UARTHUB_INFO_LOG
-	pr_info("[%s] g_max_dev=[%d]\n", __func__, g_max_dev);
+	if (mutex_lock_killable(&g_uarthub_reset_lock)) {
+		pr_notice("[%s] mutex_lock_killable g_uarthub_reset_lock fail\n", __func__);
+		return -5;
+	}
+
+#if UARTHUB_DEBUG_LOG
+	uarthub_core_debug_byte_cnt_info("HUB_DBG_ClrTX");
 #endif
 
 	UARTHUB_REG_WRITE(UARTHUB_INTFHUB_DEV0_STA_CLR(intfhub_base_remap_addr), 0x2);
+
+	mutex_unlock(&g_uarthub_reset_lock);
 
 	return 0;
 }
 
 int uarthub_core_dev0_clear_rx_request(void)
 {
+	int dev0_sta = 0, dev1_sta = 0, dev2_sta = 0;
+	int need_lock = 0;
+
 	if (g_uarthub_disable == 1)
 		return 0;
 
@@ -1245,6 +1291,25 @@ int uarthub_core_dev0_clear_rx_request(void)
 	if (uarthub_core_is_apb_bus_clk_enable() == 0) {
 		pr_notice("[%s] apb bus clk disable\n", __func__);
 		return -4;
+	}
+
+	if (mutex_lock_killable(&g_uarthub_reset_lock)) {
+		pr_notice("[%s] mutex_lock_killable g_uarthub_reset_lock fail\n", __func__);
+		return -5;
+	}
+
+	dev0_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV0_STA(intfhub_base_remap_addr));
+	dev1_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV1_STA(intfhub_base_remap_addr));
+	dev2_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV2_STA(intfhub_base_remap_addr));
+	if (dev0_sta == 0x301 && dev1_sta == 0x300 && dev2_sta == dev1_sta)
+		need_lock = 1;
+
+	if (need_lock == 1) {
+		if (mutex_lock_killable(&g_clear_trx_req_lock)) {
+			pr_notice("[%s] mutex_lock_killable g_clear_trx_req_lock fail\n", __func__);
+			mutex_unlock(&g_uarthub_reset_lock);
+			return -5;
+		}
 	}
 
 #if UARTHUB_INFO_LOG
@@ -1257,11 +1322,19 @@ int uarthub_core_dev0_clear_rx_request(void)
 
 	UARTHUB_REG_WRITE(UARTHUB_INTFHUB_DEV0_STA_CLR(intfhub_base_remap_addr), 0x5);
 
+	if (need_lock == 1)
+		mutex_unlock(&g_clear_trx_req_lock);
+
+	mutex_unlock(&g_uarthub_reset_lock);
+
 	return 0;
 }
 
 int uarthub_core_dev0_clear_txrx_request(void)
 {
+	int dev0_sta = 0, dev1_sta = 0, dev2_sta = 0;
+	int need_lock = 0;
+
 	if (g_uarthub_disable == 1)
 		return 0;
 
@@ -1279,11 +1352,35 @@ int uarthub_core_dev0_clear_txrx_request(void)
 		return -4;
 	}
 
+	if (mutex_lock_killable(&g_uarthub_reset_lock)) {
+		pr_notice("[%s] mutex_lock_killable g_uarthub_reset_lock fail\n", __func__);
+		return -5;
+	}
+
+	dev0_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV0_STA(intfhub_base_remap_addr));
+	dev1_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV1_STA(intfhub_base_remap_addr));
+	dev2_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV2_STA(intfhub_base_remap_addr));
+	if (dev1_sta == 0x300 && dev2_sta == dev1_sta)
+		need_lock = 1;
+
+	if (need_lock == 1) {
+		if (mutex_lock_killable(&g_clear_trx_req_lock)) {
+			pr_notice("[%s] mutex_lock_killable g_clear_trx_req_lock fail\n", __func__);
+			mutex_unlock(&g_uarthub_reset_lock);
+			return -5;
+		}
+	}
+
 #if UARTHUB_INFO_LOG
 	pr_info("[%s] g_max_dev=[%d]\n", __func__, g_max_dev);
 #endif
 
 	UARTHUB_REG_WRITE(UARTHUB_INTFHUB_DEV0_STA_CLR(intfhub_base_remap_addr), 0x7);
+
+	if (need_lock == 1)
+		mutex_unlock(&g_clear_trx_req_lock);
+
+	mutex_unlock(&g_uarthub_reset_lock);
 
 	return 0;
 }
@@ -1567,11 +1664,11 @@ int uarthub_core_bypass_mode_ctrl(int enable)
 
 	if (enable == 1) {
 		uarthub_core_irq_mask_ctrl(1);
-		uarthub_core_irq_clear_ctrl();
+		uarthub_core_irq_clear_ctrl(-1);
 		UARTHUB_SET_BIT(UARTHUB_INTFHUB_CON2(intfhub_base_remap_addr), (0x1 << 2));
 	} else {
 		UARTHUB_CLR_BIT(UARTHUB_INTFHUB_CON2(intfhub_base_remap_addr), (0x1 << 2));
-		uarthub_core_irq_clear_ctrl();
+		uarthub_core_irq_clear_ctrl(-1);
 		uarthub_core_irq_mask_ctrl(0);
 	}
 
@@ -1605,18 +1702,12 @@ int uarthub_core_md_adsp_fifo_ctrl(int enable)
 		uarthub_core_reset_to_ap_enable_only(1);
 	} else {
 #if UARTHUB_ENABLE_UART_1_CHANNEL
-		if (g_max_dev >= 2) {
-			UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev1_base_remap_addr),
-				((UARTHUB_REG_READ(UARTHUB_FCR_RD(
-				dev1_base_remap_addr)) & (~(0x1))) | (0x1)));
-		}
+		if (g_max_dev >= 2)
+			UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev1_base_remap_addr), 0x81);
 #endif
 
-		if (g_max_dev >= 3) {
-			UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev2_base_remap_addr),
-				((UARTHUB_REG_READ(UARTHUB_FCR_RD(
-				dev2_base_remap_addr)) & (~(0x1))) | (0x1)));
-		}
+		if (g_max_dev >= 3)
+			UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev2_base_remap_addr), 0x81);
 
 #if UARTHUB_INFO_LOG
 		uarthub_core_debug_info_with_tag(__func__);
@@ -1998,7 +2089,11 @@ static void trigger_uarthub_error_worker_handler(struct work_struct *work)
 		if ((((tv_now_assert.tv_sec == tv_end_assert.tv_sec) &&
 				(tv_now_assert.tv_nsec > tv_end_assert.tv_nsec)) ||
 				(tv_now_assert.tv_sec > tv_end_assert.tv_sec)) == false) {
-			uarthub_core_irq_clear_ctrl();
+#if ISR_CLEAR_ALL_IRQ
+			uarthub_core_irq_clear_ctrl(-1);
+#else
+			uarthub_core_irq_clear_ctrl(err_type);
+#endif
 			uarthub_core_irq_mask_ctrl(0);
 			tv_end_assert = tv_now_assert;
 			tv_end_assert.tv_sec += 1;
@@ -2036,7 +2131,11 @@ static void trigger_uarthub_error_worker_handler(struct work_struct *work)
 	}
 
 	if (!intfhub_base_remap_addr || uarthub_core_is_apb_bus_clk_enable() == 0) {
-		uarthub_core_irq_clear_ctrl();
+#if ISR_CLEAR_ALL_IRQ
+		uarthub_core_irq_clear_ctrl(-1);
+#else
+		uarthub_core_irq_clear_ctrl(err_type);
+#endif
 		uarthub_core_irq_mask_ctrl(0);
 		return;
 	}
@@ -2044,20 +2143,28 @@ static void trigger_uarthub_error_worker_handler(struct work_struct *work)
 	if (uarthub_core_is_bypass_mode() == 1) {
 		pr_info("[%s] ignore irq error in bypass mode\n", __func__);
 		uarthub_core_irq_mask_ctrl(1);
-		uarthub_core_irq_clear_ctrl();
+		uarthub_core_irq_clear_ctrl(-1);
 		return;
 	}
 
 	if (uarthub_core_is_assert_state() == 1) {
 		pr_info("[%s] ignore irq error if assert flow\n", __func__);
-		uarthub_core_irq_clear_ctrl();
+#if ISR_CLEAR_ALL_IRQ
+		uarthub_core_irq_clear_ctrl(-1);
+#else
+		uarthub_core_irq_clear_ctrl(err_type);
+#endif
 		uarthub_core_irq_mask_ctrl(0);
 		return;
 	}
 
 	uarthub_core_debug_info_with_tag(__func__);
 
-	uarthub_core_irq_clear_ctrl();
+#if ISR_CLEAR_ALL_IRQ
+	uarthub_core_irq_clear_ctrl(-1);
+#else
+	uarthub_core_irq_clear_ctrl(err_type);
+#endif
 	uarthub_core_irq_mask_ctrl(0);
 
 	if (g_core_irq_callback)
@@ -2096,12 +2203,10 @@ int uarthub_core_assert_state_ctrl(int assert_ctrl)
 #endif
 
 	if (assert_ctrl == 1) {
-		uarthub_core_irq_mask_ctrl(1);
-		uarthub_core_irq_clear_ctrl();
 		UARTHUB_SET_BIT(UARTHUB_INTFHUB_DBG(intfhub_base_remap_addr), (0x1 << 0));
 	} else {
 		UARTHUB_CLR_BIT(UARTHUB_INTFHUB_DBG(intfhub_base_remap_addr), (0x1 << 0));
-		uarthub_core_irq_clear_ctrl();
+		uarthub_core_irq_clear_ctrl(-1);
 		uarthub_core_irq_mask_ctrl(0);
 	}
 
@@ -2278,6 +2383,7 @@ int uarthub_core_reset(void)
 
 int uarthub_core_reset_to_ap_enable_only(int ap_only)
 {
+	int dev0_sta = 0, dev1_sta = 0, dev2_sta = 0;
 	int trx_state = -1;
 	int dev1_fifoe = -1, dev2_fifoe = -1;
 	int i = 0;
@@ -2294,8 +2400,25 @@ int uarthub_core_reset_to_ap_enable_only(int ap_only)
 		return -1;
 	}
 
+	if (mutex_lock_killable(&g_uarthub_reset_lock)) {
+		pr_notice("[%s] mutex_lock_killable g_uarthub_reset_lock fail\n", __func__);
+		return -5;
+	}
+
+	dev0_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV0_STA(intfhub_base_remap_addr));
+	dev1_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV1_STA(intfhub_base_remap_addr));
+	dev2_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV2_STA(intfhub_base_remap_addr));
+	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta) {
+		if (dev0_sta == 0x300 ||  dev0_sta == 0x0) {
+			pr_notice("[%s] all host sta is[0x%x]\n", __func__, dev0_sta);
+			mutex_unlock(&g_uarthub_reset_lock);
+			return -2;
+		}
+	}
+
 	if (uarthub_core_is_uarthub_clk_enable() == 0) {
 		pr_notice("[%s] uarthub_core_is_uarthub_clk_enable=[0]\n", __func__);
+		mutex_unlock(&g_uarthub_reset_lock);
 		return -4;
 	}
 
@@ -2320,23 +2443,16 @@ int uarthub_core_reset_to_ap_enable_only(int ap_only)
 	UARTHUB_REG_WRITE(UARTHUB_INTFHUB_DEV0_STA_SET(intfhub_base_remap_addr), 0x3);
 
 	/* disable and clear uarthub FIFO for UART0/1/2/CMM */
-	UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(cmm_base_remap_addr),
-		(UARTHUB_REG_READ(UARTHUB_FCR_RD(cmm_base_remap_addr)) & (~(0x1))));
-
-	UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev0_base_remap_addr),
-		(UARTHUB_REG_READ(UARTHUB_FCR_RD(dev0_base_remap_addr)) & (~(0x1))));
+	UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(cmm_base_remap_addr), 0x80);
+	UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev0_base_remap_addr), 0x80);
 
 #if UARTHUB_ENABLE_UART_1_CHANNEL
-	if (g_max_dev >= 2) {
-		UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev1_base_remap_addr),
-			(UARTHUB_REG_READ(UARTHUB_FCR_RD(dev1_base_remap_addr)) & (~(0x1))));
-	}
+	if (g_max_dev >= 2)
+		UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev1_base_remap_addr), 0x80);
 #endif
 
-	if (g_max_dev >= 3) {
-		UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev2_base_remap_addr),
-			(UARTHUB_REG_READ(UARTHUB_FCR_RD(dev2_base_remap_addr)) & (~(0x1))));
-	}
+	if (g_max_dev >= 3)
+		UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev2_base_remap_addr), 0x80);
 
 	/* sw_rst3 4 times */
 	for (i = 0; i < 4; i++) {
@@ -2345,33 +2461,23 @@ int uarthub_core_reset_to_ap_enable_only(int ap_only)
 	}
 
 	/* enable uarthub FIFO for UART0/1/2/CMM */
-	UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(cmm_base_remap_addr),
-		((UARTHUB_REG_READ(UARTHUB_FCR_RD(
-		cmm_base_remap_addr)) & (~(0x1))) | (0x1)));
-
-	UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev0_base_remap_addr),
-		((UARTHUB_REG_READ(UARTHUB_FCR_RD(
-		dev0_base_remap_addr)) & (~(0x1))) | (0x1)));
-
+	UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(cmm_base_remap_addr), 0x81);
+	UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev0_base_remap_addr), 0x81);
 
 #if UARTHUB_ENABLE_UART_1_CHANNEL
-	if (g_max_dev >= 2 && dev1_fifoe == 1 && ap_only == 0) {
-		UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev1_base_remap_addr),
-			((UARTHUB_REG_READ(UARTHUB_FCR_RD(
-			dev1_base_remap_addr)) & (~(0x1))) | (0x1)));
-	}
+	if (g_max_dev >= 2 && dev1_fifoe == 1 && ap_only == 0)
+		UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev1_base_remap_addr), 0x81);
 #endif
 
-	if (g_max_dev >= 3 && dev2_fifoe == 1 && ap_only == 0) {
-		UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev2_base_remap_addr),
-			((UARTHUB_REG_READ(UARTHUB_FCR_RD(
-			dev2_base_remap_addr)) & (~(0x1))) | (0x1)));
-	}
+	if (g_max_dev >= 3 && dev2_fifoe == 1 && ap_only == 0)
+		UARTHUB_REG_WRITE(UARTHUB_IIR_FCR(dev2_base_remap_addr), 0x81);
 
 	/* restore trx request state */
 	UARTHUB_REG_WRITE(UARTHUB_INTFHUB_DEV0_STA(intfhub_base_remap_addr),
 		((UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV0_STA(intfhub_base_remap_addr))
 		& (~(0x3))) | trx_state));
+
+	mutex_unlock(&g_uarthub_reset_lock);
 
 	return 0;
 }
@@ -2801,33 +2907,33 @@ int uarthub_core_debug_uart_ip_info_loop_compare_diff(void)
 	const char *def_tag = "HUB_DBG_LOOP";
 	struct uarthub_uart_ip_debug_info crc_bypass = {0};
 	unsigned char dmp_info_buf[DBG_LOG_LEN];
-	struct uarthub_gpio_trx_info gpio_base_addr;
+	struct uarthub_gpio_trx_info gpio_base_addr = {0};
 	int len = 0;
 	int val = 0;
 	int cur_crc = 0;
-	int cur_bypass = 0;
-	int cur_uart_pad_mode = 0;
-	int cur_gpio_tx_mode = 0;
-	int cur_gpio_rx_mode = 0;
-	int cur_gpio_tx_dir = 0;
-	int cur_gpio_rx_dir = 0;
-	int cur_gpio_tx_ies = 0;
-	int cur_gpio_rx_ies = 0;
-	int cur_gpio_tx_pu = 0;
-	int cur_gpio_rx_pu = 0;
-	int cur_gpio_tx_pd = 0;
-	int cur_gpio_rx_pd = 0;
-	int cur_gpio_tx_drv = 0;
-	int cur_gpio_rx_drv = 0;
-	int cur_gpio_tx_smt = 0;
-	int cur_gpio_rx_smt = 0;
-	int cur_gpio_tx_tdsel = 0;
-	int cur_gpio_rx_tdsel = 0;
-	int cur_gpio_tx_rdsel = 0;
-	int cur_gpio_rx_rdsel = 0;
-	int cur_gpio_tx_sec_en = 0;
-	int cur_gpio_rx_sec_en = 0;
-	int cur_gpio_rx_din = 0;
+	unsigned int cur_bypass = 0;
+	unsigned int cur_uart_pad_mode = 0;
+	unsigned int cur_gpio_tx_mode = 0;
+	unsigned int cur_gpio_rx_mode = 0;
+	unsigned int cur_gpio_tx_dir = 0;
+	unsigned int cur_gpio_rx_dir = 0;
+	unsigned int cur_gpio_tx_ies = 0;
+	unsigned int cur_gpio_rx_ies = 0;
+	unsigned int cur_gpio_tx_pu = 0;
+	unsigned int cur_gpio_rx_pu = 0;
+	unsigned int cur_gpio_tx_pd = 0;
+	unsigned int cur_gpio_rx_pd = 0;
+	unsigned int cur_gpio_tx_drv = 0;
+	unsigned int cur_gpio_rx_drv = 0;
+	unsigned int cur_gpio_tx_smt = 0;
+	unsigned int cur_gpio_rx_smt = 0;
+	unsigned int cur_gpio_tx_tdsel = 0;
+	unsigned int cur_gpio_rx_tdsel = 0;
+	unsigned int cur_gpio_tx_rdsel = 0;
+	unsigned int cur_gpio_rx_rdsel = 0;
+	unsigned int cur_gpio_tx_sec_en = 0;
+	unsigned int cur_gpio_rx_sec_en = 0;
+	unsigned int cur_gpio_rx_din = 0;
 	unsigned long long kt_sec;
 	unsigned long kt_nsec;
 	struct timespec64 now;
@@ -2959,41 +3065,41 @@ int uarthub_core_debug_uart_ip_info_loop_compare_diff(void)
 
 	len = 0;
 	len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-		"[%s] GPIO TX_MODE=[addr:0x%lx,mask:0x%lx,exp:0x%lx,read:0x%lx]",
+		"[%s] GPIO TX_MODE=[addr:0x%x,mask:0x%x,exp:0x%x,read:0x%x]",
 		def_tag,
 		gpio_base_addr.tx_mode.addr, gpio_base_addr.tx_mode.mask,
 		gpio_base_addr.tx_mode.value, cur_gpio_tx_mode);
 
 	len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-		"___RX_MODE=[addr:0x%lx,mask:0x%lx,exp:0x%lx,read:0x%lx]",
+		"___RX_MODE=[addr:0x%x,mask:0x%x,exp:0x%x,read:0x%x]",
 		gpio_base_addr.rx_mode.addr, gpio_base_addr.rx_mode.mask,
 		gpio_base_addr.rx_mode.value, cur_gpio_rx_mode);
 
 	len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-		"___RX_PAD_INFO=[0x%lx]", cur_gpio_rx_din);
+		"___RX_PAD_INFO=[0x%x]", cur_gpio_rx_din);
 
 	pr_info("%s\n", dmp_info_buf);
 
 	len = 0;
 	len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-		"[%s] GPIO DIR=[T:0x%lx,R:0x%lx]___DRV=[T:0x%lx,R:0x%lx]",
+		"[%s] GPIO DIR=[T:0x%x,R:0x%x]___DRV=[T:0x%x,R:0x%x]",
 		def_tag,
 		cur_gpio_tx_dir, cur_gpio_rx_dir, cur_gpio_tx_drv, cur_gpio_rx_drv);
 
 	len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-		"___PU=[T:0x%lx,R:0x%lx]___PD=[T:0x%lx,R:0x%lx]",
+		"___PU=[T:0x%x,R:0x%x]___PD=[T:0x%x,R:0x%x]",
 		cur_gpio_tx_pu, cur_gpio_rx_pu, cur_gpio_tx_pd, cur_gpio_rx_pd);
 
 	len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-		"___IES=[T:0x%lx,R:0x%lx]___SMT=[T:0x%lx,R:0x%lx]",
+		"___IES=[T:0x%x,R:0x%x]___SMT=[T:0x%x,R:0x%x]",
 		cur_gpio_tx_ies, cur_gpio_rx_ies, cur_gpio_tx_smt, cur_gpio_rx_smt);
 
 	len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-		"___TDSEL=[T:0x%lx,R:0x%lx]___RDSEL=[T:0x%lx,R:0x%lx]",
+		"___TDSEL=[T:0x%x,R:0x%x]___RDSEL=[T:0x%x,R:0x%x]",
 		cur_gpio_tx_tdsel, cur_gpio_rx_tdsel, cur_gpio_tx_rdsel, cur_gpio_rx_rdsel);
 
 	len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-		"___SEC_EN=[T:0x%lx,R:0x%lx]", cur_gpio_tx_sec_en, cur_gpio_rx_sec_en);
+		"___SEC_EN=[T:0x%x,R:0x%x]", cur_gpio_tx_sec_en, cur_gpio_rx_sec_en);
 
 	pr_info("%s\n", dmp_info_buf);
 
@@ -3204,6 +3310,30 @@ int uarthub_core_debug_uart_ip_info_with_tag_ex(const char *tag, int boundary)
 		ap_uart_base_remap_addr =
 			g_uarthub_plat_ic_ops->uarthub_plat_get_ap_uart_base_addr();
 
+	if (mutex_lock_killable(&g_clear_trx_req_lock)) {
+		pr_notice("[%s] mutex_lock_killable g_clear_trx_req_lock fail\n", __func__);
+		if (boundary == 1) {
+			pr_info("[%s][%s] ----------------------------------------\n",
+				def_tag, ((tag == NULL) ? "null" : tag));
+		}
+		return -2;
+	}
+
+	dev0_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV0_STA(intfhub_base_remap_addr));
+	dev1_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV1_STA(intfhub_base_remap_addr));
+	dev2_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV2_STA(intfhub_base_remap_addr));
+	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta) {
+		if (dev0_sta == 0x300 ||  dev0_sta == 0x0) {
+			pr_notice("[%s] all host sta is[0x%x]\n", __func__, dev0_sta);
+			if (boundary == 1) {
+				pr_info("[%s][%s] ----------------------------------------\n",
+					def_tag, ((tag == NULL) ? "null" : tag));
+			}
+			mutex_unlock(&g_clear_trx_req_lock);
+			return -2;
+		}
+	}
+
 	uarthub_core_clk_univpll_ctrl(1);
 	if (uarthub_core_is_univpll_on() == 0) {
 		pr_notice("[%s] uarthub_core_is_univpll_on=[0]\n", __func__);
@@ -3212,6 +3342,7 @@ int uarthub_core_debug_uart_ip_info_with_tag_ex(const char *tag, int boundary)
 				def_tag, ((tag == NULL) ? "null" : tag));
 		}
 		uarthub_core_clk_univpll_ctrl(0);
+		mutex_unlock(&g_clear_trx_req_lock);
 		return -2;
 	}
 
@@ -3255,7 +3386,11 @@ int uarthub_core_debug_uart_ip_info_with_tag_ex(const char *tag, int boundary)
 	debug7.cmm = UARTHUB_REG_READ(UARTHUB_DEBUG_7(cmm_base_remap_addr));
 	debug8.cmm = UARTHUB_REG_READ(UARTHUB_DEBUG_8(cmm_base_remap_addr));
 
+	uarthub_core_clk_univpll_ctrl(0);
+	mutex_unlock(&g_clear_trx_req_lock);
+
 	if (ap_uart_base_remap_addr) {
+#if DUMP_AP_UART_DBG_INFO
 		debug1.ap = UARTHUB_REG_READ(UARTHUB_DEBUG_1(ap_uart_base_remap_addr));
 		debug2.ap = UARTHUB_REG_READ(UARTHUB_DEBUG_2(ap_uart_base_remap_addr));
 		debug3.ap = UARTHUB_REG_READ(UARTHUB_DEBUG_3(ap_uart_base_remap_addr));
@@ -3264,9 +3399,17 @@ int uarthub_core_debug_uart_ip_info_with_tag_ex(const char *tag, int boundary)
 		debug6.ap = UARTHUB_REG_READ(UARTHUB_DEBUG_6(ap_uart_base_remap_addr));
 		debug7.ap = UARTHUB_REG_READ(UARTHUB_DEBUG_7(ap_uart_base_remap_addr));
 		debug8.ap = UARTHUB_REG_READ(UARTHUB_DEBUG_8(ap_uart_base_remap_addr));
+#else
+		debug1.ap = debug1.dev0;
+		debug2.ap = debug2.dev0;
+		debug3.ap = debug3.dev0;
+		debug4.ap = debug4.dev0;
+		debug5.ap = debug5.dev0;
+		debug6.ap = debug6.dev0;
+		debug7.ap = debug7.dev0;
+		debug8.ap = debug8.dev0;
+#endif
 	}
-
-	uarthub_core_clk_univpll_ctrl(0);
 
 	len = 0;
 	dev0_sta = (((debug5.dev0 & 0xF0) >> 4) + ((debug6.dev0 & 0x3) << 4));
@@ -3280,10 +3423,17 @@ int uarthub_core_debug_uart_ip_info_with_tag_ex(const char *tag, int boundary)
 			"[%s][%s] op_rx_req=[%d]",
 			def_tag, ((tag == NULL) ? "null" : tag), dev0_sta);
 	} else {
+#if DUMP_AP_UART_DBG_INFO
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
 			"[%s][%s] op_rx_req=[%d-%d-%d-%d-%d]",
 			def_tag, ((tag == NULL) ? "null" : tag),
 			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			"[%s][%s] op_rx_req=[%d-%d-%d-%d]",
+			def_tag, ((tag == NULL) ? "null" : tag),
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
 	}
 
 	dev0_sta = (((debug2.dev0 & 0xF0) >> 4) + ((debug3.dev0 & 0x3) << 4));
@@ -3296,9 +3446,15 @@ int uarthub_core_debug_uart_ip_info_with_tag_ex(const char *tag, int boundary)
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
 			",ip_tx_dma=[%d]", dev0_sta);
 	} else {
+#if DUMP_AP_UART_DBG_INFO
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
 			",ip_tx_dma=[%d-%d-%d-%d-%d]",
 			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",ip_tx_dma=[%d-%d-%d-%d]",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
 	}
 
 	dev0_sta = (debug7.dev0 & 0x3F);
@@ -3309,11 +3465,17 @@ int uarthub_core_debug_uart_ip_info_with_tag_ex(const char *tag, int boundary)
 	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta &&
 			dev2_sta == cmm_sta && cmm_sta == ap_sta) {
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-			",rx_woffset=[%d]", dev0_sta);
+			",fifo_woffset=[R:%d", dev0_sta);
 	} else {
+#if DUMP_AP_UART_DBG_INFO
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-			",rx_woffset=[%d-%d-%d-%d-%d]",
+			",fifo_woffset=[R:%d-%d-%d-%d-%d",
 			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",fifo_woffset=[R:%d-%d-%d-%d",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
 	}
 
 	dev0_sta = (debug4.dev0 & 0x3F);
@@ -3324,11 +3486,80 @@ int uarthub_core_debug_uart_ip_info_with_tag_ex(const char *tag, int boundary)
 	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta &&
 			dev2_sta == cmm_sta && cmm_sta == ap_sta) {
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-			",tx_woffset=[%d]", dev0_sta);
+			",T:%d]", dev0_sta);
 	} else {
+#if DUMP_AP_UART_DBG_INFO
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-			",tx_woffset=[%d-%d-%d-%d-%d]",
+			",T:%d-%d-%d-%d-%d]",
 			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",T:%d-%d-%d-%d]",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
+	}
+
+	dev0_sta = (((debug4.dev0 & 0xC0) >> 6) + ((debug5.dev0 & 0xF) << 2));
+	dev1_sta = (((debug4.dev1 & 0xC0) >> 6) + ((debug5.dev1 & 0xF) << 2));
+	dev2_sta = (((debug4.dev2 & 0xC0) >> 6) + ((debug5.dev2 & 0xF) << 2));
+	cmm_sta = (((debug4.cmm & 0xC0) >> 6) + ((debug5.cmm & 0xF) << 2));
+	ap_sta = (((debug4.ap & 0xC0) >> 6) + ((debug5.ap & 0xF) << 2));
+	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta &&
+			dev2_sta == cmm_sta && cmm_sta == ap_sta) {
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",fifo_tx_roffset=[%d]", dev0_sta);
+	} else {
+#if DUMP_AP_UART_DBG_INFO
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",fifo_tx_roffset=[%d-%d-%d-%d-%d]",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",fifo_tx_roffset=[%d-%d-%d-%d]",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
+	}
+
+	dev0_sta = ((debug6.dev0 & 0xFC) >> 2);
+	dev1_sta = ((debug6.dev1 & 0xFC) >> 2);
+	dev2_sta = ((debug6.dev2 & 0xFC) >> 2);
+	cmm_sta = ((debug6.cmm & 0xFC) >> 2);
+	ap_sta = ((debug6.ap & 0xFC) >> 2);
+	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta &&
+			dev2_sta == cmm_sta && cmm_sta == ap_sta) {
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",offset_dma=[R:%d", dev0_sta);
+	} else {
+#if DUMP_AP_UART_DBG_INFO
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",offset_dma=[R:%d-%d-%d-%d-%d",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",offset_dma=[R:%d-%d-%d-%d",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
+	}
+
+	dev0_sta = ((debug3.dev0 & 0xFC) >> 2);
+	dev1_sta = ((debug3.dev1 & 0xFC) >> 2);
+	dev2_sta = ((debug3.dev2 & 0xFC) >> 2);
+	cmm_sta = ((debug3.cmm & 0xFC) >> 2);
+	ap_sta = ((debug3.ap & 0xFC) >> 2);
+	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta &&
+			dev2_sta == cmm_sta && cmm_sta == ap_sta) {
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",T:%d]", dev0_sta);
+	} else {
+#if DUMP_AP_UART_DBG_INFO
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",T:%d-%d-%d-%d-%d]",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",T:%d-%d-%d-%d]",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
 	}
 
 	pr_info("%s\n", dmp_info_buf);
@@ -3345,10 +3576,17 @@ int uarthub_core_debug_uart_ip_info_with_tag_ex(const char *tag, int boundary)
 			"[%s][%s] xcstate(wsend_xoff)=[%d]",
 			def_tag, ((tag == NULL) ? "null" : tag), dev0_sta);
 	} else {
+#if DUMP_AP_UART_DBG_INFO
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
 			"[%s][%s] xcstate(wsend_xoff)=[%d-%d-%d-%d-%d]",
 			def_tag, ((tag == NULL) ? "null" : tag),
 			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			"[%s][%s] xcstate(wsend_xoff)=[%d-%d-%d-%d]",
+			def_tag, ((tag == NULL) ? "null" : tag),
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
 	}
 
 	dev0_sta = ((debug8.dev0 & 0x8) >> 3);
@@ -3361,9 +3599,15 @@ int uarthub_core_debug_uart_ip_info_with_tag_ex(const char *tag, int boundary)
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
 			",swtxdis(det_xoff)=[%d]", dev0_sta);
 	} else {
+#if DUMP_AP_UART_DBG_INFO
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
 			",swtxdis(det_xoff)=[%d-%d-%d-%d-%d]",
 			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",swtxdis(det_xoff)=[%d-%d-%d-%d]",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
 	}
 
 	pr_info("%s\n", dmp_info_buf);
@@ -3549,12 +3793,12 @@ int uarthub_core_debug_info_with_tag(const char *tag)
 			if (gpio_base_addr.tx_mode.gpio_value ==
 					gpio_base_addr.rx_mode.gpio_value) {
 				len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-					"[%s][%s] GPIO MODE=[T/R:0x%lx]",
+					"[%s][%s] GPIO MODE=[T/R:0x%x]",
 					def_tag, ((tag == NULL) ? "null" : tag),
 					gpio_base_addr.tx_mode.gpio_value);
 			} else {
 				len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-					"[%s][%s] GPIO MODE=[T:0x%lx,R:0x%lx]",
+					"[%s][%s] GPIO MODE=[T:0x%x,R:0x%x]",
 					def_tag, ((tag == NULL) ? "null" : tag),
 					gpio_base_addr.tx_mode.gpio_value,
 					gpio_base_addr.rx_mode.gpio_value);
@@ -3563,10 +3807,10 @@ int uarthub_core_debug_info_with_tag(const char *tag)
 			if (gpio_base_addr.tx_drv.gpio_value ==
 					gpio_base_addr.rx_drv.gpio_value) {
 				len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-					",DRV=[T/R:0x%lx]", gpio_base_addr.tx_drv.gpio_value);
+					",DRV=[T/R:0x%x]", gpio_base_addr.tx_drv.gpio_value);
 			} else {
 				len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-					",DRV=[T:0x%lx,R:0x%lx]",
+					",DRV=[T:0x%x,R:0x%x]",
 					gpio_base_addr.tx_drv.gpio_value,
 					gpio_base_addr.rx_drv.gpio_value);
 			}
@@ -3693,10 +3937,28 @@ int uarthub_core_debug_info_with_tag(const char *tag)
 		ap_uart_base_remap_addr =
 			g_uarthub_plat_ic_ops->uarthub_plat_get_ap_uart_base_addr();
 
+	if (mutex_lock_killable(&g_clear_trx_req_lock)) {
+		mutex_unlock(&g_lock_dump_log);
+		return -6;
+	}
+
+	dev0_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV0_STA(intfhub_base_remap_addr));
+	dev1_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV1_STA(intfhub_base_remap_addr));
+	dev2_sta = UARTHUB_REG_READ(UARTHUB_INTFHUB_DEV2_STA(intfhub_base_remap_addr));
+	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta) {
+		if (dev0_sta == 0x300 || dev0_sta == 0x0) {
+			pr_notice("[%s] all host sta is[0x%x]\n", __func__, dev0_sta);
+			mutex_unlock(&g_clear_trx_req_lock);
+			mutex_unlock(&g_lock_dump_log);
+			return -1;
+		}
+	}
+
 	uarthub_core_clk_univpll_ctrl(1);
 	if (uarthub_core_is_univpll_on() == 0) {
 		pr_notice("[%s] uarthub_core_is_univpll_on=[0]\n", __func__);
 		uarthub_core_clk_univpll_ctrl(0);
+		mutex_unlock(&g_clear_trx_req_lock);
 		mutex_unlock(&g_lock_dump_log);
 		return -1;
 	}
@@ -3789,6 +4051,9 @@ int uarthub_core_debug_info_with_tag(const char *tag)
 	mcr.cmm = UARTHUB_REG_READ(UARTHUB_MCR(cmm_base_remap_addr));
 	lsr.cmm = UARTHUB_REG_READ(UARTHUB_LSR(cmm_base_remap_addr));
 
+	uarthub_core_clk_univpll_ctrl(0);
+	mutex_unlock(&g_clear_trx_req_lock);
+
 	if (ap_uart_base_remap_addr) {
 #if DUMP_AP_UART_DBG_INFO
 		feature_sel.ap = UARTHUB_REG_READ(UARTHUB_FEATURE_SEL(ap_uart_base_remap_addr));
@@ -3834,8 +4099,6 @@ int uarthub_core_debug_info_with_tag(const char *tag)
 		lsr.ap = lsr.dev0;
 #endif
 	}
-
-	uarthub_core_clk_univpll_ctrl(0);
 
 	len = 0;
 	if (feature_sel.dev0 == feature_sel.dev1 && feature_sel.dev1 == feature_sel.dev2 &&
@@ -4290,10 +4553,16 @@ int uarthub_core_debug_dump_tx_rx_count(const char *tag, int trigger_point)
 			len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
 				",bcnt=[R:%d", d0_rx_bcnt);
 		} else {
+#if DUMP_AP_UART_DBG_INFO
 			len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
 				",bcnt=[R:%d-%d-%d-%d-%d",
 				d0_rx_bcnt, d1_rx_bcnt, d2_rx_bcnt,
 				cmm_rx_bcnt, ap_rx_bcnt);
+#else
+			len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+				",bcnt=[R:%d-%d-%d-%d",
+				d0_rx_bcnt, d1_rx_bcnt, d2_rx_bcnt, cmm_rx_bcnt);
+#endif
 		}
 
 		if (d0_tx_bcnt == d1_tx_bcnt && d1_tx_bcnt == d2_tx_bcnt &&
@@ -4301,10 +4570,16 @@ int uarthub_core_debug_dump_tx_rx_count(const char *tag, int trigger_point)
 			len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
 				",T:%d]", d0_tx_bcnt);
 		} else {
+#if DUMP_AP_UART_DBG_INFO
 			len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
 				",T:%d-%d-%d-%d-%d]",
 				d0_tx_bcnt, d1_tx_bcnt, d2_tx_bcnt,
 				cmm_tx_bcnt, ap_tx_bcnt);
+#else
+			len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+				",T:%d-%d-%d-%d]",
+				d0_tx_bcnt, d1_tx_bcnt, d2_tx_bcnt, cmm_tx_bcnt);
+#endif
 		}
 
 		if (d0_wait_for_send_xoff == d1_wait_for_send_xoff &&
@@ -4825,15 +5100,15 @@ int uarthub_core_debug_byte_cnt_info(const char *tag)
 	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta &&
 			dev2_sta == cmm_sta && cmm_sta == ap_sta) {
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-			",fifo=[R:%d", dev0_sta);
+			",fifo_woffset=[R:%d", dev0_sta);
 	} else {
 #if DUMP_AP_UART_DBG_INFO
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-			",fifo=[R:%d-%d-%d-%d-%d",
+			",fifo_woffset=[R:%d-%d-%d-%d-%d",
 			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
 #else
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
-			",fifo=[R:%d-%d-%d-%d",
+			",fifo_woffset=[R:%d-%d-%d-%d",
 			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
 #endif
 	}
@@ -4843,6 +5118,69 @@ int uarthub_core_debug_byte_cnt_info(const char *tag)
 	dev2_sta = (debug4.dev2 & 0x3F);
 	cmm_sta = (debug4.cmm & 0x3F);
 	ap_sta = (debug4.ap & 0x3F);
+	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta &&
+			dev2_sta == cmm_sta && cmm_sta == ap_sta) {
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",T:%d]", dev0_sta);
+	} else {
+#if DUMP_AP_UART_DBG_INFO
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",T:%d-%d-%d-%d-%d]",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",T:%d-%d-%d-%d]",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
+	}
+
+	dev0_sta = (((debug4.dev0 & 0xC0) >> 6) + ((debug5.dev0 & 0xF) << 2));
+	dev1_sta = (((debug4.dev1 & 0xC0) >> 6) + ((debug5.dev1 & 0xF) << 2));
+	dev2_sta = (((debug4.dev2 & 0xC0) >> 6) + ((debug5.dev2 & 0xF) << 2));
+	cmm_sta = (((debug4.cmm & 0xC0) >> 6) + ((debug5.cmm & 0xF) << 2));
+	ap_sta = (((debug4.ap & 0xC0) >> 6) + ((debug5.ap & 0xF) << 2));
+	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta &&
+			dev2_sta == cmm_sta && cmm_sta == ap_sta) {
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",fifo_tx_roffset=[%d]", dev0_sta);
+	} else {
+#if DUMP_AP_UART_DBG_INFO
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",fifo_tx_roffset=[%d-%d-%d-%d-%d]",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",fifo_tx_roffset=[%d-%d-%d-%d]",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
+	}
+
+	dev0_sta = ((debug6.dev0 & 0xFC) >> 2);
+	dev1_sta = ((debug6.dev1 & 0xFC) >> 2);
+	dev2_sta = ((debug6.dev2 & 0xFC) >> 2);
+	cmm_sta = ((debug6.cmm & 0xFC) >> 2);
+	ap_sta = ((debug6.ap & 0xFC) >> 2);
+	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta &&
+			dev2_sta == cmm_sta && cmm_sta == ap_sta) {
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",offset_dma=[R:%d", dev0_sta);
+	} else {
+#if DUMP_AP_UART_DBG_INFO
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",offset_dma=[R:%d-%d-%d-%d-%d",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta, ap_sta);
+#else
+		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,
+			",offset_dma=[R:%d-%d-%d-%d",
+			dev0_sta, dev1_sta, dev2_sta, cmm_sta);
+#endif
+	}
+
+	dev0_sta = ((debug3.dev0 & 0xFC) >> 2);
+	dev1_sta = ((debug3.dev1 & 0xFC) >> 2);
+	dev2_sta = ((debug3.dev2 & 0xFC) >> 2);
+	cmm_sta = ((debug3.cmm & 0xFC) >> 2);
+	ap_sta = ((debug3.ap & 0xFC) >> 2);
 	if (dev0_sta == dev1_sta && dev1_sta == dev2_sta &&
 			dev2_sta == cmm_sta && cmm_sta == ap_sta) {
 		len += snprintf(dmp_info_buf + len, DBG_LOG_LEN - len,

@@ -388,13 +388,15 @@ int mtk_cam_user_img_working_buf_pool_init(struct mtk_cam_ctx *ctx,
 					 &ctx->pipe->pre_alloc_mem.bufs[0],
 					 &ctx->img_buf_pool.pre_alloc_img_buf)) {
 		dev_info(ctx->cam->dev,
-			 "%s:ctx(%d): attached/mapped user memory(%d,%d), sz(%zu), daddr(%pad)\n",
+			 "%s:ctx(%d): attached/mapped user memory(%d,%d), sz(%zu), daddr(%pad) wbuf size(%d)\n",
 			 __func__, ctx->stream_id,
 			 ctx->pipe->pre_alloc_mem.bufs[0].fd,
 			 ctx->pipe->pre_alloc_mem.bufs[0].length,
 			 ctx->img_buf_pool.pre_alloc_img_buf.size,
-			 &ctx->img_buf_pool.pre_alloc_img_buf.daddr);
+			 &ctx->img_buf_pool.pre_alloc_img_buf.daddr,
+			 working_buf_size);
 
+		ctx->img_buf_pool.working_img_buf_fd = ctx->pipe->pre_alloc_mem.bufs[0].fd;
 		ret = mtk_cam_img_working_buf_pool_init(ctx, buf_num,
 							working_buf_size,
 							ctx->img_buf_pool.pre_alloc_img_buf.daddr,
@@ -420,6 +422,7 @@ mtk_cam_internal_img_working_buf_pool_init(struct mtk_cam_ctx *ctx,
 	struct mtk_ccd *ccd;
 	void *mem_priv;
 	struct dma_buf *dbuf;
+	int dmabuf_fd;
 
 	smem.len =  buf_num * working_buf_size;
 	dev_info(ctx->cam->dev, "%s:ctx(%d) smem.len(%d)\n",
@@ -429,10 +432,16 @@ mtk_cam_internal_img_working_buf_pool_init(struct mtk_cam_ctx *ctx,
 	if (IS_ERR(mem_priv))
 		return PTR_ERR(mem_priv);
 
+#ifdef FD_CLOSE_READY
+	dmabuf_fd = mtk_ccd_get_buffer_fd(ccd, mem_priv);
+#else
+	dmabuf_fd = 0;
+#endif
 	dbuf = mtk_ccd_get_buffer_dmabuf(ccd, mem_priv);
 	if (dbuf)
 		mtk_dma_buf_set_name(dbuf, "CAM_MEM_IMG_ID");
 
+	ctx->img_buf_pool.working_img_buf_fd = dmabuf_fd;
 	return mtk_cam_img_working_buf_pool_init(ctx, buf_num, working_buf_size,
 						 smem.iova, smem.len, smem.va);
 }
@@ -747,12 +756,14 @@ int mtk_cam_get_internl_buf_num(int user_reserved_exp_num,
 
 	/* check exposure number */
 	exp_no = mtk_cam_scen_get_max_exp_num(scen);
-	if (user_reserved_exp_num > 1 || mtk_cam_scen_is_switchable_hdr(scen))
-		// dcif may have to double for during skip frame
-		buf_require = max(buf_require, exp_no);
 
-	if (mtk_cam_scen_is_ext_isp(scen))
-		buf_require = max(buf_require, 2);
+	if (user_reserved_exp_num > 1 || mtk_cam_scen_is_switchable_hdr(scen)) {
+		if (hw_mode == HW_MODE_ON_THE_FLY || hw_mode == HW_MODE_DEFAULT)
+			buf_require = 1;
+		else
+			// dcif may have to double for during skip frame
+			buf_require = max(buf_require, exp_no);
+	}
 
 	if (mtk_cam_scen_is_time_shared(scen))
 		buf_require = max(buf_require, CAM_IMG_BUF_NUM);

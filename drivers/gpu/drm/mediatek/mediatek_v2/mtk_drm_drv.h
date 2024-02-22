@@ -153,6 +153,7 @@ struct mtk_drm_private {
 	struct mtk_ddp_comp *ddp_comp[DDP_COMPONENT_ID_MAX];
 	const struct mtk_mmsys_driver_data *data;
 
+	struct mutex path_ctrl_lock;
 	struct {
 		struct drm_atomic_state *state;
 		struct work_struct work;
@@ -216,7 +217,30 @@ struct mtk_drm_private {
 	bool already_first_config;
 
 	struct mml_drm_ctx *mml_ctx;
+
 	atomic_t need_recover;
+
+#ifdef OPLUS_FEATURE_DISPLAY_ADFR
+	struct workqueue_struct *fakeframe_wq;
+	struct hrtimer fakeframe_timer;
+	struct work_struct fakeframe_work;
+	/* add for mux switch control */
+	struct completion switch_te_gate;
+	bool vsync_switch_pending;
+	bool need_vsync_switch;
+	struct workqueue_struct *vsync_switch_wq;
+	struct work_struct vsync_switch_work;
+
+	/* indicate that whether the current frame backlight has been updated */
+	bool oplus_adfr_backlight_updated;
+	/* need qsync mode recovery after backlight status updated */
+	bool osync_mode_recovery;
+	/* set timer to reset qsync after the backlight is no longer updated */
+	struct hrtimer osync_mode_timer;
+	struct workqueue_struct *osync_mode_wq;
+	struct work_struct osync_mode_work;
+#endif /* OPLUS_FEATURE_DISPLAY_ADFR  */
+	unsigned int seg_id;
 };
 
 struct mtk_drm_property {
@@ -265,6 +289,11 @@ struct mtk_drm_disp_sec_cb {
 				struct dma_buf *buf_hnd);
 };
 
+struct mtk_aod_scp_cb {
+	int (*send_ipi)(int value);
+	void (*module_backup)(struct drm_crtc *crtc, unsigned int ulps_wakeup_prd);
+};
+
 enum DISP_SEC_SIGNAL {
 	DISP_SEC_START = 0,
 	DISP_SEC_STOP,
@@ -291,6 +320,38 @@ struct layer_compress_ratio_item {
 	__u32 active;
 };
 
+static const struct mtk_addon_module_data addon_rsz_data[] = {
+	{DISP_RSZ, ADDON_BETWEEN, DDP_COMPONENT_OVL0_2L},
+};
+
+static const struct mtk_addon_module_data addon_rsz_data_v2[] = {
+	{DISP_RSZ_v2, ADDON_BETWEEN, DDP_COMPONENT_OVL0_2L},
+};
+
+static const struct mtk_addon_module_data addon_rsz_data_v3[] = {
+	{DISP_RSZ_v3, ADDON_BETWEEN, DDP_COMPONENT_OVL1_2L},
+};
+
+static const struct mtk_addon_module_data addon_rsz_data_v4[] = {
+	{DISP_RSZ_v4, ADDON_BETWEEN, DDP_COMPONENT_OVL2_2L},
+};
+
+static const struct mtk_addon_module_data addon_rsz_data_v5[] = {
+	{DISP_RSZ_v5, ADDON_BETWEEN, DDP_COMPONENT_OVL1_2L},
+};
+
+static const struct mtk_addon_module_data addon_rsz_data_v6[] = {
+	{DISP_RSZ_v6, ADDON_BETWEEN, DDP_COMPONENT_OVL3_2L},
+};
+
+static const struct mtk_addon_module_data addon_wdma0_data[] = {
+	{DISP_WDMA0, ADDON_AFTER, DDP_COMPONENT_DITHER0},
+};
+
+static const struct mtk_addon_module_data addon_wdma1_data[] = {
+	{DISP_WDMA1, ADDON_AFTER, DDP_COMPONENT_DITHER1},
+};
+
 struct disp_iommu_device *disp_get_iommu_dev(void);
 
 extern struct platform_driver mtk_ddp_driver;
@@ -306,6 +367,7 @@ extern struct platform_driver mtk_disp_dither_driver;
 extern struct platform_driver mtk_disp_chist_driver;
 extern struct platform_driver mtk_disp_ovl_driver;
 extern struct platform_driver mtk_disp_rdma_driver;
+extern struct platform_driver mtk_disp_mdp_rdma_driver;
 extern struct platform_driver mtk_disp_wdma_driver;
 extern struct platform_driver mtk_disp_rsz_driver;
 extern struct platform_driver mtk_disp_mdp_rsz_driver;
@@ -329,6 +391,7 @@ extern struct platform_driver mtk_disp_inlinerotate_driver;
 extern struct platform_driver mtk_mmlsys_bypass_driver;
 extern struct platform_driver mtk_disp_postalign_driver;
 extern struct mtk_drm_disp_sec_cb disp_sec_cb;
+extern struct mtk_aod_scp_cb aod_scp_ipi;
 
 /* For overlay bandwidth monitor */
 extern struct layer_compress_ratio_data
@@ -344,6 +407,7 @@ unchanged_compress_ratio_table[MAX_LAYER_RATIO_NUMBER];
 extern struct layer_compress_ratio_item
 fbt_compress_ratio_table[MAX_FRAME_RATIO_NUMBER];
 extern unsigned int ovl_win_size;
+extern int aod_scp_flag;
 
 int mtk_drm_ioctl_set_dither_param(struct drm_device *dev, void *data,
 	struct drm_file *file_priv);
@@ -369,14 +433,14 @@ int lcm_fps_ctx_reset(struct drm_crtc *crtc);
 int lcm_fps_ctx_update(unsigned long long cur_ns,
 		unsigned int crtc_id, unsigned int mode);
 int mtk_mipi_clk_change(struct drm_crtc *crtc, unsigned int data_rate);
-bool mtk_drm_lcm_is_connect(void);
-
+bool mtk_drm_lcm_is_connect(struct mtk_drm_crtc *mtk_crtc);
+unsigned int mtk_disp_num_from_atag(void);
 int _parse_tag_videolfb(unsigned int *vramsize, phys_addr_t *fb_base,
 	unsigned int *fps);
 struct mml_drm_ctx *mtk_drm_get_mml_drm_ctx(struct drm_device *dev,
 	struct drm_crtc *crtc);
 void mtk_drm_wait_mml_submit_done(struct mtk_mml_cb_para *cb_para);
-void **mtk_aod_scp_ipi_init(void);
+void mtk_aod_scp_ipi_init(struct mtk_aod_scp_cb *cb);
 void mtk_free_mml_submit(struct mml_submit *temp);
 int copy_mml_submit(struct mml_submit *src, struct mml_submit *dst);
 void **mtk_drm_disp_sec_cb_init(void);

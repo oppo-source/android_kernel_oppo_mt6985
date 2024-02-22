@@ -39,6 +39,9 @@
 #include <linux/delay.h>
 #include <aee.h>
 #include <soc/mediatek/smi.h>
+#if IS_ENABLED(CONFIG_MTK_DEVAPC)
+#include <linux/soc/mediatek/devapc_public.h>
+#endif
 #include "vcp_feature_define.h"
 #include "vcp_err_info.h"
 #include "vcp_helper.h"
@@ -55,6 +58,10 @@
 
 #if ENABLE_VCP_EMI_PROTECTION
 #include "soc/mediatek/emi.h"
+#endif
+
+#if VCP_LOGGER_ENABLE
+#include <mt-plat/mrdump.h>
 #endif
 
 /* vcp mbox/ipi related */
@@ -122,6 +129,7 @@ phys_addr_t vcp_mem_base_virt;
 phys_addr_t vcp_sec_dump_base_phys;
 phys_addr_t vcp_sec_dump_base_virt;
 phys_addr_t vcp_mem_size;
+bool vcp_hwvoter_support = true;
 struct vcp_regs vcpreg;
 struct clk *vcpsel;
 struct clk *vcpclk;
@@ -167,7 +175,7 @@ static unsigned int vcp_timeout_times;
 
 #endif
 
-static DEFINE_MUTEX(vcp_pw_clk_mutex);
+DEFINE_MUTEX(vcp_pw_clk_mutex);
 static DEFINE_MUTEX(vcp_A_notify_mutex);
 static DEFINE_MUTEX(vcp_feature_mutex);
 
@@ -318,6 +326,7 @@ static int vcp_ipi_dbg_resume_noirq(struct device *dev)
 static void vcp_wait_awake_count(void)
 {
 	int i = 0;
+	unsigned long spin_flags;
 
 	while (vcp_awake_counts[VCP_A_ID] != 0) {
 		i += 1;
@@ -327,7 +336,10 @@ static void vcp_wait_awake_count(void)
 			break;
 		}
 	}
-	pr_info("[VCP] %s wait count: %d\n", __func__, i);
+
+	spin_lock_irqsave(&vcp_awake_spinlock, spin_flags);
+	vcp_awake_counts[VCP_A_ID] = 0;
+	spin_unlock_irqrestore(&vcp_awake_spinlock, spin_flags);
 }
 
 /*
@@ -522,6 +534,7 @@ static void vcp_A_notify_ws(struct work_struct *ws)
 	struct vcp_work_struct *sws =
 		container_of(ws, struct vcp_work_struct, work);
 	unsigned int vcp_notify_flag = sws->flags;
+	uint32_t spm_req_sta_6, spm_req_sta_7;
 
 	vcp_recovery_flag[VCP_A_ID] = VCP_A_RECOVERY_OK;
 	writel(0xff, VCP_TO_SPM_REG); /* patch: clear SPM interrupt */
@@ -533,11 +546,21 @@ static void vcp_A_notify_ws(struct work_struct *ws)
 #endif
 	vcp_ready[VCP_A_ID] = 1;
 
-	if (vcp_notify_flag && mmup_enable_count() > 0) {
+	if (vcp_notify_flag) {
 		pr_debug("[VCP] notify blocking call\n");
 		blocking_notifier_call_chain(&vcp_A_notifier_list
 			, VCP_EVENT_READY, NULL);
 	}
+
+	// dump ddren
+	if (vcpreg.spm != NULL) {
+		spm_req_sta_6 = readl(SPM_REQ_STA_6);
+		spm_req_sta_7 = readl(SPM_REQ_STA_7);
+		if (!(spm_req_sta_6 & 0x80000000) || (spm_req_sta_7 & 0x1))
+			pr_notice("[VCP] SPM_REQ_STA_6 0x%x SPM_REQ_STA_7 0x%x\n",
+				spm_req_sta_6, spm_req_sta_7);
+	}
+
 	mutex_unlock(&vcp_A_notify_mutex);
 
 	/*clear reset status and unlock wake lock*/
@@ -687,9 +710,18 @@ static void vcp_err_info_handler(int id, void *prdata, void *data,
  */
 void trigger_vcp_halt(enum vcp_core_id id)
 {
-	int j;
+	int i, j;
 
-	mutex_lock(&vcp_pw_clk_mutex);
+	i = 0;
+	while (!mutex_trylock(&vcp_pw_clk_mutex)) {
+		i += 5;
+		mdelay(5);
+		if (i > VCP_SYNC_TIMEOUT_MS) {
+			pr_notice("[VCP] %s lock fail\n", __func__);
+			return;
+		}
+	}
+
 	if (mmup_enable_count() && vcp_ready[id]) {
 		vcp_dump_last_regs(mmup_enable_count());
 
@@ -700,7 +732,9 @@ void trigger_vcp_halt(enum vcp_core_id id)
 			if (feature_table[j].enable)
 				pr_info("[VCP] Active feature id %d cnt %d\n",
 					j, feature_table[j].enable);
-	}
+		mtk_smi_dbg_hang_detect("VCP EE");
+	} else
+		pr_notice("[VCP] %s not ready\n", __func__);
 	mutex_unlock(&vcp_pw_clk_mutex);
 }
 EXPORT_SYMBOL_GPL(trigger_vcp_halt);
@@ -766,13 +800,23 @@ uint32_t vcp_wait_ready_sync(enum feature_id id)
 {
 	int i = 0;
 	int j = 0;
-	unsigned long c0, c1 = CORE_RDY_TO_REBOOT;
+	unsigned long C0_H0 = CORE_RDY_TO_REBOOT;
+	unsigned long C0_H1 = CORE_RDY_TO_REBOOT;
+	unsigned long C1_H0 = CORE_RDY_TO_REBOOT;
+	unsigned long C1_H1 = CORE_RDY_TO_REBOOT;
 
-	c0 = readl(VCP_GPR_CORE0_REBOOT);
-	if (vcpreg.core_nums == 2)
-		c1 = readl(VCP_GPR_CORE1_REBOOT);
+	C0_H0 = readl(VCP_GPR_C0_H0_REBOOT);
+	if (vcpreg.twohart)
+		C0_H1 = readl(VCP_GPR_C0_H1_REBOOT);
 
-	if ((c0 == CORE_RDY_TO_REBOOT) && (c1 == CORE_RDY_TO_REBOOT))
+	if (vcpreg.core_nums == 2) {
+		C1_H0 = readl(VCP_GPR_C1_H0_REBOOT);
+		if (vcpreg.twohart)
+			C1_H1 = readl(VCP_GPR_C1_H1_REBOOT);
+	}
+
+	if ((C0_H0 == CORE_RDY_TO_REBOOT) && (C0_H1 == CORE_RDY_TO_REBOOT)
+		&& (C1_H0 == CORE_RDY_TO_REBOOT) && (C1_H1 == CORE_RDY_TO_REBOOT))
 		return 0;
 
 	while (!is_vcp_ready(VCP_A_ID)) {
@@ -803,12 +847,10 @@ int vcp_enable_pm_clk(enum feature_id id)
 		return -1;
 
 	mutex_lock(&vcp_pw_clk_mutex);
-	if (is_suspending) {
+	while (is_suspending) {
 		pr_notice("[VCP] %s blocked %d %d\n", __func__, pwclkcnt, is_suspending);
 		mutex_unlock(&vcp_pw_clk_mutex);
-		while (is_suspending)
-			usleep_range(10000, 20000);
-		pr_notice("[VCP] %s exit %d %d\n", __func__, pwclkcnt, is_suspending);
+		usleep_range(10000, 20000);
 		mutex_lock(&vcp_pw_clk_mutex);
 	}
 
@@ -830,7 +872,7 @@ int vcp_enable_pm_clk(enum feature_id id)
 		vcp_enable_irqs();
 
 		if (!is_vcp_ready(VCP_A_ID))
-			reset_vcp(VCP_ALL_ENABLE);
+			reset_vcp(VCP_ALL_RESUME);
 	}
 	pwclkcnt++;
 #ifdef VCP_CLK_FMETER
@@ -852,12 +894,10 @@ int vcp_disable_pm_clk(enum feature_id id)
 		return -1;
 
 	mutex_lock(&vcp_pw_clk_mutex);
-	if (is_suspending) {
+	while (is_suspending) {
 		pr_notice("[VCP] %s blocked %d %d\n", __func__, pwclkcnt, is_suspending);
 		mutex_unlock(&vcp_pw_clk_mutex);
-		while (is_suspending)
-			usleep_range(10000, 20000);
-		pr_notice("[VCP] %s exit %d %d\n", __func__, pwclkcnt, is_suspending);
+		usleep_range(10000, 20000);
 		mutex_lock(&vcp_pw_clk_mutex);
 	}
 
@@ -877,16 +917,16 @@ int vcp_disable_pm_clk(enum feature_id id)
 
 		vcp_disable_irqs();
 		flush_workqueue(vcp_workqueue);
+#if VCP_LOGGER_ENABLE
+		vcp_logger_uninit();
+		flush_workqueue(vcp_logger_workqueue);
+#endif
 		vcp_ready[VCP_A_ID] = 0;
 
 		/* trigger halt isr, force vcp enter wfi */
 		writel(B_GIPC4_SETCLR_1, R_GIPC_IN_SET);
 		wait_vcp_ready_to_reboot();
 
-#if VCP_LOGGER_ENABLE
-		vcp_logger_uninit();
-		flush_workqueue(vcp_logger_workqueue);
-#endif
 #if VCP_BOOT_TIME_OUT_MONITOR
 		del_timer(&vcp_ready_timer[VCP_A_ID].tl);
 #endif
@@ -897,8 +937,8 @@ int vcp_disable_pm_clk(enum feature_id id)
 			readl(VCP_BUS_DEBUG_OUT), waitCnt);
 #endif  // CONFIG_MTK_TINYSYS_VCP_DEBUG_SUPPORT
 
-		vcp_disable_dapc();
 		vcp_wait_awake_count();
+		vcp_disable_dapc();
 
 		ret = pm_runtime_put_sync(vcp_io_devs[VCP_IOMMU_256MB1]);
 		if (ret)
@@ -927,6 +967,7 @@ static int vcp_pm_event(struct notifier_block *notifier
 
 	switch (pm_event) {
 	case PM_SUSPEND_PREPARE:
+		vcp_extern_notify(VCP_EVENT_PRE_SUSPEND);
 		mutex_lock(&vcp_A_notify_mutex);
 		vcp_extern_notify(VCP_EVENT_SUSPEND);
 		mutex_unlock(&vcp_A_notify_mutex);
@@ -997,7 +1038,7 @@ static int vcp_pm_event(struct notifier_block *notifier
 			vcp_enable_irqs();
 #if VCP_RECOVERY_SUPPORT
 			cpuidle_pause_and_lock();
-			reset_vcp(VCP_ALL_SUSPEND);
+			reset_vcp(VCP_ALL_RESUME);
 			is_suspending = false;
 			waitCnt = vcp_wait_ready_sync(RTOS_FEATURE_ID);
 			cpuidle_resume_and_unlock();
@@ -1017,12 +1058,14 @@ static int vcp_pm_event(struct notifier_block *notifier
 
 		return NOTIFY_OK;
 	case PM_POST_HIBERNATION:
+		/* currently no scenario
 		pr_debug("[VCP] %s: reboot\n", __func__);
 		retval = reset_vcp(VCP_ALL_REBOOT);
 		if (retval < 0) {
 			retval = -EINVAL;
 			pr_debug("[VCP] %s: reboot fail\n", __func__);
 		}
+		*/
 		return NOTIFY_DONE;
 	}
 	return NOTIFY_DONE;
@@ -1065,6 +1108,18 @@ void vcp_set_clk(void)
 #endif
 }
 
+#if IS_ENABLED(CONFIG_MTK_DEVAPC)
+static bool devapc_power_cb(void)
+{
+	pr_info("[VCP] %s\n", __func__);
+	return mmup_enable_count();
+}
+
+static struct devapc_power_callbacks devapc_power_handle = {
+	.type = DEVAPC_TYPE_MMUP,
+	.query_power = devapc_power_cb,
+};
+#endif
 
 /*
  * reset vcp and create a timer waiting for vcp notify
@@ -1093,10 +1148,12 @@ int reset_vcp(int reset)
 		vcp_set_clk();
 
 #if VCP_BOOT_TIME_OUT_MONITOR
-		vcp_ready_timer[VCP_A_ID].tl.expires = jiffies + VCP_READY_TIMEOUT;
-		add_timer(&vcp_ready_timer[VCP_A_ID].tl);
+		/* modify timer invoke api, since there is a BUG_ON case that fuzzer
+		 * re-entry reset_vcp() may add an already pending timer.
+		 */
+		mod_timer(&vcp_ready_timer[VCP_A_ID].tl, jiffies + VCP_READY_TIMEOUT);
 #endif
-		if (reset == VCP_ALL_SUSPEND) {
+		if (reset == VCP_ALL_RESUME) {
 			arm_smccc_smc(MTK_SIP_TINYSYS_VCP_CONTROL,
 				MTK_TINYSYS_VCP_KERNEL_OP_RESET_RELEASE,
 				0, 0, 0, 0, 0, 0, &res);
@@ -1601,31 +1658,67 @@ RESERVEDMEM_OF_DECLARE(vcp_reserve_mem_init
 
 phys_addr_t vcp_get_reserve_mem_phys(enum vcp_reserve_mem_id_t id)
 {
+	phys_addr_t base_addr = 0, offset = 0;
+
 	if (id >= NUMS_MEM_ID) {
 		pr_notice("[VCP] no reserve memory for %d", id);
 		return 0;
-	} else
-		return vcp_reserve_mblock[id].start_phys;
+	} else {
+		if (id == VDEC_MEM_ID) {
+			base_addr = vcp_reserve_mblock[VCP_A_LOGGER_MEM_ID].start_phys;
+			offset = 0;
+		} else if (id == VENC_MEM_ID) {
+			base_addr = vcp_reserve_mblock[VCP_A_LOGGER_MEM_ID].start_phys;
+			offset = vcp_reserve_mblock[VDEC_MEM_ID].size;
+		} else if (id == VCP_A_LOGGER_MEM_ID) {
+			base_addr = vcp_reserve_mblock[VCP_A_LOGGER_MEM_ID].start_phys;
+			offset = vcp_reserve_mblock[VDEC_MEM_ID].size +
+					 vcp_reserve_mblock[VENC_MEM_ID].size;
+		} else {
+			base_addr = vcp_reserve_mblock[id].start_phys;
+			offset = 0;
+		}
+
+		return base_addr + offset;
+	}
 }
 EXPORT_SYMBOL_GPL(vcp_get_reserve_mem_phys);
 
 phys_addr_t vcp_get_reserve_mem_virt(enum vcp_reserve_mem_id_t id)
 {
+	phys_addr_t base_addr = 0, offset = 0;
+
 	if (id >= NUMS_MEM_ID) {
 		pr_notice("[VCP] no reserve memory for %d", id);
 		return 0;
-	} else
-		return vcp_reserve_mblock[id].start_virt;
+	} else {
+		if (id == VDEC_MEM_ID) {
+			base_addr = vcp_reserve_mblock[VCP_A_LOGGER_MEM_ID].start_virt;
+			offset = 0;
+		} else if (id == VENC_MEM_ID) {
+			base_addr = vcp_reserve_mblock[VCP_A_LOGGER_MEM_ID].start_virt;
+			offset = vcp_reserve_mblock[VDEC_MEM_ID].size;
+		} else if (id == VCP_A_LOGGER_MEM_ID) {
+			base_addr = vcp_reserve_mblock[VCP_A_LOGGER_MEM_ID].start_virt;
+			offset = vcp_reserve_mblock[VDEC_MEM_ID].size +
+					 vcp_reserve_mblock[VENC_MEM_ID].size;
+		} else {
+			base_addr = vcp_reserve_mblock[id].start_virt;
+			offset = 0;
+		}
+
+		return base_addr + offset;
+	}
 }
 EXPORT_SYMBOL_GPL(vcp_get_reserve_mem_virt);
 
 phys_addr_t vcp_get_reserve_mem_size(enum vcp_reserve_mem_id_t id)
 {
-	if (id >= NUMS_MEM_ID) {
-		pr_notice("[VCP] no reserve memory for %d", id);
-		return 0;
-	} else
+	if (id >= 0U && id < NUMS_MEM_ID)
 		return vcp_reserve_mblock[id].size;
+
+	pr_notice("[VCP] no reserve memory for %d", id);
+	return 0;
 }
 EXPORT_SYMBOL_GPL(vcp_get_reserve_mem_size);
 
@@ -1638,7 +1731,8 @@ static int vcp_reserve_memory_ioremap(struct platform_device *pdev)
 	enum vcp_reserve_mem_id_t id;
 	phys_addr_t accumlate_memory_size = 0;
 	unsigned int vcp_mem_num = 0;
-	unsigned int i, m_idx, m_size;
+	unsigned int i = 0, m_idx = 0, m_size = 0;
+	unsigned int alloc_mem_size = 0;
 	int ret;
 	uint64_t iova_upper = 0;
 	uint64_t iova_lower = 0xFFFFFFFFFFFFFFFF;
@@ -1777,11 +1871,21 @@ static int vcp_reserve_memory_ioremap(struct platform_device *pdev)
 			vcp_reserve_mblock[id].start_phys = vcp_sec_dump_base_phys;
 			vcp_reserve_mblock[id].start_virt = vcp_sec_dump_base_virt;
 		} else {
+			if (id == VDEC_MEM_ID || id == VENC_MEM_ID)
+				continue;
+			else if (id == VCP_A_LOGGER_MEM_ID)
+				alloc_mem_size =
+					vcp_reserve_mblock[VDEC_MEM_ID].size +
+					vcp_reserve_mblock[VENC_MEM_ID].size +
+					vcp_reserve_mblock[VCP_A_LOGGER_MEM_ID].size;
+			else
+				alloc_mem_size = vcp_reserve_mblock[id].size;
+
 			vcp_reserve_mblock[id].start_virt =
-				(__u64)dma_alloc_coherent(&pdev->dev, vcp_reserve_mblock[id].size,
+				(__u64)dma_alloc_coherent(&pdev->dev, alloc_mem_size,
 					&vcp_reserve_mblock[id].start_phys,
 					GFP_KERNEL);
-			accumlate_memory_size += vcp_reserve_mblock[id].size;
+			accumlate_memory_size += alloc_mem_size;
 
 			if (vcp_reserve_mblock[id].start_phys < iova_lower)
 				iova_lower = vcp_reserve_mblock[id].start_phys;
@@ -1789,6 +1893,17 @@ static int vcp_reserve_memory_ioremap(struct platform_device *pdev)
 				> iova_upper)
 				iova_upper = vcp_reserve_mblock[id].start_phys +
 					vcp_reserve_mblock[id].size;
+
+			if (id == VCP_A_LOGGER_MEM_ID) {
+				mrdump_mini_add_extra_file(
+					vcp_reserve_mblock[id].start_virt,  0,
+					DRAM_VDEC_VSI_BUF_LEN + DRAM_VENC_VSI_BUF_LEN +
+						DRAM_LOG_BUF_LEN,
+					"VCP_VSI_LAST_LOG");
+				pr_notice("[VCP] add vsi and log buffer to mrdump iova:0x%llx, virt:0x%llx\n",
+						  (uint64_t)vcp_reserve_mblock[id].start_phys,
+						  (uint64_t)vcp_reserve_mblock[id].start_virt);
+			}
 		}
 
 		pr_notice("[VCP] [%d] iova:0x%llx, virt:0x%llx, len:0x%llx\n",
@@ -1852,8 +1967,8 @@ int vcp_register_feature(enum feature_id id)
 		if (feature_table[i].feature == id)
 			feature_table[i].enable++;
 	}
-	ret = vcp_enable_pm_clk(id);
 	mutex_unlock(&vcp_feature_mutex);
+	ret = vcp_enable_pm_clk(id);
 
 	return ret;
 }
@@ -1881,8 +1996,8 @@ int vcp_deregister_feature(enum feature_id id)
 			feature_table[i].enable--;
 		}
 	}
-	ret = vcp_disable_pm_clk(id);
 	mutex_unlock(&vcp_feature_mutex);
+	ret = vcp_disable_pm_clk(id);
 
 	return ret;
 }
@@ -1928,7 +2043,10 @@ void vcp_wait_core_stop_timeout(int mmup_enable)
 
 	while (timeout--) {
 		core0_status = readl(R_CORE0_STATUS);
-		core0_halt = (core0_status == (B_CORE_GATED | B_HART0_HALT | B_HART1_HALT));
+		core0_halt = vcpreg.twohart ?
+			(core0_status == (B_CORE_GATED | B_HART0_HALT | B_HART1_HALT)) :
+			(core0_status == (B_CORE_GATED | B_HART0_HALT));
+
 		if (vcpreg.core_nums == 2) {
 			core1_status = readl(R_CORE1_STATUS);
 			core1_halt = (core1_status == (B_CORE_GATED | B_HART0_HALT | B_HART1_HALT));
@@ -2387,6 +2505,7 @@ static int vcp_device_probe(struct platform_device *pdev)
 	int ret = 0, i = 0;
 	struct resource *res;
 	const char *core_status = NULL;
+	const char *vcp_hwvoter = NULL;
 	struct device *dev = &pdev->dev;
 	struct device_node *node;
 	const char *clk_name;
@@ -2416,6 +2535,10 @@ static int vcp_device_probe(struct platform_device *pdev)
 	vcpreg.sram = devm_ioremap_resource(dev, res);
 	if (IS_ERR((void const *) vcpreg.sram)) {
 		pr_notice("[VCP] vcpreg.sram error\n");
+		return -1;
+	}
+	if (res == NULL) {
+		pr_notice("[VCP] platform_get_resource_byname error\n");
 		return -1;
 	}
 	vcpreg.total_tcmsize = (unsigned int)resource_size(res);
@@ -2480,6 +2603,17 @@ static int vcp_device_probe(struct platform_device *pdev)
 	pr_debug("[VCP] cfg_mmu base = 0x%p\n", vcpreg.cfg_mmu);
 #endif
 
+	vcpreg.spm = NULL;
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "spm");
+	if (res != NULL) {
+		vcpreg.spm = devm_ioremap(dev, res->start, resource_size(res));
+		if (IS_ERR((void const *) vcpreg.spm)) {
+			pr_notice("[VCP] vcpreg.spm error, spm base = 0x%llx\n", vcpreg.spm);
+			vcpreg.spm = NULL;
+		}
+		pr_debug("[VCP] spm base = 0x%llx\n", vcpreg.spm);
+	}
+
 	of_property_read_u32(pdev->dev.of_node, "vcp-sramSize"
 						, &vcpreg.vcp_tcmsize);
 	if (!vcpreg.vcp_tcmsize) {
@@ -2497,6 +2631,20 @@ static int vcp_device_probe(struct platform_device *pdev)
 	else {
 		pr_debug("[VCP] core-0 enable\n");
 		vcp_enable[VCP_A_ID] = 1;
+	}
+
+	of_property_read_string(pdev->dev.of_node, "vcp-hwvoter", &vcp_hwvoter);
+	if (vcp_hwvoter) {
+		if (strcmp(vcp_hwvoter, "enable") != 0) {
+			pr_notice("[VCP] vcp_hwvoter not enable\n");
+			vcp_hwvoter_support = false;
+		} else {
+			pr_notice("[VCP] vcp_hwvoter enable\n");
+			vcp_hwvoter_support = true;
+		}
+	} else {
+		vcp_hwvoter_support = true;
+		pr_notice("[VCP] vcp_hwvoter support by default: %d\n", vcp_hwvoter_support);
 	}
 
 	of_property_read_u32(pdev->dev.of_node, "core-nums"
@@ -2574,13 +2722,13 @@ static int vcp_device_probe(struct platform_device *pdev)
 		vcp_mbox_info[i].mbdev = &vcp_mboxdev;
 		ret = mtk_mbox_probe(pdev, vcp_mbox_info[i].mbdev, i);
 		if (ret < 0 || vcp_mboxdev.info_table[i].irq_num < 0) {
-			pr_notice("[VCP] mbox%d probe fail\n", i, ret);
+			pr_notice("[VCP] mbox%d probe fail %d\n", i, ret);
 			continue;
 		}
 
 		ret = enable_irq_wake(vcp_mboxdev.info_table[i].irq_num);
 		if (ret < 0) {
-			pr_notice("[VCP]mbox%d enable irq fail\n", i, ret);
+			pr_notice("[VCP]mbox%d enable irq fail %d\n", i, ret);
 			continue;
 		}
 		mbox_setup_pin_table(i);
@@ -2774,6 +2922,10 @@ static const struct of_device_id vcp_ube_core_of_ids[] = {
 	{ .compatible = "mediatek,vcp-io-ube-core", },
 	{}
 };
+static const struct of_device_id vcp_sec_of_ids[] = {
+	{ .compatible = "mediatek,vcp-io-sec", },
+	{}
+};
 
 static struct platform_driver mtk_vcp_io_vdec = {
 	.probe = vcp_io_device_probe,
@@ -2822,6 +2974,16 @@ static struct platform_driver mtk_vcp_io_ube_core = {
 		.name = "vcp_io_ube_core",
 		.owner = THIS_MODULE,
 		.of_match_table = vcp_ube_core_of_ids,
+	},
+};
+
+static struct platform_driver mtk_vcp_io_sec = {
+	.probe = vcp_io_device_probe,
+	.remove = vcp_io_device_remove,
+	.driver = {
+		.name = "vcp_io_sec",
+		.owner = THIS_MODULE,
+		.of_match_table = vcp_sec_of_ids,
 	},
 };
 
@@ -2877,6 +3039,10 @@ static int __init vcp_init(void)
 		pr_info("[VCP] mtk_vcp_io_work probe fail\n");
 		goto err_io_work;
 	}
+	if (platform_driver_register(&mtk_vcp_io_sec)) {
+		pr_info("[VCP] mtk_vcp_io_sec probe fail\n");
+		goto err_io_sec;
+	}
 
 	if (!vcp_support)
 		return 0;
@@ -2923,7 +3089,9 @@ static int __init vcp_init(void)
 		goto err;
 	}
 
-	vcp_hw_voter_dbg_init();
+	/* scp hwvoter debug init */
+	if (vcp_hwvoter_support)
+		vcp_hw_voter_dbg_init();
 
 #if VCP_LOGGER_ENABLE
 	/* vcp logger initialise */
@@ -2958,8 +3126,14 @@ static int __init vcp_init(void)
 	vcp_set_fp(&vcp_helper_fp);
 	vcp_set_ipidev(&vcp_ipidev);
 
+#if IS_ENABLED(CONFIG_MTK_DEVAPC)
+	register_devapc_power_callback(&devapc_power_handle);
+#endif
+
 	return ret;
 err:
+	platform_driver_unregister(&mtk_vcp_io_sec);
+err_io_sec:
 	platform_driver_unregister(&mtk_vcp_io_work);
 err_io_work:
 	platform_driver_unregister(&mtk_vcp_io_venc);
@@ -3009,6 +3183,7 @@ static void __exit vcp_exit(void)
 	for (i = 0; i < VCP_CORE_TOTAL ; i++)
 		del_timer(&vcp_ready_timer[i].tl);
 #endif
+	platform_driver_unregister(&mtk_vcp_io_sec);
 	platform_driver_unregister(&mtk_vcp_io_work);
 	platform_driver_unregister(&mtk_vcp_io_venc);
 	platform_driver_unregister(&mtk_vcp_io_vdec);

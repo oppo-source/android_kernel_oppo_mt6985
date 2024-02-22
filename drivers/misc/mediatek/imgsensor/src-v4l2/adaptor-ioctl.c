@@ -8,7 +8,16 @@
 #include "adaptor.h"
 #include "adaptor-ioctl.h"
 #include "adaptor-common-ctrl.h"
+#include "adaptor-fsync-ctrls.h"
 #include "adaptor-i2c.h"
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+#include <linux/delay.h>
+#include <linux/of_gpio.h>
+#include <linux/gpio.h>
+extern int adaptor_hw_aon_power_on(struct adaptor_ctx *ctx);
+extern int adaptor_hw_aon_power_off(struct adaptor_ctx *ctx);
+int aon_power_status = 0;
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 #define GAIN_TBL_SIZE 4096
 #define sd_to_ctx(__sd) container_of(__sd, struct adaptor_ctx, sd)
@@ -1233,6 +1242,35 @@ static int g_fine_integ_line_by_scenario(struct adaptor_ctx *ctx, void *arg)
 }
 
 
+static int g_fsync_frame_length_info(struct adaptor_ctx *ctx, void *arg)
+{
+	struct mtk_fs_frame_length_info *p_fs_fl_info = NULL;
+	int ret = 0;
+
+	if (unlikely(arg == NULL)) {
+		ret = -ENOIOCTLCMD;
+		adaptor_logi(ctx,
+			"ERROR: VIDIOC_MTK_G_FS_FRAME_LENGTH_INFO, get input pointer arg:%p, return\n",
+			arg);
+		return ret;
+	}
+
+	p_fs_fl_info = arg;
+
+	notify_fsync_mgr_g_fl_record_info(ctx, p_fs_fl_info);
+
+	dev_info(ctx->dev,
+		"[%s] VIDIOC_MTK_G_FS_FRAME_LENGTH_INFO, idx:%u, target_min_fl_us:%u, out_fl_us:%u, ret:%d\n",
+		__func__,
+		ctx->idx,
+		p_fs_fl_info->target_min_fl_us,
+		p_fs_fl_info->out_fl_us,
+		ret);
+
+	return ret;
+}
+
+
 static int s_video_framerate(struct adaptor_ctx *ctx, void *arg)
 {
 	u32 *info = arg;
@@ -1423,6 +1461,237 @@ static int s_tg(struct adaptor_ctx *ctx, void *arg)
 	return 0;
 }
 
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+static int g_get_camerasn(struct adaptor_ctx *ctx, void *arg)
+{
+	struct oplus_get_camera_sn *temp = arg;
+	subdrv_call(ctx, feature_control,
+	SENSOR_FEATURE_GET_EEPROM_COMDATA,
+	temp->data,&(temp->len));
+	return 0;
+}
+
+ static int g_get_stereo_data(struct adaptor_ctx *ctx, void *arg)
+ {
+ 	struct oplus_calc_eeprom_info *info = arg;
+ 	struct workbuf workbuf;
+ 	int ret;
+
+	ret = workbuf_get(&workbuf, info->p_buf, info->size, F_READ | F_WRITE);
+ 	if (ret)
+ 		return ret;
+
+ 	ret = subdrv_call(ctx, feature_control,
+ 		SENSOR_FEATURE_GET_EEPROM_STEREODATA,
+ 		workbuf.kbuf, &(info->size));
+ 	if (ret)
+ 		return ret;
+
+ 	ret = workbuf_put(&workbuf);
+ 	if (ret)
+ 		return ret;
+
+ 	return 0;
+ }
+
+static int g_get_unique_sensorid(struct adaptor_ctx *ctx, void *arg)
+{
+	struct oplus_get_unique_sensorid *data = arg;
+	struct workbuf workbuf;
+	int ret;
+
+	ret = workbuf_get(&workbuf, data->p_buf, data->size,  F_ZERO | F_WRITE);
+	if (ret)
+		return ret;
+
+	ret = subdrv_call(ctx, feature_control,
+	SENSOR_FEATURE_GET_UNIQUE_SENSORID,
+	workbuf.kbuf, &(data->size));
+	if (ret)
+		return ret;
+
+	ret = workbuf_put(&workbuf);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+static int g_get_otp_data(struct adaptor_ctx *ctx, void *arg)
+{
+	struct oplus_calc_eeprom_info *info = arg;
+	struct workbuf workbuf;
+	int ret;
+
+	ret = workbuf_get(&workbuf, info->p_buf, info->size, F_ZERO | F_WRITE);
+	if (ret)
+		return ret;
+
+	ret = subdrv_call(ctx, feature_control,
+		SENSOR_FEATURE_GET_SENSOR_OTP_ALL,
+		workbuf.kbuf, &(info->size));
+	if (ret)
+		return ret;
+
+	ret = workbuf_put(&workbuf);
+	if (ret)
+		return ret;
+
+	return 0;
+}
+
+// static int g_get_distortionparams_data(struct adaptor_ctx *ctx, void *arg)
+// {
+// 	struct oplus_distortion_data *data = arg;
+// 	struct workbuf workbuf;
+// 	int ret;
+
+// 	ret = workbuf_get(&workbuf, data->p_buf, data->size,  F_ZERO | F_WRITE);
+// 	if (ret)
+// 		return ret;
+
+// 	ret = subdrv_call(ctx, feature_control,
+// 		SENSOR_FEATURE_GET_DISTORTIONPARAMS,
+// 		workbuf.kbuf, &(data->size));
+// 	if (ret)
+// 		return ret;
+
+// 	ret = workbuf_put(&workbuf);
+// 	if (ret)
+// 		return ret;
+
+// 	return 0;
+// }
+
+ static int s_calibration_eeprom(struct adaptor_ctx *ctx, void *arg)
+ {
+ 	struct oplus_calc_eeprom_info *info = arg;
+ 	struct workbuf workbuf;
+ 	int ret;
+
+ 	ret = workbuf_get(&workbuf, info->p_buf, info->size, F_READ);
+ 	if (ret)
+ 		return ret;
+
+ 	ret = subdrv_call(ctx, feature_control,
+ 		SENSOR_FEATURE_SET_SENSOR_OTP,
+ 		workbuf.kbuf, &info->size);
+ 	if (ret)
+ 		return ret;
+
+ 	return 0;
+ }
+
+int cam_aon_irq_power_up(struct adaptor_ctx *ctx, void *arg)
+{
+	int i = 0;
+	dev_dbg(ctx->dev,"cam_aon_irq_power_up E");
+	if(arg != NULL){
+		if (copy_from_user(&ctx->pid,
+			(void __user *) arg,sizeof(int))) {
+			dev_err(ctx->dev, "Failed Copy from User");
+		}
+		dev_dbg(ctx->dev,"pid: %d", ctx->pid);
+	}
+
+	dev_dbg(ctx->dev, "%s aon_power_status = %d irq:%d\n", __func__, aon_power_status, gpio_to_irq(ctx->aon_irq_gpio));
+	mutex_lock(&ctx->hw_mutex);
+	if (aon_power_status) {
+		dev_info(ctx->dev, "%s already powered skip, aon_power_status = %d\n", __func__, aon_power_status);
+		mutex_unlock(&ctx->hw_mutex);
+		return 0;
+	}
+	ctx->irq_cnt = 0;
+	adaptor_hw_aon_power_on(ctx);
+	/*
+	if (!strcmp(ctx->subdrv->name,"imx709luna_mipi_raw")) {
+		adaptor_i2c_wr_u8(ctx->subctx.i2c_client, 0x18 >> 1, 0x02, 0x01);
+		adaptor_i2c_wr_u8(ctx->subctx.i2c_client, 0x18 >> 1, 0x02, 0x00);
+		adaptor_i2c_wr_u8(ctx->subctx.i2c_client, 0x18 >> 1, 0xFE, 0xFE);
+		adaptor_i2c_wr_u8(ctx->subctx.i2c_client, 0x18 >> 1, 0x02, 0x02);
+		adaptor_i2c_wr_u8(ctx->subctx.i2c_client, 0x18 >> 1, 0x06, 0x40);
+		adaptor_i2c_wr_u8(ctx->subctx.i2c_client, 0x18 >> 1, 0x07, 0x60);
+		adaptor_i2c_wr_u8(ctx->subctx.i2c_client, 0x18 >> 1, 0xFE, 0xFE);
+		adaptor_i2c_wr_u8(ctx->subctx.i2c_client, 0x18 >> 1, 0x03, 0x02);
+		adaptor_i2c_wr_u8(ctx->subctx.i2c_client, 0x18 >> 1, 0x04, 0x00);
+	}*/
+	aon_power_status = 1;
+	adaptor_i2c_wr_regs_u8(ctx->subctx.i2c_client, ctx->subctx.i2c_write_id >> 1, ctx->subctx.s_ctx.aonhemd_setting_table, ctx->subctx.s_ctx.aonhemd_setting_len);
+	enable_irq(gpio_to_irq(ctx->aon_irq_gpio));
+	enable_irq_wake(gpio_to_irq(ctx->aon_irq_gpio));
+	msleep(5);
+	for (i = 0; i < ctx->subdrv->aon_pw_seq_cnt; i++) {
+		const struct subdrv_pw_seq_entry *ent;
+		struct adaptor_hw_ops *op;
+		ent = &ctx->subdrv->aon_pw_seq[i];
+		op = &ctx->hw_ops[ent->id];
+		if (!op->unset) {
+			dev_dbg(ctx->dev, "cannot unset comp %d val %d\n",
+				ent->id, ent->val);
+			continue;
+		}
+		if (ent->id == HW_ID_MCLK) {
+			dev_info(ctx->dev, "mclk unset");
+			op->unset(ctx, op->data, ent->val);
+		}
+	}
+	mutex_unlock(&ctx->hw_mutex);
+
+	dev_dbg(ctx->dev,"cam_aon_irq_power_up X");
+	return 0;
+}
+
+int cam_aon_irq_power_down(struct adaptor_ctx *ctx, void *arg)
+{
+	dev_dbg(ctx->dev,"cam_aon_irq_power_down E");
+	mutex_lock(&ctx->hw_mutex);
+	if (aon_power_status == 0) {
+		dev_info(ctx->dev, "%s skip due to aon_power_status = %d\n", __func__, aon_power_status);
+		mutex_unlock(&ctx->hw_mutex);
+		return 0;
+	}
+
+	adaptor_hw_aon_power_off(ctx);
+	aon_power_status = 0;
+	disable_irq_wake(gpio_to_irq(ctx->aon_irq_gpio));
+	disable_irq(gpio_to_irq(ctx->aon_irq_gpio));
+	ctx->irq_cnt = 0;
+	mutex_unlock(&ctx->hw_mutex);
+	dev_dbg(ctx->dev,"cam_aon_irq_power_down X");
+	return 0;
+}
+
+int cam_aon_irq_query_info(struct adaptor_ctx *ctx, void *arg) {
+	int sensorid = 0;
+	if(ctx != NULL)
+	{
+		sensorid = ctx->subdrv->id;
+		if(sensorid == 0x1709 || sensorid == 0x709) {
+			if(copy_to_user((void __user *)arg, &sensorid,sizeof(sensorid))) {
+				dev_err(ctx->dev,"Failed to copy to user_ptr=%pK",(void __user *)arg);
+			}
+		}
+	}
+	aon_power_status = 0;
+	return 0;
+}
+
+static int g_is_streaming_enable(struct adaptor_ctx *ctx, void *arg)
+{
+	u32 *info = arg;
+	union feature_para para;
+	u32 len;
+
+	para.u32[0] = 0;
+	subdrv_call(ctx, feature_control,
+		SENSOR_FEATURE_GET_IS_STREAMING_ENABLE,
+		para.u8, &len);
+
+	*info = para.u32[0];
+	return 0;
+}
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
+
 struct ioctl_entry {
 	unsigned int cmd;
 	int (*func)(struct adaptor_ctx *ctx, void *arg);
@@ -1471,6 +1740,15 @@ static const struct ioctl_entry ioctl_list[] = {
 	{VIDIOC_MTK_G_RGBW_OUTPUT_MODE, g_rgbw_output_mode},
 	{VIDIOC_MTK_G_DIG_GAIN_RANGE_BY_SCENARIO, g_dig_gain_range_by_scenario},
 	{VIDIOC_MTK_G_DIG_GAIN_STEP, g_dig_gain_step},
+	{VIDIOC_MTK_G_FS_FRAME_LENGTH_INFO, g_fsync_frame_length_info},
+	#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	{VIDIOC_MTK_G_CAMERA_SN,g_get_camerasn},
+	{VIDIOC_MTK_G_STEREO_DATA, g_get_stereo_data},
+	{VIDIOC_MTK_G_OTP_DATA, g_get_otp_data},
+	{VIDIOC_MTK_G_IS_STREAMING_ENABLE, g_is_streaming_enable},
+	// {VIDIOC_MTK_G_DISTORTIONPARAMS_DATA, g_get_distortionparams_data},
+	{VIDIOC_MTK_G_UNIQUE_SENSORID, g_get_unique_sensorid},
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 	/* SET */
 	{VIDIOC_MTK_S_VIDEO_FRAMERATE, s_video_framerate},
 	{VIDIOC_MTK_S_MAX_FPS_BY_SCENARIO, s_max_fps_by_scenario},
@@ -1482,13 +1760,18 @@ static const struct ioctl_entry ioctl_list[] = {
 	{VIDIOC_MTK_S_LSC_TBL, s_lsc_tbl},
 	{VIDIOC_MTK_S_CONTROL, s_control},
 	{VIDIOC_MTK_S_TG, s_tg},
+	#ifdef OPLUS_FEATURE_CAMERA_COMMON
+	{VIDIOC_MTK_S_CALIBRATION_EEPROM, s_calibration_eeprom},
+	{VIDIOC_MTK_S_AON_HE_POWER_UP, cam_aon_irq_power_up},
+	{VIDIOC_MTK_S_AON_HE_POWER_DOWN, cam_aon_irq_power_down},
+	{VIDIOC_MTK_S_AON_HE_QUERY_INFO, cam_aon_irq_query_info},
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 };
 
 long adaptor_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	int i, ret = -ENOIOCTLCMD;
 	struct adaptor_ctx *ctx = sd_to_ctx(sd);
-
 	/* dispatch ioctl request */
 	for (i = 0; i < ARRAY_SIZE(ioctl_list); i++) {
 		if (ioctl_list[i].cmd == cmd) {

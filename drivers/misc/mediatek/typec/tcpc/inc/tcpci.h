@@ -72,6 +72,7 @@ int tcpci_init_alert_mask(struct tcpc_device *tcpc);
 
 int tcpci_get_cc(struct tcpc_device *tcpc);
 int tcpci_set_cc(struct tcpc_device *tcpc, int pull);
+int tcpci_update_local_cc(struct tcpc_device *tcpc, int pull);
 int tcpci_set_otp_fwen(struct tcpc_device *tcpc, bool en);
 static inline int __tcpci_set_cc(struct tcpc_device *tcpc, int pull)
 {
@@ -115,6 +116,12 @@ int tcpci_notify_typec_otp(struct tcpc_device *tcpc);
 
 int tcpci_set_cc_hidet(struct tcpc_device *tcpc, bool en);
 int tcpci_notify_wd0_state(struct tcpc_device *tcpc, bool wd0_state);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus charge add for uvlo */
+int tcpci_notify_chrdet_state(struct tcpc_device *tcpc, bool uvlo_state);
+int tcpci_notify_bc12_complete_state(struct tcpc_device *tcpc, bool bc12_complete_state);
+int tcpci_notify_hvdcp_detect_dn(struct tcpc_device *tcpc, bool hvdcp_detect_dn);
+#endif
 int tcpci_notify_plug_out(struct tcpc_device *tcpc);
 
 int tcpci_set_floating_ground(struct tcpc_device *tcpc, bool en);
@@ -206,5 +213,10 @@ int tcpci_notify_request_bat_info(
 #endif	/* CONFIG_USB_PD_REV30 */
 
 #endif	/* CONFIG_USB_POWER_DELIVERY */
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+int tcpci_notify_switch_set_state(struct tcpc_device *tcpc, bool state, bool (*pfunc)(int));
+int tcpci_notify_switch_get_state(struct tcpc_device *tcpc, bool (*pfunc)(int));
+#endif
 
 #endif /* #ifndef __LINUX_RT_TCPC_H */

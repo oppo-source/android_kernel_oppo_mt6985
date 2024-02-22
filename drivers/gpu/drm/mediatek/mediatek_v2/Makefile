@@ -1,5 +1,11 @@
 subdir-ccflags-y += -Werror
 
+#OPLUS_FEATURE_DISPLAY
+#build oplus file into mediatek_drm.ko
+ccflags-y += -I$(srctree)/drivers/gpu/drm/oplus
+ccflags-y += -I$(srctree)/drivers/gpu/drm/mediatek/mediatek_v2
+#end OPLUS_FEATURE_DISPLAY
+
 mediatek-drm-y := mtk_drm_drv.o \
 		  mtk_disp_tdshp.o \
 		  mtk_disp_color.o \
@@ -11,6 +17,7 @@ mediatek-drm-y := mtk_drm_drv.o \
 		  mtk_disp_chist.o \
 		  mtk_disp_ovl.o \
 		  mtk_disp_rdma.o \
+		  mtk_disp_mdp_rdma.o \
 		  mtk_disp_rsz.o \
 		  mtk_disp_mdp_rsz.o \
 		  mtk_disp_wdma.o \
@@ -56,6 +63,7 @@ mediatek-drm-y := mtk_drm_drv.o \
 		  mtk_disp_inlinerotate.o \
 		  mtk_mmlsys_bypass_mode.o \
 		  mtk_lease.o \
+		  platform/mtk_drm_6835.o \
 
 #ccflags-y += -DDRM_CMDQ_DISABLE
 #mediatek-drm-y += mtk_cmdq_dummy.o
@@ -68,6 +76,9 @@ mediatek-drm-y += mtk_dp_intf.o \
 	mtk_dp.o \
 	mtk_dp_hal.o \
 	mtk_dp_debug.o
+
+#for 6382 bridge
+mediatek-drm-y += mtk_disp_bdg.o
 
 ifeq (yy, $(CONFIG_MTK_TEE_GP_SUPPORT)$(CONFIG_TRUSTONIC_TEE_SUPPORT))
 obj-y += ca/
@@ -98,6 +109,8 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/scp/include/
 ccflags-y += -I$(srctree)/drivers/misc/mediatek/dramc/$(MTK_PLATFORM)	\
              -I$(srctree)/drivers/misc/mediatek/smi/			\
              -I$(srctree)/drivers/misc/mediatek/mmp/			\
+	     -I$(srctree)/drivers/misc/mediatek/spi_slave_drv/          \
+	     -I$(srctree)/drivers/misc/mediatek/base/power/include/     \
              -I$(srctree)/drivers/misc/mediatek/mmdvfs/			\
              -I$(srctree)/drivers/misc/mediatek/pmic/			\
              -I$(srctree)/drivers/iommu/				\
@@ -111,6 +124,7 @@ ccflags-y += -I$(srctree)/drivers/misc/mediatek/dramc/$(MTK_PLATFORM)	\
              -I$(srctree)/drivers/misc/mediatek/iommu/		\
              -I$(srctree)/drivers/misc/mediatek/mtk-interconnect/        \
              -I$(srctree)/drivers/gpu/drm/mediatek \
+             -I$(srctree)/drivers/gpu/drm/mediatek/mml \
              -I$(srctree)/drivers/misc/mediatek/slbc/ \
              -I$(srctree)/drivers/misc/mediatek/vcp/rv/ \
              -I$(srctree)/drivers/misc/mediatek/vcp/include/ \
@@ -128,3 +142,24 @@ ccflags-y += -DCCORR_SUPPORT
 
 subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/
 subdir-ccflags-y += -I$(srctree)/drivers/misc/mediatek/include/mt-plat/
+
+#OPLUS_FEATURE_DISPLAY
+ccflags-y += -DOPLUS_FEATURE_DISPLAY_TEMP_COMPENSATION
+ccflags-y += -DOPLUS_FEATURE_DISPLAY_ONSCREENFINGERPRINT
+ccflags-y += -DOPLUS_FEATURE_DISPLAY_PWM
+
+#build oplus file into mediatek_drm.ko
+subdir-ccflags-y += -I$(srctree)/drivers/staging/android/ion/ \
+			-I$(srctree)/drivers/staging/android/ion/mtk
+
+mediatek-drm-y += ../../oplus/oplus_display_private_api.o \
+			../../oplus/oplus_display_panel_power.o \
+			../../oplus/oplus_display_common.o \
+			../../oplus/oplus_display_dc.o \
+			../../oplus/oplus_display_onscreenfingerprint.o \
+			../../oplus/oplus_display_mtk_debug.o \
+			../../oplus/oplus_display_panel.o \
+			../../oplus/oplus_adfr.o \
+			../../oplus/oplus_display_temp_compensation.o \
+			../../oplus/oplus_display_high_frequency_pwm.o
+#end OPLUS_FEATURE_DISPLAY

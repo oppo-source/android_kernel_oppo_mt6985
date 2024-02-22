@@ -97,3 +97,12 @@ obj-$(CONFIG_INTERCONNECT_MTK_MMQOS_COMMON) += mmqos/
 obj-$(CONFIG_MTK_GATE_IC) += gate_ic/
 obj-$(CONFIG_USB) += usb/
 obj-$(CONFIG_MTK_WIDEVINE_DRM) += widevine_drm/
+#ifdef OPLUS_FEATURE_OEM_OCDT
+obj-$(CONFIG_MTK_BOOT_COMMON) += boot_common/
+#endif
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+obj-$(CONFIG_MTK_V4L2_IMGSENSOR) += imgsensor/oplus/
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+obj-$(CONFIG_MTK_MT6382_BDG) += spi_slave_drv/
+obj-m += wl2866d/
+obj-$(CONFIG_MTK_ULTRASND_PROXIMITY) += elliptic/

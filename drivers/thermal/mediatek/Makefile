@@ -4,6 +4,9 @@ ccflags-y += \
 	-I$(srctree)/drivers/misc/mediatek/mcupm/include \
 	-I$(srctree)/drivers/gpu/mediatek/gpufreq \
 	-I$(srctree)/drivers/misc/mediatek/connectivity/power_throttling
+ifneq ($(CONFIG_MTK_TINYSYS_SCP_SUPPORT),)
+ccflags-y += -I$(srctree)/drivers/misc/mediatek/scp/include
+endif
 
 obj-$(CONFIG_MTK_SOC_THERMAL)	+= soc_temp.o
 obj-$(CONFIG_MTK_SOC_THERMAL_LVTS)	+= soc_temp_lvts.o
@@ -28,3 +31,6 @@ obj-$(CONFIG_MTK_BOARD_THERMAL)	+= board_temp.o
 obj-$(CONFIG_MTK_VTSKIN_THERMAL)	+= vtskin_temp.o
 
 obj-$(CONFIG_MTK_WIFI_THERMAL) += wifi_cooling.o
+#OPLUS_FEATURE_CAMERA_COMMON
+obj-$(CONFIG_MTK_PMIC_THERMAL) += camera_temp.o
+#end OPLUS_FEATURE_CAMERA_COMMON

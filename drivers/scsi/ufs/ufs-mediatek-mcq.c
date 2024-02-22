@@ -15,8 +15,10 @@
 #include "ufshcd-crypto.h"
 #include "ufs-mediatek.h"
 #include "ufs-mediatek-sip.h"
+#include "ufs-mediatek-trace.h"
 
 #include <trace/hooks/ufshcd.h>
+
 
 enum {
 	/* one for empty, one for devman command*/
@@ -90,6 +92,48 @@ static void ufs_mtk_mcq_print_trs(void *data, struct ufs_hba *hba, bool pr_prdt)
 	for_each_set_bit(tag, bitmap, UFSHCD_MAX_TAG) {
 		ufs_mtk_mcq_print_trs_tag(hba, tag, pr_prdt);
 	}
+}
+
+static void ufs_mtk_mcq_add_command_trace(struct ufs_hba *hba, unsigned int tag,
+				     enum ufs_trace_str_t str_t)
+{
+	u64 lba = 0;
+	u8 opcode = 0, group_id = 0;
+	u32 intr = 0xFF, doorbell = 0xFF;
+	struct ufshcd_lrb *lrbp = &hba->lrb[tag];
+	struct scsi_cmnd *cmd = lrbp->cmd;
+	struct request *rq = scsi_cmd_to_rq(cmd);
+	int transfer_len = -1;
+
+	if (!cmd)
+		return;
+
+	/* TODO: port UPIU trace if necessary */
+	// ufshcd_add_cmd_upiu_trace(hba, tag, str_t);
+	if (!trace_ufs_mtk_mcq_command_enabled())
+		return;
+
+	opcode = cmd->cmnd[0];
+
+	if (opcode == READ_10 || opcode == WRITE_10) {
+		/*
+		 * Currently we only fully trace read(10) and write(10) commands
+		 */
+		transfer_len =
+		       be32_to_cpu(lrbp->ucd_req_ptr->sc.exp_data_transfer_len);
+		lba = scsi_get_lba(cmd);
+		if (opcode == WRITE_10)
+			group_id = lrbp->cmd->cmnd[6];
+	} else if (opcode == UNMAP) {
+		/*
+		 * The number of Bytes to be unmapped beginning with the lba.
+		 */
+		transfer_len = blk_rq_bytes(rq);
+		lba = scsi_get_lba(cmd);
+	}
+
+	trace_ufs_mtk_mcq_command(dev_name(hba->dev), str_t, tag,
+			doorbell, transfer_len, intr, lba, opcode, group_id);
 }
 
 static u32 ufs_mtk_q_entry_offset(struct ufs_queue *q, union utp_q_entry *ptr)
@@ -176,7 +220,7 @@ static void ufs_mtk_transfer_req_compl_handler(struct ufs_hba *hba,
 	cmd = lrbp->cmd;
 	if (cmd) {
 		trace_android_vh_ufs_compl_command(hba, lrbp);
-		ufshcd_add_command_trace(hba, index, UFS_CMD_COMP);
+		ufs_mtk_mcq_add_command_trace(hba, index, UFS_CMD_COMP);
 		result = retry_requests ? DID_BUS_BUSY << 16 :
 			ufshcd_transfer_rsp_status(hba, lrbp);
 		scsi_dma_unmap(cmd);
@@ -192,8 +236,7 @@ static void ufs_mtk_transfer_req_compl_handler(struct ufs_hba *hba,
 		lrbp->command_type == UTP_CMD_TYPE_UFS_STORAGE) {
 		if (hba->dev_cmd.complete) {
 			trace_android_vh_ufs_compl_command(hba, lrbp);
-			ufshcd_add_command_trace(hba, index,
-						 UFS_DEV_COMP);
+			ufs_mtk_mcq_add_command_trace(hba, index, UFS_DEV_COMP);
 			complete(hba->dev_cmd.complete);
 			update_scaling = true;
 		}
@@ -211,6 +254,7 @@ static irqreturn_t ufs_mtk_mcq_cq_ring_handler(struct ufs_hba *hba, int hwq)
 	dma_addr_t ucdl_dma_addr;
 	u8 tag_offset;
 	u32 mcq_cqe_ocs;
+	unsigned long flags;
 	struct ufs_hba_private *hba_priv = (struct ufs_hba_private *)hba->android_vendor_data1;
 
 	q = &hba_priv->mcq_q_cfg.cq[hwq];
@@ -224,7 +268,10 @@ static irqreturn_t ufs_mtk_mcq_cq_ring_handler(struct ufs_hba *hba, int hwq)
 		mcq_cqe_ocs = (le32_to_cpu(entry->dword_4) & UTRD_OCS_MASK);
 		lrb->utr_descriptor_ptr->header.dword_2 = cpu_to_le32(mcq_cqe_ocs);
 		ufs_mtk_inc_cq_head(hba, q);
+
+		spin_lock_irqsave(&hba->outstanding_lock, flags);
 		clear_bit(tag_offset, hba_priv->outstanding_mcq_reqs);
+		spin_unlock_irqrestore(&hba->outstanding_lock, flags);
 		ufs_mtk_transfer_req_compl_handler(hba, false, tag_offset);
 	}
 
@@ -338,7 +385,8 @@ static void ufs_mtk_mcq_send_hw_cmd(struct ufs_hba *hba, unsigned int task_tag)
 	lrbp->compl_time_stamp = ktime_set(0, 0);
 
 	trace_android_vh_ufs_send_command(hba, lrbp);
-	ufshcd_add_command_trace(hba, task_tag, UFS_CMD_SEND);
+
+	ufs_mtk_mcq_add_command_trace(hba, task_tag, UFS_CMD_SEND);
 	ufshcd_clk_scaling_start_busy(hba);
 
 	spin_lock_irqsave(&sq_ptr->q_lock, flags);
@@ -1034,11 +1082,11 @@ static void ufs_mtk_mcq_retry_complete(void *data, struct ufs_hba *hba)
 	if (!hba_priv->is_mcq_enabled)
 		return;
 
+	spin_lock_irqsave(&hba->outstanding_lock, flags);
 	for_each_set_bit(index, hba_priv->outstanding_mcq_reqs, UFSHCD_MAX_TAG) {
 		ufs_mtk_transfer_req_compl_handler(hba, true, index);
 	}
 
-	spin_lock_irqsave(&hba->outstanding_lock, flags);
 	bitmap_zero(hba_priv->outstanding_mcq_reqs, UFSHCD_MAX_TAG);
 	spin_unlock_irqrestore(&hba->outstanding_lock, flags);
 }
@@ -1195,6 +1243,66 @@ void ufs_mtk_mcq_set_irq_affinity(struct ufs_hba *hba)
 		}
 		dev_info(hba->dev, "Set irq %d to CPU: %d\n", irq, _cpu);
 	}
+}
+
+void ufs_mtk_mcq_disable_irq(struct ufs_hba *hba)
+{
+	struct ufs_hba_private *hba_priv = (struct ufs_hba_private *)hba->android_vendor_data1;
+	struct blk_mq_tag_set *tag_set = &hba->host->tag_set;
+	struct blk_mq_queue_map	*map = &tag_set->map[HCTX_TYPE_DEFAULT];
+	unsigned int nr = map->nr_queues;
+	unsigned int q_index, cpu, irq;
+
+	if (!hba_priv->is_mcq_enabled)
+		return;
+
+	if (hba_priv->mcq_nr_intr == 0)
+		return;
+
+	for (cpu = 0; cpu < nr; cpu++) {
+		q_index = map->mq_map[cpu];
+		irq = hba_priv->mcq_intr_info[q_index].intr;
+		disable_irq(irq);
+	}
+	hba_priv->is_mcq_intr_enabled = false;
+}
+
+void ufs_mtk_mcq_enable_irq(struct ufs_hba *hba)
+{
+	struct ufs_hba_private *hba_priv = (struct ufs_hba_private *)hba->android_vendor_data1;
+	struct blk_mq_tag_set *tag_set = &hba->host->tag_set;
+	struct blk_mq_queue_map	*map = &tag_set->map[HCTX_TYPE_DEFAULT];
+	unsigned int nr = map->nr_queues;
+	unsigned int q_index, cpu, irq;
+
+	if (!hba_priv->is_mcq_enabled)
+		return;
+
+	if (hba_priv->mcq_nr_intr == 0)
+		return;
+
+	/*
+	 * Racing by gate work(should turn off clock, but not) and
+	 * ufshcd_hold (turn on again).
+	 *
+	 * ufshcd_gate_work -> spin_lock_irqsave           2
+	 *                  -> active_reqs !=0             7
+	 *                  -> spin_unlock_irqrestore      8
+	 * ufshcd_hold      -> spin_lock_irqsave           1
+	 *                  -> active_reqs ++              3
+	 *                  -> cancel_delayed_work fail    4
+	 *                  -> ungate work (turn clock)    5
+	 *                  -> spin_unlock_irqrestore      6
+	 */
+	if (hba_priv->is_mcq_intr_enabled == true)
+		return;
+
+	for (cpu = 0; cpu < nr; cpu++) {
+		q_index = map->mq_map[cpu];
+		irq = hba_priv->mcq_intr_info[q_index].intr;
+		enable_irq(irq);
+	}
+	hba_priv->is_mcq_intr_enabled = true;
 }
 
 int ufs_mtk_mcq_memory_alloc(struct ufs_hba *hba)

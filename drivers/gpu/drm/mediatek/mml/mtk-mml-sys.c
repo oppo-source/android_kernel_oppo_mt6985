@@ -30,7 +30,7 @@
 #define MML_MAX_SYS_COMPONENTS	16
 #define MML_MAX_SYS_MUX_PINS	88
 #define MML_MAX_SYS_DL_RELAYS	7
-#define MML_MAX_SYS_DBG_REGS	75
+#define MML_MAX_SYS_DBG_REGS	100
 #define MML_MAX_AID_COMPS	8
 
 int mml_ir_loop = 1;
@@ -1042,8 +1042,11 @@ static void sys_mml_calc_cfg(struct mtk_ddp_comp *ddp_comp,
 	struct mml_dle_param dl;
 	struct mml_dle_frame_info info = {0};
 	struct mml_tile_output **outputs;
+	struct mml_frame_config *frame_cfg;
 	s32 i, pipe_cnt = cfg->dual ? 2 : 1;
 	s32 ret;
+	u32 src_offset, sz = 0;
+	char frame[64];
 
 	mml_msg("%s module:%d", __func__, cfg->config_type.module);
 
@@ -1070,6 +1073,7 @@ static void sys_mml_calc_cfg(struct mtk_ddp_comp *ddp_comp,
 		info.dl_out[i].width = cfg->mml_dst_roi[i].width;
 		info.dl_out[i].height = cfg->mml_dst_roi[i].height;
 	}
+
 	mml_mmp(addon_dle_config, MMPROFILE_FLAG_START, 0, 0);
 	ret = mml_dle_config(ctx, &cfg->submit, &info, cfg);
 	mml_mmp(addon_dle_config, MMPROFILE_FLAG_END, 0, 0);
@@ -1092,9 +1096,11 @@ static void sys_mml_calc_cfg(struct mtk_ddp_comp *ddp_comp,
 		return;
 	}
 
+	frame_cfg = cfg->task->config;
 	outputs = cfg->task->config->tile_output;
+	src_offset = cfg->submit.info.dest[0].crop.r.left;
 	for (i = 0; i < pipe_cnt; i++) {
-		cfg->mml_src_roi[i].x = outputs[i]->src_crop.left;
+		cfg->mml_src_roi[i].x = outputs[i]->src_crop.left + src_offset;
 		cfg->mml_src_roi[i].y = outputs[i]->src_crop.top;
 		cfg->mml_src_roi[i].width = outputs[i]->src_crop.width;
 		cfg->mml_src_roi[i].height = outputs[i]->src_crop.height;
@@ -1104,7 +1110,29 @@ static void sys_mml_calc_cfg(struct mtk_ddp_comp *ddp_comp,
 			cfg->mml_src_roi[i].y,
 			cfg->mml_src_roi[i].width,
 			cfg->mml_src_roi[i].height);
+
+		if (frame_cfg->dl_in[i].width || frame_cfg->dl_in[i].height)
+			continue;
+
+		frame_cfg->dl_in[i] = outputs[i]->src_crop;
+		frame_cfg->dl_in[i].left = cfg->mml_src_roi[i].x;
+
+		if (sz >= sizeof(frame))
+			continue;
+
+		ret = snprintf(&frame[sz], sizeof(frame) - sz,
+			" %u:(%u, %u, %u, %u)",
+			i,
+			frame_cfg->dl_in[i].left,
+			frame_cfg->dl_in[i].top,
+			frame_cfg->dl_in[i].width,
+			frame_cfg->dl_in[i].height);
+		if (ret > 0)
+			sz += ret;
 	}
+
+	if (sz)
+		mml_log("dl_in%s left offset %u", frame, src_offset);
 }
 
 static void sys_addon_connect(struct mml_sys *sys,
@@ -1138,27 +1166,23 @@ static void sys_addon_disconnect(struct mml_sys *sys,
 {
 	struct mml_dle_ctx *ctx;
 
-	if (cfg->pipe == 0) {
-		ctx = sys_get_dle_ctx(sys, NULL);
-		if (IS_ERR_OR_NULL(ctx)) {
-			mml_err("%s fail to get mml ctx", __func__);
-			return;
-		}
-
-		cfg->task = mml_dle_stop(ctx);
-		if (!cfg->task) {
-			mml_err("%s fail to find task", __func__);
-			return;
-		}
-	}
-
-	if (!cfg->task || !cfg->task->config->path[cfg->pipe]) {
-		mml_err("%s no path for task %p pipe %u", __func__,
-			cfg->task, cfg->pipe);
+	ctx = sys_get_dle_ctx(sys, NULL);
+	if (IS_ERR_OR_NULL(ctx)) {
+		mml_err("%s fail to get mml ctx", __func__);
 		return;
 	}
 
-	/* sys_ddp_disable(sys, cfg->task, pipe); */
+	cfg->task = mml_dle_stop(ctx);
+	if (!cfg->task) {
+		mml_err("%s fail to find task", __func__);
+		return;
+	}
+	mml_msg("%s dle stop task %p", __func__, cfg->task);
+
+	if (!cfg->task || !cfg->task->config->path[cfg->pipe]) {
+		mml_err("%s no path for task %p pipe %u", __func__, cfg->task, cfg->pipe);
+		return;
+	}
 }
 
 static void sys_addon_config(struct mtk_ddp_comp *ddp_comp,
@@ -1268,12 +1292,15 @@ static s32 dli_tile_prepare(struct mml_comp *comp, struct mml_task *task,
 			    union mml_tile_data *data)
 {
 	struct mml_frame_data *src = &task->config->info.src;
+	struct mml_frame_dest *dest = &task->config->info.dest[0];
 
 	func->type = TILE_TYPE_RDMA;
-	func->full_size_x_in = src->width;
+	/* height align wrot out cause height value config in inlinerot height */
+	func->full_size_x_in = dest->crop.r.width;
 	func->full_size_y_in = src->height;
-	func->full_size_x_out = src->width;
+	func->full_size_x_out = dest->crop.r.width;
 	func->full_size_y_out = src->height;
+
 	return 0;
 }
 
@@ -1586,6 +1613,18 @@ void mml_sys_destroy(struct platform_device *pdev, struct mml_sys *sys,
 	if (sys->ddp_comp_en)
 		component_del(&pdev->dev, comp_ops);
 	devm_kfree(&pdev->dev, sys);
+}
+
+void mml_sys_put_dle_ctx(void *mml)
+{
+	struct mml_sys *sys = mml_get_sys(mml);
+
+	if (!sys) {
+		mml_err("%s no sys to put dle context", __func__);
+		return;
+	}
+	mml_dle_put_context(sys->dle_ctx);
+	sys->dle_ctx = NULL;
 }
 
 static int bind_mml(struct device *dev, struct device *master,

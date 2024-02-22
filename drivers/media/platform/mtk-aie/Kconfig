@@ -8,3 +8,12 @@ config MTK_CAMERA_FD_ISP7S
 		AIE driver is a V4L2 memory-to-memory device driver which
 		provides hardware accelerated face detection function,
 		it can detect different sizes of faces in a raw image.
+
+
+config VIDEO_MTK_ISP_AOV
+	tristate "Mediatek aov processing function"
+	select V4L2_MEM2MEM_DEV
+	default n
+
+	help
+		Support the AOV (Always-On) feature

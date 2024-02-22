@@ -9,8 +9,8 @@
 #include <linux/spinlock.h>
 #include <linux/errno.h>
 
-#if IS_ENABLED(CONFIG_MTK_AUDIO_CM4_SUPPORT)
-#include <scp_ipi.h>
+#if IS_ENABLED(CONFIG_MTK_SCP_AUDIO)
+#include <scp_audio_ipi.h>
 #endif
 
 #if IS_ENABLED(CONFIG_MTK_AUDIODSP_SUPPORT)
@@ -183,6 +183,10 @@ bool check_print_msg_info(const struct ipi_msg_t *p_ipi_msg)
 	    p_ipi_msg->msg_id == AUDIO_DSP_TASK_DLCOPY)
 		return false;
 
+	if (p_ipi_msg->task_scene == TASK_SCENE_SPATIALIZER &&
+	    p_ipi_msg->msg_id == AUDIO_DSP_TASK_DLCOPY)
+		return false;
+
 	if ((p_ipi_msg->task_scene == TASK_SCENE_USB_DL ||
 	     p_ipi_msg->task_scene == TASK_SCENE_USB_UL) &&
 	    (p_ipi_msg->msg_id == 0x1234 ||
@@ -239,7 +243,7 @@ static void audio_ipi_msg_dispatcher(int id, void *data, unsigned int len)
 
 void audio_messenger_ipi_init(void)
 {
-#if IS_ENABLED(CONFIG_MTK_AUDIO_CM4_SUPPORT)
+#if IS_ENABLED(CONFIG_MTK_SCP_AUDIO)
 	int ret_scp = 0;
 #endif
 #if IS_ENABLED(CONFIG_MTK_AUDIODSP_SUPPORT)
@@ -247,13 +251,15 @@ void audio_messenger_ipi_init(void)
 #endif
 	int i = 0;
 
-#if IS_ENABLED(CONFIG_MTK_AUDIO_CM4_SUPPORT)
-	ret_scp = scp_ipi_registration(
-			  IPI_AUDIO,
-			  audio_ipi_msg_dispatcher,
-			  "audio");
-	if (ret_scp != 0)
-		pr_notice("scp_ipi_registration fail!!");
+#if IS_ENABLED(CONFIG_MTK_SCP_AUDIO)
+	if (is_audio_scp_support()) {
+		ret_scp = scp_audio_ipi_registration(
+			   SCP_AUDIO_IPI_AUDIO,
+			   audio_ipi_msg_dispatcher,
+			   "audio");
+		if (ret_scp != 0)
+			pr_notice("scp_audio_ipi_registration fail!!");
+	}
 #endif
 
 #if IS_ENABLED(CONFIG_MTK_AUDIODSP_SUPPORT)

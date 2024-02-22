@@ -61,6 +61,10 @@ struct cluster_info {
 	int cpu;
 };
 
+#if IS_ENABLED(CONFIG_OPLUS_LOCKING_STRATEGY)
+extern void oplus_android_vh_alter_rwsem_list_add(void *unused, struct rwsem_waiter *waiter,
+	struct rw_semaphore *sem, bool *already_on_list);
+#endif
 /*
  * Nice levels are multiplicative, with a gentle 10% change for every
  * nice level changed. I.e. when a CPU-bound task goes from nice 0 to

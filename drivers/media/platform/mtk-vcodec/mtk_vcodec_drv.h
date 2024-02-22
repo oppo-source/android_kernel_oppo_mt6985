@@ -23,6 +23,7 @@
 #include "mtk_vcodec_util.h"
 #include "vcodec_ipi_msg.h"
 #include "mtk_vcodec_pm.h"
+#include "mtk_vcodec_dec_pm_plat.h"
 #include "vcodec_dvfs.h"
 #include "vcodec_bw.h"
 #include "mtk_dma_contig.h"
@@ -48,6 +49,9 @@
 #define V4L2_BUF_FLAG_OUTPUT_NOT_GENERATED 0x02000000
 #define MTK_INVALID_TIMESTAMP   ((u64)-1)
 #define MTK_VDEC_ALWAYS_ON_OP_RATE 135
+#define MTK_VENC_MONITOR_FRM_CNT 8 // Monitor 8 frames
+#define MTK_VCODEC_IPI_THREAD_PRIORITY 1
+#define MTK_VCODEC_MAX_MQ_NODE_CNT  4
 
 #define MAX_CODEC_FREQ_STEP	10
 #define MTK_VDEC_PORT_NUM	64
@@ -93,6 +97,7 @@ enum mtk_mmdvfs_type {
  * @MTK_STATE_HEADER - vdec had sps/pps header parsed or venc
  *                      had sps/pps header encoded
  * @MTK_STATE_FLUSH - vdec is flushing. Only used by decoder
+ * @MTK_STATE_STOP - vcodec instance need stop to avoid job ready
  * @MTK_STATE_ABORT - vcodec should be aborted
  */
 enum mtk_instance_state {
@@ -100,7 +105,8 @@ enum mtk_instance_state {
 	MTK_STATE_INIT = 1,
 	MTK_STATE_HEADER = 2,
 	MTK_STATE_FLUSH = 3,
-	MTK_STATE_ABORT = 4,
+	MTK_STATE_STOP = 4,
+	MTK_STATE_ABORT = 5,
 };
 
 enum mtk_codec_type {
@@ -456,6 +462,7 @@ struct venc_enc_param {
 	unsigned int slice_header_spacing;
 	struct mtk_venc_multi_ref *multi_ref;
 	struct mtk_venc_vui_info *vui_info;
+	char *log;
 };
 
 /*
@@ -465,6 +472,7 @@ struct venc_enc_param {
  */
 struct venc_frm_buf {
 	struct mtk_vcodec_mem fb_addr[MTK_VCODEC_MAX_PLANES];
+	u32 index;
 	unsigned int num_planes;
 	u64 timestamp;
 	bool has_meta;
@@ -525,6 +533,7 @@ struct vdec_set_frame_work_struct {
 struct vdec_check_alive_work_struct {
 	struct work_struct work;
 	struct mtk_vcodec_ctx *ctx;
+	struct mtk_vcodec_dev *dev;
 };
 
 /**
@@ -578,6 +587,7 @@ struct mtk_vcodec_ctx {
 
 	struct v4l2_fh fh;
 	struct v4l2_m2m_ctx *m2m_ctx;
+	struct device *general_dev;
 	struct mtk_q_data q_data[2];
 	int id;
 	enum mtk_instance_state state;
@@ -589,6 +599,8 @@ struct mtk_vcodec_ctx {
 	const struct vdec_common_if *dec_if;
 	const struct venc_common_if *enc_if;
 	unsigned long drv_handle;
+	uintptr_t bs_list[VB2_MAX_FRAME+1];
+	uintptr_t fb_list[VB2_MAX_FRAME+1];
 
 	struct vdec_pic_info picinfo;
 	int dpb_size;
@@ -604,9 +616,9 @@ struct mtk_vcodec_ctx {
 	unsigned int eos_type;
 	u64 early_eos_ts;
 
-	int int_cond[MTK_VDEC_HW_NUM];
+	int int_cond[MTK_VDEC_IRQ_NUM];
 	int int_type;
-	wait_queue_head_t queue[MTK_VDEC_HW_NUM];
+	wait_queue_head_t queue[MTK_VDEC_IRQ_NUM];
 	unsigned int irq_status;
 
 	struct v4l2_ctrl_handler ctrl_hdl;
@@ -646,12 +658,20 @@ struct mtk_vcodec_ctx {
 	int init_cnt;
 	int decoded_frame_cnt;
 	int last_decoded_frame_cnt; // used for timer to check active state of decoded ctx
+
+	/* used for vcp background idle check */
+	unsigned int vcp_action_cnt;
+	unsigned int last_vcp_action_cnt;
+	bool is_vcp_active;
+	struct mutex vcp_active_mutex;
+
 	struct mutex buf_lock;
 	struct mutex worker_lock;
 	struct slbc_data sram_data;
 	struct mutex q_mutex;
 	int use_slbc;
 	unsigned int slbc_addr;
+	int sysram_enable;
 #if ENABLE_FENCE
 	struct sync_timeline *p_timeline_obj;
 #endif
@@ -744,6 +764,8 @@ struct mtk_vcodec_dev {
 	spinlock_t dec_power_lock[MTK_VDEC_HW_NUM];
 	spinlock_t enc_power_lock[MTK_VENC_HW_NUM];
 	int dec_m4u_ports[NUM_MAX_VDEC_M4U_PORT];
+	atomic_t dec_clk_ref_cnt[MTK_VDEC_HW_NUM];
+	atomic_t dec_larb_ref_cnt;
 
 	unsigned long id_counter;
 
@@ -751,6 +773,7 @@ struct mtk_vcodec_dev {
 	struct workqueue_struct *encode_workqueue;
 	struct workqueue_struct *check_alive_workqueue;
 	struct vdec_check_alive_work_struct check_alive_work;
+	struct mutex check_alive_mutex;
 
 	int int_cond;
 	int int_type;
@@ -760,13 +783,17 @@ struct mtk_vcodec_dev {
 	struct mutex ipi_mutex_res;
 	struct mtk_vcodec_msgq mq;
 
-	int dec_irq[MTK_VDEC_HW_NUM];
+	int dec_irq[MTK_VDEC_IRQ_NUM];
 	int enc_irq[MTK_VENC_HW_NUM];
 	int enc_lt_irq;
 
 	struct semaphore dec_sem[MTK_VDEC_HW_NUM];
 	struct semaphore enc_sem[MTK_VENC_HW_NUM];
 	unsigned int dec_always_on[MTK_VDEC_HW_NUM]; // ref count
+	bool dec_is_suspend_off;
+	bool dvfs_is_suspend_off;
+	struct mutex dec_always_on_mutex;
+	atomic_t dec_hw_active[MTK_VDEC_HW_NUM];
 
 	struct mutex dec_dvfs_mutex;
 	struct mutex enc_dvfs_mutex;
@@ -774,6 +801,7 @@ struct mtk_vcodec_dev {
 	struct mtk_vcodec_pm pm;
 	struct notifier_block pm_notifier;
 	bool is_codec_suspending;
+	bool codec_stop_done;
 
 	int dec_cnt;
 	int enc_cnt;
@@ -826,6 +854,7 @@ struct mtk_vcodec_dev {
 	struct list_head venc_dvfs_inst;
 	struct dvfs_params vdec_dvfs_params;
 	struct dvfs_params venc_dvfs_params;
+	struct vcodec_dev_qos venc_dev_qos;
 	struct vcodec_port_bw *vdec_port_bw;
 	struct vcodec_port_bw *venc_port_bw;
 	struct vcodec_larb_bw *vdec_larb_bw;

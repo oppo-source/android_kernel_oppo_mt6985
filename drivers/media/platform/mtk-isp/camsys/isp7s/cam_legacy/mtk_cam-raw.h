@@ -58,6 +58,10 @@ struct mtk_cam_request_stream_data;
 
 #define IMG_PIX_ALIGN		2
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 enum raw_module_id {
 	RAW_A = 0,
 	RAW_B = 1,
@@ -293,7 +297,11 @@ struct mtk_raw_pipeline {
 	struct mtk_cam_mstream_exposure mstream_exposure;
 	/* pde module */
 	struct mtk_raw_pde_config pde_config;
-	struct mtk_cam_hdr_timestamp_info hdr_timestamp;
+	/* vhdr timestamp */
+	int	hdr_ts_fifo_size;
+	void *hdr_ts_buffer;
+	struct kfifo hdr_ts_fifo;
+	atomic_t is_hdr_ts_fifo_overflow;
 	s64 hw_mode;
 	s64 hw_mode_pending;
 	/* Frame sync */
@@ -341,6 +349,7 @@ struct mtk_raw_device {
 
 	/* for preisp - for sof counter sync.*/
 	int tg_count;
+	int vf_reset_cnt;
 	/* for subsample, sensor-control */
 	bool sub_sensor_ctrl_en;
 	int set_sensor_idx;
@@ -452,7 +461,8 @@ void enable_tg_db(struct mtk_raw_device *dev, int en);
 
 void initialize(struct mtk_raw_device *dev, int is_slave);
 
-void stream_on(struct mtk_raw_device *dev, int on);
+void stream_on(struct mtk_cam_ctx *ctx,
+		struct mtk_raw_device *dev, int on);
 
 void immediate_stream_off(struct mtk_raw_device *dev);
 
@@ -513,12 +523,21 @@ bool mtk_raw_resource_calc(struct mtk_cam_device *cam,
 			   s64 pixel_rate, int res_plan,
 			   int in_w, int in_h, int *out_w, int *out_h);
 void mtk_raw_set_dcif_rawi_fmt(struct device *dev, struct v4l2_format *img_fmt,
-			       int width, int height, unsigned int code);
+			       int width, int height, unsigned int code,
+			       const struct v4l2_format *imgo_fmt);
 
-int mtk_cam_update_pd_meta_cfg_info(struct mtk_raw_pipeline *pipeline,
-							enum mtk_cam_ctrl_type ctrl_type);
-int mtk_cam_update_pd_meta_out_info(struct mtk_raw_pipeline *pipeline,
-							enum mtk_cam_ctrl_type ctrl_type);
+int mtk_cam_pde_try_meta_size(struct mtk_raw_pipeline *pipeline, int node_id,
+			      unsigned int base_sz);
+int mtk_cam_pde_set_meta_size(struct mtk_raw_pipeline *pipeline, int node_id,
+			      unsigned int base_sz, unsigned int act_sz);
+bool mtk_cam_pde_is_enabled(struct mtk_raw_pipeline *pipeline);
+
+int mtk_cam_init_hdr_tsfifo(struct mtk_raw *raw, struct v4l2_device *v4l2_dev);
+int mtk_cam_reset_hdr_tsfifo(struct mtk_raw_pipeline *pipe);
+void mtk_cam_push_hdr_tsfifo(struct mtk_raw_pipeline *pipe,
+					struct mtk_cam_hdr_timestamp_info *ts_info);
+void mtk_cam_pop_hdr_tsfifo(struct mtk_raw_pipeline *pipe,
+					struct mtk_cam_hdr_timestamp_info *ts_info);
 
 #ifdef CAMSYS_TF_DUMP_7S
 int

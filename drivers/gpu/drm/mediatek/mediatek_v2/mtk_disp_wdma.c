@@ -24,6 +24,8 @@
 #include "mtk_drm_fb.h"
 #include "mtk_drm_trace.h"
 #include "mtk_drm_drv.h"
+#include "mtk_disp_wdma.h"
+#include "platform/mtk_drm_platform.h"
 
 #define DISP_REG_WDMA_INTEN 0x0000
 #define INTEN_FLD_FME_CPL_INTEN REG_FLD_MSB_LSB(0, 0)
@@ -47,6 +49,7 @@
 #define WDMA_CT_EN BIT(11)
 #define WDMA_CON_SWAP BIT(16)
 #define WDMA_UFO_DCP_ENABLE BIT(18)
+#define WDMA_BKGD_ENABLE BIT(20)
 #define WDMA_INT_MTX_SEL (0xf << 24)
 #define WDMA_DEBUG_SEL (0xf << 28)
 #define DISP_REG_WDMA_SRC_SIZE 0x0018
@@ -58,6 +61,8 @@
 #define DISP_REG_WDMA_DST_WIN_BYTE 0x0028
 #define DISP_REG_WDMA_ALPHA 0x002C
 #define DISP_REG_WDMA_DST_UV_PITCH 0x0078
+#define DISP_REG_WDMA_BKGD 0x0030
+#define DISP_REG_WDMA_BKGD_MSB 0x0034
 #define WDMA_A_Value (0xff)
 #define WDMA_A_Sel BIT(31)
 #define DISP_REG_WDMA_DST_ADDR_OFFSETX(n) (0x0080 + 0x04 * (n))
@@ -207,25 +212,6 @@ enum GS_WDMA_FLD {
 	GS_WDMA_ISSUE_REG_TH_U,
 	GS_WDMA_ISSUE_REG_TH_V,
 	GS_WDMA_FLD_NUM,
-};
-
-struct mtk_disp_wdma_data {
-	/* golden setting */
-	unsigned int fifo_size_1plane;
-	unsigned int fifo_size_uv_1plane;
-	unsigned int fifo_size_2plane;
-	unsigned int fifo_size_uv_2plane;
-	unsigned int fifo_size_3plane;
-	unsigned int fifo_size_uv_3plane;
-
-	void (*sodi_config)(struct drm_device *drm, enum mtk_ddp_comp_id id,
-			    struct cmdq_pkt *handle, void *data);
-	unsigned int (*aid_sel)(struct mtk_ddp_comp *comp);
-	resource_size_t (*check_wdma_sec_reg)(struct mtk_ddp_comp *comp);
-	bool support_shadow;
-	bool need_bypass_shadow;
-	bool is_support_34bits;
-	bool use_larb_control_sec;
 };
 
 struct mtk_wdma_cfg_info {
@@ -1063,6 +1049,23 @@ static bool is_yuv(uint32_t format)
 	return false;
 }
 
+void mtk_wdma_blank_output(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle,
+					unsigned int enable_blank)
+{
+	DDPINFO("%s enable blank %d\n", __func__, enable_blank);
+	if (enable_blank) {
+		mtk_ddp_write_mask(comp, WDMA_BKGD_ENABLE,
+				DISP_REG_WDMA_CFG, WDMA_BKGD_ENABLE, handle);
+
+		mtk_ddp_write(comp, 0, DISP_REG_WDMA_BKGD, handle);
+
+		mtk_ddp_write(comp, 0, DISP_REG_WDMA_BKGD_MSB, handle);
+	} else {
+		mtk_ddp_write_mask(comp, 0,
+				DISP_REG_WDMA_CFG, WDMA_BKGD_ENABLE, handle);
+	}
+}
+
 static void mtk_wdma_config(struct mtk_ddp_comp *comp,
 			    struct mtk_ddp_config *cfg, struct cmdq_pkt *handle)
 {
@@ -1071,7 +1074,7 @@ static void mtk_wdma_config(struct mtk_ddp_comp *comp,
 	dma_addr_t addr = 0;
 	struct mtk_disp_wdma *wdma = comp_to_wdma(comp);
 	struct mtk_wdma_cfg_info *cfg_info = &wdma->cfg_info;
-	int crtc_idx = drm_crtc_index(&comp->mtk_crtc->base);
+	unsigned int crtc_idx = drm_crtc_index(&comp->mtk_crtc->base);
 	int clip_w, clip_h;
 	struct golden_setting_context *gsc;
 	u32 sec;
@@ -1145,6 +1148,11 @@ static void mtk_wdma_config(struct mtk_ddp_comp *comp,
 	/* Debug WDMA status */
 	mtk_ddp_write_mask(comp, 0xe0000000,
 			DISP_REG_WDMA_CFG, WDMA_DEBUG_SEL, handle);
+
+	if (crtc_idx < MAX_CRTC && priv->usage[crtc_idx] == DISP_OPENING)
+		mtk_wdma_blank_output(comp, handle, 1);
+	else
+		mtk_wdma_blank_output(comp, handle, 0);
 
 	mtk_ddp_write(comp, comp->fb->pitches[0],
 		DISP_REG_WDMA_DST_WIN_BYTE, handle);
@@ -1476,6 +1484,10 @@ int mtk_wdma_dump(struct mtk_ddp_comp *comp)
 			readl(DISP_REG_WDMA_SHADOW_CTRL + baddr),
 			readl(DISP_REG_WDMA_DST_WIN_BYTE + baddr),
 			readl(DISP_REG_WDMA_ALPHA + baddr));
+
+		DDPDUMP("0x030:0x%08x 0x034:0x%08x\n",
+			readl(DISP_REG_WDMA_BKGD + baddr),
+			readl(DISP_REG_WDMA_BKGD_MSB + baddr));
 
 		DDPDUMP("0x038:0x%08x 0x078:0x%08x\n",
 			readl(DISP_REG_WDMA_BUF_CON1 + baddr),
@@ -2009,6 +2021,8 @@ static const struct of_device_id mtk_disp_wdma_driver_dt_match[] = {
 	 .data = &mt6855_wdma_driver_data},
 	{.compatible = "mediatek,mt6985-disp-wdma",
 	 .data = &mt6985_wdma_driver_data},
+	{.compatible = "mediatek,mt6835-disp-wdma",
+	 .data = &mt6835_wdma_driver_data},
 	{},
 };
 MODULE_DEVICE_TABLE(of, mtk_disp_wdma_driver_dt_match);

@@ -173,6 +173,11 @@ static inline int moveAF(unsigned long a_u4Position)
 {
 	int ret = 0;
 
+	if(100 > a_u4Position || 1023 < a_u4Position)
+	{
+		a_u4Position = 260;
+	}
+
 	if (s4AF_WriteReg((unsigned short)a_u4Position) == 0) {
 		g_u4CurrPosition = a_u4Position;
 		ret = 0;
@@ -240,23 +245,27 @@ long DW9718TAF_Ioctl(struct file *a_pstFile, unsigned int a_u4Command,
 /* Q1 : Try release multiple times. */
 int DW9718TAF_Release(struct inode *a_pstInode, struct file *a_pstFile)
 {
+	unsigned long currPosition = g_u4CurrPosition;
 	LOG_INF("Start\n");
 
 	if (*g_pAF_Opened == 2) {
-		int i4RetValue = 0;
-		u8 data = 0x0;
-		char puSendCmd[2] = {0x00, 0x01};
-
-		LOG_INF("apply\n");
-
-		g_pstAF_I2Cclient->addr = AF_I2C_SLAVE_ADDR;
-		g_pstAF_I2Cclient->addr = g_pstAF_I2Cclient->addr >> 1;
-		i4RetValue = i2c_master_send(g_pstAF_I2Cclient, puSendCmd, 2);
-
-		data = read_data(0x00);
-		LOG_INF("Addr:0x00 Data:0x%x (%d)\n", data, i4RetValue);
+		LOG_INF("Wait\n");
+		if (currPosition > 400) {
+			s4AF_WriteReg(400);
+			mdelay(10);
+			currPosition = 400;
+		}
+		while (currPosition > 100) {
+			if (currPosition > 260)
+				currPosition -= 20;
+			else
+				currPosition -= 10;
+			s4AF_WriteReg((unsigned short)currPosition);
+			LOG_INF("currPosition=%d ",currPosition);
+			mdelay(3);
+		}
+		s4AF_WriteReg(0x80); /* Power down mode */
 	}
-
 	if (*g_pAF_Opened) {
 		LOG_INF("Free\n");
 

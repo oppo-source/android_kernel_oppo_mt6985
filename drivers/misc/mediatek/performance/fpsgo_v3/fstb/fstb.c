@@ -65,6 +65,9 @@ static int adopt_low_fps = 1;
 static int condition_get_fps;
 static int condition_fstb_active;
 static long long FRAME_TIME_WINDOW_SIZE_US = USEC_PER_SEC;
+static int gpu_slowdown_check;
+
+module_param(gpu_slowdown_check, int, 0644);
 
 DECLARE_WAIT_QUEUE_HEAD(queue);
 DECLARE_WAIT_QUEUE_HEAD(active_queue);
@@ -353,8 +356,8 @@ static void fstb_update_policy_cmd(struct FSTB_FRAME_INFO *iter,
 static void fstb_delete_policy_cmd(struct FSTB_POLICY_CMD *iter)
 {
 	unsigned long long min_ts = ULLONG_MAX;
-	struct FSTB_POLICY_CMD *tmp_iter, *min_iter;
-	struct rb_node *rbn;
+	struct FSTB_POLICY_CMD *tmp_iter = NULL, *min_iter = NULL;
+	struct rb_node *rbn = NULL;
 
 	if (iter) {
 		if (!iter->self_ctrl_fps_enable &&
@@ -383,7 +386,7 @@ static void fstb_delete_policy_cmd(struct FSTB_POLICY_CMD *iter)
 
 delete:
 	rb_erase(&min_iter->rb_node, &fstb_policy_cmd_tree);
-	kfree(iter);
+	kfree(min_iter);
 	total_fstb_policy_cmd_num--;
 }
 
@@ -391,8 +394,8 @@ static struct FSTB_POLICY_CMD *fstb_get_policy_cmd(int tgid,
 	unsigned long long ts, int force)
 {
 	struct rb_node **p = &fstb_policy_cmd_tree.rb_node;
-	struct rb_node *parent;
-	struct FSTB_POLICY_CMD *iter;
+	struct rb_node *parent = NULL;
+	struct FSTB_POLICY_CMD *iter = NULL;
 
 	while (*p) {
 		parent = *p;
@@ -409,9 +412,6 @@ static struct FSTB_POLICY_CMD *fstb_get_policy_cmd(int tgid,
 	if (!force)
 		return NULL;
 
-	if (total_fstb_policy_cmd_num > MAX_FSTB_POLICY_CMD_NUM)
-		fstb_delete_policy_cmd(NULL);
-
 	iter = kzalloc(sizeof(*iter), GFP_KERNEL);
 	if (!iter)
 		return NULL;
@@ -426,6 +426,9 @@ static struct FSTB_POLICY_CMD *fstb_get_policy_cmd(int tgid,
 	rb_insert_color(&iter->rb_node, &fstb_policy_cmd_tree);
 
 	total_fstb_policy_cmd_num++;
+
+	if (total_fstb_policy_cmd_num > MAX_FSTB_POLICY_CMD_NUM)
+		fstb_delete_policy_cmd(NULL);
 
 	return iter;
 }
@@ -861,6 +864,7 @@ int fpsgo_fbt2fstb_update_cpu_frame_info(
 		int frame_type,
 		unsigned long long Q2Q_time,
 		long long Runnging_time,
+		int Target_time,
 		unsigned int Curr_cap,
 		unsigned int Max_cap,
 		unsigned long long enqueue_length,
@@ -1010,6 +1014,9 @@ out:
 	default:
 		break;
 	}
+	if (gpu_slowdown_check && !iter->target_fps_diff
+			&& iter->cpu_time > Target_time && iter->cpu_time > iter->gpu_time)
+		eara_fps = iter->target_fps;
 	ged_kpi_set_target_FPS_margin(iter->bufid, eara_fps, tolerence_fps,
 		iter->target_fps_diff, iter->cpu_time);
 
@@ -1556,9 +1563,6 @@ static int calculate_fps_limit(struct FSTB_FRAME_INFO *iter, int target_fps)
 		ret_fps = iter->notify_target_fps;
 
 	hlist_for_each_entry(rtfiter, &fstb_render_target_fps, hlist) {
-		mtk_fstb_dprintk("%s %s %d %s %d\n",
-				__func__, iter->proc_name, iter->pid,
-				rtfiter->process_name, rtfiter->pid);
 
 		if (!strncmp(iter->proc_name, rtfiter->process_name, 16)
 				|| rtfiter->pid == iter->pid) {
@@ -2192,7 +2196,8 @@ static int set_soft_fps_level(struct fps_level level)
 {
 	mutex_lock(&fstb_lock);
 
-	if (level.end > level.start)
+	if (level.end > level.start ||
+		level.start <= 0 || level.end <= 0)
 		goto set_fps_level_err;
 
 	fps_global_level.start = level.start;
@@ -2883,6 +2888,7 @@ static ssize_t fstb_policy_cmd_show(struct kobject *kobj,
 		char *buf)
 {
 	char *temp = NULL;
+	int i = 1;
 	int pos = 0;
 	int length = 0;
 	struct FSTB_POLICY_CMD *iter;
@@ -2900,13 +2906,15 @@ static ssize_t fstb_policy_cmd_show(struct kobject *kobj,
 		iter = rb_entry(rbn, struct FSTB_POLICY_CMD, rb_node);
 		length = scnprintf(temp + pos,
 			FPSGO_SYSFS_MAX_BUFF_SIZE - pos,
-			"tgid:%d\tfstb_self_ctrl_fps_enable:%d\ttfb_enable:%d\tnotify_target_fps:%d\tts:%llu\n",
+			"%dth\ttgid:%d\tfstb_self_ctrl_fps_enable:%d\ttfb_enable:%d\tnotify_target_fps:%d\tts:%llu\n",
+			i,
 			iter->tgid,
 			iter->self_ctrl_fps_enable,
 			iter->tfb_enable,
 			iter->notify_target_fps,
 			iter->ts);
 		pos += length;
+		i++;
 	}
 
 	mutex_unlock(&fstb_policy_cmd_lock);

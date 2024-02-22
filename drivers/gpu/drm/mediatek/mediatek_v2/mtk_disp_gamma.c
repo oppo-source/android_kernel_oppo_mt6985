@@ -62,12 +62,16 @@
 #define DISP_GAMMA_BLOCK_SIZE 256
 #define DISP_GAMMA_GAIN_SIZE 3
 
-static unsigned int g_gamma_relay_value[DISP_GAMMA_TOTAL];
+static unsigned int g_gamma_relay_value;
 #define index_of_gamma(module) ((module == DDP_COMPONENT_GAMMA0) ? 0 : 1)
 // It's a work around for no comp assigned in functions.
 static struct mtk_ddp_comp *default_comp;
+static struct mtk_ddp_comp *default_comp1;
 
 unsigned int g_gamma_data_mode;
+#ifdef OPLUS_FEATURE_DISPLAY
+extern bool g_gamma_probe_ready;
+#endif
 
 struct gamma_color_protect {
 	unsigned int gamma_color_protect_support;
@@ -84,8 +88,8 @@ struct gamma_color_protect_mode {
 	unsigned int white_support;
 };
 
-static struct DISP_GAMMA_LUT_T *g_disp_gamma_lut[DISP_GAMMA_TOTAL] = { NULL };
-static struct DISP_GAMMA_12BIT_LUT_T *g_disp_gamma_12bit_lut[DISP_GAMMA_TOTAL] = { NULL };
+static struct DISP_GAMMA_LUT_T *g_disp_gamma_lut;
+static struct DISP_GAMMA_12BIT_LUT_T *g_disp_gamma_12bit_lut;
 static struct DISP_GAMMA_LUT_T g_disp_gamma_lut_db;
 static struct DISP_GAMMA_12BIT_LUT_T g_disp_gamma_12bit_lut_db;
 
@@ -127,6 +131,18 @@ struct mtk_disp_gamma {
 	struct mtk_ddp_comp ddp_comp;
 	struct drm_crtc *crtc;
 };
+
+struct mtk_disp_gamma_tile_overhead {
+	unsigned int left_in_width;
+	unsigned int left_overhead;
+	unsigned int left_comp_overhead;
+	unsigned int right_in_width;
+	unsigned int right_overhead;
+	unsigned int right_comp_overhead;
+};
+
+struct mtk_disp_gamma_tile_overhead gamma_tile_overhead = { 0 };
+
 struct mtk_disp_gamma_sb_param {
 	unsigned int gain[3];
 	unsigned int bl;
@@ -138,10 +154,14 @@ static void mtk_gamma_init(struct mtk_ddp_comp *comp,
 {
 	unsigned int width;
 
-	if (comp->mtk_crtc->is_dual_pipe)
-		width = cfg->w / 2;
-	else
-		width = cfg->w;
+	if (comp->mtk_crtc->is_dual_pipe && cfg->tile_overhead.is_support)
+		width = gamma_tile_overhead.left_in_width;
+	else {
+		if (comp->mtk_crtc->is_dual_pipe)
+			width = cfg->w / 2;
+		else
+			width = cfg->w;
+	}
 
 	cmdq_pkt_write(handle, comp->cmdq_base,
 		comp->regs_pa + DISP_GAMMA_SIZE,
@@ -161,6 +181,38 @@ static void mtk_gamma_init(struct mtk_ddp_comp *comp,
 
 //	atomic_set(&g_gamma_sof_filp, 0);
 	atomic_set(&g_gamma_sof_irq_available, 0);
+}
+
+
+static void mtk_disp_gamma_config_overhead(struct mtk_ddp_comp *comp,
+	struct mtk_ddp_config *cfg)
+{
+	DDPINFO("line: %d\n", __LINE__);
+
+	if (cfg->tile_overhead.is_support) {
+		/*set component overhead*/
+		if (comp->id == DDP_COMPONENT_GAMMA0) {
+			gamma_tile_overhead.left_comp_overhead = 0;
+			/*add component overhead on total overhead*/
+			cfg->tile_overhead.left_overhead += gamma_tile_overhead.left_comp_overhead;
+			cfg->tile_overhead.left_in_width += gamma_tile_overhead.left_comp_overhead;
+			/*copy from total overhead info*/
+			gamma_tile_overhead.left_in_width = cfg->tile_overhead.left_in_width;
+			gamma_tile_overhead.left_overhead = cfg->tile_overhead.left_overhead;
+		}
+		if (comp->id == DDP_COMPONENT_GAMMA1) {
+			gamma_tile_overhead.right_comp_overhead = 0;
+			/*add component overhead on total overhead*/
+			cfg->tile_overhead.right_overhead +=
+				gamma_tile_overhead.right_comp_overhead;
+			cfg->tile_overhead.right_in_width +=
+				gamma_tile_overhead.right_comp_overhead;
+			/*copy from total overhead info*/
+			gamma_tile_overhead.right_in_width = cfg->tile_overhead.right_in_width;
+			gamma_tile_overhead.right_overhead = cfg->tile_overhead.right_overhead;
+		}
+	}
+
 }
 
 static void mtk_gamma_config(struct mtk_ddp_comp *comp,
@@ -183,13 +235,12 @@ static int mtk_gamma_write_lut_reg(struct mtk_ddp_comp *comp,
 	struct DISP_GAMMA_LUT_T *gamma_lut;
 	int i;
 	int ret = 0;
-	int id = index_of_gamma(comp->id);
 
 	if (lock)
 		mutex_lock(&g_gamma_global_lock);
-	gamma_lut = g_disp_gamma_lut[id];
+	gamma_lut = g_disp_gamma_lut;
 	if (gamma_lut == NULL) {
-		DDPINFO("%s: table [%d] not initialized\n", __func__, id);
+		DDPINFO("%s: table not initialized\n", __func__);
 		ret = -EFAULT;
 		goto gamma_write_lut_unlock;
 	}
@@ -223,7 +274,7 @@ static int mtk_gamma_write_lut_reg(struct mtk_ddp_comp *comp,
 
 	cmdq_pkt_write(handle, comp->cmdq_base,
 			comp->regs_pa + DISP_GAMMA_CFG,
-			0x2 | g_gamma_relay_value[id], 0x3);
+			0x2 | g_gamma_relay_value, 0x3);
 
 gamma_write_lut_unlock:
 	if (lock)
@@ -248,14 +299,13 @@ static int mtk_gamma_write_12bit_lut_reg(struct mtk_ddp_comp *comp,
 	struct DISP_GAMMA_12BIT_LUT_T *gamma_lut;
 	int i, j, block_num;
 	int ret = 0;
-	int id = index_of_gamma(comp->id);
 	unsigned int table_config_sel, table_out_sel;
 
 	if (lock)
 		mutex_lock(&g_gamma_global_lock);
-	gamma_lut = g_disp_gamma_12bit_lut[id];
+	gamma_lut = g_disp_gamma_12bit_lut;
 	if (gamma_lut == NULL) {
-		DDPINFO("%s: table [%d] not initialized\n", __func__, id);
+		DDPINFO("%s: table not initialized\n", __func__);
 		ret = -EFAULT;
 		goto gamma_write_lut_unlock;
 	}
@@ -305,7 +355,7 @@ static int mtk_gamma_write_12bit_lut_reg(struct mtk_ddp_comp *comp,
 
 	cmdq_pkt_write(handle, comp->cmdq_base,
 			comp->regs_pa + DISP_GAMMA_CFG,
-			0x2 | g_gamma_relay_value[id], 0x3);
+			0x2 | g_gamma_relay_value, 0x3);
 
 	cmdq_pkt_write(handle, comp->cmdq_base,
 			comp->regs_pa + DISP_GAMMA_SHADOW_SRAM,
@@ -387,8 +437,8 @@ static int mtk_gamma_set_lut(struct mtk_ddp_comp *comp,
 		if (id >= 0 && id < DISP_GAMMA_TOTAL) {
 			mutex_lock(&g_gamma_global_lock);
 
-			old_lut = g_disp_gamma_lut[id];
-			g_disp_gamma_lut[id] = gamma_lut;
+			old_lut = g_disp_gamma_lut;
+			g_disp_gamma_lut = gamma_lut;
 
 			DDPINFO("%s: Set module(%d) lut\n", __func__, comp->id);
 			ret = mtk_gamma_write_lut_reg(comp, handle, 0);
@@ -416,39 +466,32 @@ static int mtk_gamma_12bit_set_lut(struct mtk_ddp_comp *comp,
 	/* TODO: use CPU to write register */
 	int ret = 0;
 	int id;
-	struct DISP_GAMMA_12BIT_LUT_T *gamma_lut, *old_lut;
 
 	DDPINFO("%s\n", __func__);
 
-	gamma_lut = kmalloc(sizeof(struct DISP_GAMMA_12BIT_LUT_T),
-		GFP_KERNEL);
-	if (gamma_lut == NULL) {
-		DDPPR_ERR("%s: no memory\n", __func__);
-		return -EFAULT;
-	}
-
 	if (user_gamma_lut == NULL) {
 		ret = -EFAULT;
-		kfree(gamma_lut);
+		DDPMSG("%s: user_gamma_lut is NULL\n", __func__);
 	} else {
-		memcpy(gamma_lut, user_gamma_lut,
-			sizeof(struct DISP_GAMMA_12BIT_LUT_T));
 		id = index_of_gamma(comp->id);
-
 		if (id >= 0 && id < DISP_GAMMA_TOTAL) {
 			mutex_lock(&g_gamma_global_lock);
-
-			old_lut = g_disp_gamma_12bit_lut[id];
-			g_disp_gamma_12bit_lut[id] = gamma_lut;
-
-			DDPINFO("%s: Set module(%d) lut\n", __func__, comp->id);
+			memcpy(&g_disp_gamma_12bit_lut_db, user_gamma_lut,
+				sizeof(struct DISP_GAMMA_12BIT_LUT_T));
+			g_disp_gamma_12bit_lut = &g_disp_gamma_12bit_lut_db;
 			ret = mtk_gamma_write_12bit_lut_reg(comp, handle, 0);
+			if ((comp->mtk_crtc != NULL) && comp->mtk_crtc->is_dual_pipe
+				&& (id == DISP_GAMMA0)) {
+				struct mtk_drm_crtc *mtk_crtc = comp->mtk_crtc;
+				struct drm_crtc *crtc = &mtk_crtc->base;
+				struct mtk_drm_private *priv = crtc->dev->dev_private;
+				struct mtk_ddp_comp *comp_gamma1 =
+					priv->ddp_comp[DDP_COMPONENT_GAMMA1];
 
+				ret = mtk_gamma_write_12bit_lut_reg(comp_gamma1, handle, 0);
+			}
+			DDPINFO("%s ret = %d", __func__, ret);
 			mutex_unlock(&g_gamma_global_lock);
-
-			if (old_lut != NULL)
-				kfree(old_lut);
-
 			//if (comp->mtk_crtc != NULL)
 			//	mtk_crtc_check_trigger(comp->mtk_crtc, false,
 			//		false);
@@ -493,6 +536,7 @@ int mtk_drm_ioctl_set_12bit_gammalut(struct drm_device *dev, void *data,
 		struct drm_file *file_priv)
 {
 	struct mtk_drm_private *private = dev->dev_private;
+
 	g_gamma_flip_comp[0] = private->ddp_comp[DDP_COMPONENT_GAMMA0];
 	//g_gamma_flip_comp[1] = private->ddp_comp[DDP_COMPONENT_GAMMA1];
 
@@ -503,7 +547,11 @@ int mtk_drm_ioctl_set_12bit_gammalut(struct drm_device *dev, void *data,
 	atomic_set(&g_gamma_sof_filp, 1);
 	if (g_gamma_flip_comp[0]->mtk_crtc != NULL) {
 		mtk_drm_idlemgr_kick(__func__, &g_gamma_flip_comp[0]->mtk_crtc->base, 1);
-		mtk_crtc_check_trigger(g_gamma_flip_comp[0]->mtk_crtc, true, false);
+		#ifdef OPLUS_FEATURE_DISPLAY
+			mtk_crtc_check_trigger(g_gamma_flip_comp[0]->mtk_crtc, true, true);
+		#else
+			mtk_crtc_check_trigger(g_gamma_flip_comp[0]->mtk_crtc, true, true);
+		#endif
 	}
 	DDPINFO("%s:update IOCTL g_gamma_sof_filp to 1\n", __func__);
 	CRTC_MMP_EVENT_END(0, gamma_ioctl, 0, 1);
@@ -519,7 +567,6 @@ int mtk_drm_12bit_gammalut_ioctl_impl(void)
 	struct drm_crtc *crtc = &mtk_crtc->base;
 
 	mutex_lock(&g_gamma_sram_lock);
-	g_disp_gamma_12bit_lut_db = ioctl_data;
 	ret = mtk_crtc_user_cmd(crtc, g_gamma_flip_comp[0], SET_12BIT_GAMMALUT,
 			(void *)(&ioctl_data));
 	mutex_unlock(&g_gamma_sram_lock);
@@ -610,10 +657,10 @@ static void mtk_gamma_stop(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle)
 static void mtk_gamma_bypass(struct mtk_ddp_comp *comp, int bypass,
 	struct cmdq_pkt *handle)
 {
-	DDPINFO("%s\n", __func__);
+	DDPINFO("bypass = %d %s\n", bypass, __func__);
 	cmdq_pkt_write(handle, comp->cmdq_base,
 		comp->regs_pa + DISP_GAMMA_CFG, bypass, 0x1);
-	g_gamma_relay_value[index_of_gamma(comp->id)] = bypass;
+	g_gamma_relay_value = bypass;
 
 }
 
@@ -731,6 +778,8 @@ void mtk_trans_gain_to_gamma(struct drm_crtc *crtc,
 			mtk_crtc_user_cmd(crtc, default_comp,
 				SET_GAMMAGAIN, (void *)&g_sb_param);
 		}
+		DDPINFO("[aal_kernel]ELVSSPN = %d, flag = %d",
+			ess20_spect_param->ELVSSPN, ess20_spect_param->flag);
 		mtk_leds_brightness_set("lcd-backlight", bl, ess20_spect_param->ELVSSPN,
 					ess20_spect_param->flag);
 
@@ -741,11 +790,12 @@ void mtk_trans_gain_to_gamma(struct drm_crtc *crtc,
 		DDPINFO("%s : gain = %d, backlight = %d",
 			__func__, g_sb_param.gain[gain_r], bl);
 	} else {
-		if ((g_sb_param.bl != bl) || (ess20_spect_param->flag & SET_ELVSS_PN)) {
+		if ((g_sb_param.bl != bl) || (ess20_spect_param->flag & (1 << SET_ELVSS_PN))) {
 			g_sb_param.bl = bl;
 			mtk_leds_brightness_set("lcd-backlight", bl, ess20_spect_param->ELVSSPN,
 						ess20_spect_param->flag);
-			DDPINFO("%s : backlight = %d", __func__, bl);
+			DDPINFO("%s : backlight = %d, flag = %d, elvss = %d", __func__, bl,
+				ess20_spect_param->flag, ess20_spect_param->ELVSSPN);
 		}
 	}
 }
@@ -787,17 +837,6 @@ static int mtk_gamma_user_cmd(struct mtk_ddp_comp *comp,
 		if (mtk_gamma_12bit_set_lut(comp, handle, config) < 0) {
 			DDPPR_ERR("%s: failed\n", __func__);
 			return -EFAULT;
-		}
-		if ((comp->mtk_crtc != NULL) && comp->mtk_crtc->is_dual_pipe) {
-			struct mtk_drm_crtc *mtk_crtc = comp->mtk_crtc;
-			struct drm_crtc *crtc = &mtk_crtc->base;
-			struct mtk_drm_private *priv = crtc->dev->dev_private;
-			struct mtk_ddp_comp *comp_gamma1 = priv->ddp_comp[DDP_COMPONENT_GAMMA1];
-
-			if (mtk_gamma_12bit_set_lut(comp_gamma1, handle, config) < 0) {
-				DDPPR_ERR("%s: comp_gamma1 failed\n", __func__);
-				return -EFAULT;
-			}
 		}
 
 		if (comp->mtk_crtc != NULL)
@@ -915,9 +954,16 @@ int mtk_gamma_io_cmd(struct mtk_ddp_comp *comp, struct cmdq_pkt *handle,
 	return 0;
 }
 
+void mtk_gamma_first_cfg(struct mtk_ddp_comp *comp,
+	       struct mtk_ddp_config *cfg, struct cmdq_pkt *handle)
+{
+	mtk_gamma_config(comp, cfg, handle);
+}
+
 static const struct mtk_ddp_comp_funcs mtk_disp_gamma_funcs = {
 	.gamma_set = mtk_gamma_set,
 	.config = mtk_gamma_config,
+	.first_cfg = mtk_gamma_first_cfg,
 	.start = mtk_gamma_start,
 	.stop = mtk_gamma_stop,
 	.bypass = mtk_gamma_bypass,
@@ -925,6 +971,7 @@ static const struct mtk_ddp_comp_funcs mtk_disp_gamma_funcs = {
 	.io_cmd = mtk_gamma_io_cmd,
 	.prepare = mtk_gamma_prepare,
 	.unprepare = mtk_gamma_unprepare,
+	.config_overhead = mtk_disp_gamma_config_overhead,
 };
 
 static int mtk_disp_gamma_bind(struct device *dev, struct device *master,
@@ -972,6 +1019,38 @@ void mtk_gamma_dump(struct mtk_ddp_comp *comp)
 	mtk_cust_dump_reg(baddr, 0x0, 0x20, 0x24, 0x28);
 	mtk_cust_dump_reg(baddr, 0x54, 0x58, 0x5c, 0x50);
 	mtk_cust_dump_reg(baddr, 0x14, 0x20, 0x700, 0xb00);
+}
+
+void mtk_gamma_regdump(void)
+{
+	void __iomem  *baddr = default_comp->regs;
+	int k;
+
+	DDPDUMP("== %s REGS:0x%x ==\n", mtk_dump_comp_str(default_comp),
+			default_comp->regs_pa);
+	DDPDUMP("[%s REGS Start Dump]\n", mtk_dump_comp_str(default_comp));
+	for (k = 0; k <= 0xff0; k += 16) {
+		DDPDUMP("0x%04x: 0x%08x 0x%08x 0x%08x 0x%08x\n", k,
+			readl(baddr + k),
+			readl(baddr + k + 0x4),
+			readl(baddr + k + 0x8),
+			readl(baddr + k + 0xc));
+	}
+	DDPDUMP("[%s REGS End Dump]\n", mtk_dump_comp_str(default_comp));
+	if (default_comp->mtk_crtc->is_dual_pipe && default_comp1) {
+		baddr = default_comp1->regs;
+		DDPDUMP("== %s REGS:0x%x ==\n", mtk_dump_comp_str(default_comp1),
+				default_comp1->regs_pa);
+		DDPDUMP("[%s REGS Start Dump]\n", mtk_dump_comp_str(default_comp1));
+		for (k = 0; k <= 0xff0; k += 16) {
+			DDPDUMP("0x%04x: 0x%08x 0x%08x 0x%08x 0x%08x\n", k,
+				readl(baddr + k),
+				readl(baddr + k + 0x4),
+				readl(baddr + k + 0x8),
+				readl(baddr + k + 0xc));
+		}
+		DDPDUMP("[%s REGS End Dump]\n", mtk_dump_comp_str(default_comp1));
+	}
 }
 
 static void mtk_disp_gamma_dts_parse(const struct device_node *np,
@@ -1066,8 +1145,10 @@ static int mtk_disp_gamma_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	if (!default_comp)
+	if (!default_comp && comp_id == DDP_COMPONENT_GAMMA0)
 		default_comp = &priv->ddp_comp;
+	if (!default_comp1 && comp_id == DDP_COMPONENT_GAMMA1)
+		default_comp1 = &priv->ddp_comp;
 
 	platform_set_drvdata(pdev, priv);
 
@@ -1090,6 +1171,9 @@ static int mtk_disp_gamma_probe(struct platform_device *pdev)
 		wake_up_process(gamma_sof_irq_event_task);
 	}
 
+#ifdef OPLUS_FEATURE_DISPLAY
+	g_gamma_probe_ready = true;
+#endif
 	DDPINFO("%s-\n", __func__);
 
 	return ret;
@@ -1117,6 +1201,7 @@ static const struct of_device_id mtk_disp_gamma_driver_dt_match[] = {
 	{ .compatible = "mediatek,mt6855-disp-gamma",},
 	{ .compatible = "mediatek,mt6985-disp-gamma",},
 	{ .compatible = "mediatek,mt6886-disp-gamma",},
+	{ .compatible = "mediatek,mt6835-disp-gamma",},
 	{},
 };
 

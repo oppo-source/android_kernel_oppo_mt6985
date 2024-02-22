@@ -37,8 +37,8 @@ static struct mtk_vcodec_dev *dev_ptr;
 static int mtk_vcodec_vcp_log_write(const char *val, const struct kernel_param *kp)
 {
 	if (!(val == NULL || strlen(val) == 0)) {
-		pr_info("%s, val: %s, len: %d", __func__, val, strlen(val));
-		mtk_vcodec_set_log(dev_ptr, val, MTK_VCODEC_LOG_INDEX_LOG);
+		mtk_v4l2_debug(0, "val: %s, len: %zu", val, strlen(val));
+		mtk_vcodec_set_log(NULL, dev_ptr, val, MTK_VCODEC_LOG_INDEX_LOG, NULL);
 	}
 	return 0;
 }
@@ -50,8 +50,8 @@ module_param_cb(mtk_venc_vcp_log, &vcodec_vcp_log_param_ops, &mtk_venc_vcp_log, 
 static int mtk_vcodec_vcp_property_write(const char *val, const struct kernel_param *kp)
 {
 	if (!(val == NULL || strlen(val) == 0)) {
-		pr_info("%s, val: %s, len: %d", __func__, val, strlen(val));
-		mtk_vcodec_set_log(dev_ptr, val, MTK_VCODEC_LOG_INDEX_PROP);
+		mtk_v4l2_debug(0, "val: %s, len: %zu", val, strlen(val));
+		mtk_vcodec_set_log(NULL, dev_ptr, val, MTK_VCODEC_LOG_INDEX_PROP, NULL);
 	}
 	return 0;
 }
@@ -78,7 +78,7 @@ static int fops_vcodec_open(struct file *file)
 		return -ENOMEM;
 	}
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
-	if (mtk_vcodec_vcp & (1 << MTK_INST_ENCODER)) {
+	if (mtk_vcodec_is_vcp(MTK_INST_ENCODER)) {
 		ret = vcp_register_feature(VENC_FEATURE_ID);
 		if (ret) {
 			mtk_v4l2_err("Failed to vcp_register_feature");
@@ -97,7 +97,10 @@ static int fops_vcodec_open(struct file *file)
 	 * used for logging.
 	 */
 	ctx->enc_flush_buf = mtk_buf;
-	ctx->id = dev->id_counter++;
+	dev->id_counter++;
+	if (dev->id_counter == 0)
+		dev->id_counter++;
+	ctx->id = dev->id_counter;
 	v4l2_fh_init(&ctx->fh, video_devdata(file));
 	file->private_data = &ctx->fh;
 	v4l2_fh_add(&ctx->fh);
@@ -156,8 +159,8 @@ static int fops_vcodec_open(struct file *file)
 	dev->enc_cnt++;
 
 	mutex_unlock(&dev->dev_mutex);
-	mtk_v4l2_debug(0, "%s encoder [%d]", dev_name(&dev->plat_dev->dev),
-				   ctx->id);
+	mtk_v4l2_debug(0, "%s encoder [%d][%d]", dev_name(&dev->plat_dev->dev),
+				   ctx->id, dev->enc_cnt);
 	return ret;
 
 	/* Deinit when failure occurred */
@@ -186,7 +189,7 @@ static int fops_vcodec_release(struct file *file)
 	int ret = 0;
 #endif
 
-	mtk_v4l2_debug(0, "[%d] encoder", ctx->id);
+	mtk_v4l2_debug(0, "[%d][%d] encoder", ctx->id, dev->enc_cnt);
 	mutex_lock(&dev->dev_mutex);
 
 	/*
@@ -211,7 +214,7 @@ static int fops_vcodec_release(struct file *file)
 		dev->enc_cnt--;
 	mutex_unlock(&dev->dev_mutex);
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
-	if (mtk_vcodec_vcp & (1 << MTK_INST_ENCODER)) {
+	if (mtk_vcodec_is_vcp(MTK_INST_ENCODER)) {
 		ret = vcp_deregister_feature(VENC_FEATURE_ID);
 		if (ret) {
 			mtk_v4l2_err("Failed to vcp_deregister_feature");
@@ -303,6 +306,7 @@ static int mtk_vcodec_enc_suspend_notifier(struct notifier_block *nb,
 
 #if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
 extern void venc_vcp_probe(struct mtk_vcodec_dev *dev);
+extern void venc_vcp_remove(struct mtk_vcodec_dev *dev);
 #endif
 
 static int mtk_vcodec_enc_probe(struct platform_device *pdev)
@@ -389,6 +393,12 @@ static int mtk_vcodec_enc_probe(struct platform_device *pdev)
 			reg_index, dev->enc_reg_base[reg_index]);
 
 		i++;
+	}
+
+	ret = of_property_read_u32(pdev->dev.of_node, "support-wfd-region", &support_wfd_region);
+	if (ret) {
+		mtk_v4l2_debug(0, "[VENC] Cannot get support-wfd-region, skip");
+		support_wfd_region = 0;
 	}
 
 	res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
@@ -554,7 +564,9 @@ static int mtk_vcodec_enc_probe(struct platform_device *pdev)
 #endif
 
 	INIT_LIST_HEAD(&dev->log_param_list);
+	mutex_init(&dev->log_param_mutex);
 	INIT_LIST_HEAD(&dev->prop_param_list);
+	mutex_init(&dev->prop_param_mutex);
 	dev_ptr = dev;
 
 	return 0;
@@ -587,6 +599,7 @@ static const struct of_device_id mtk_vcodec_enc_match[] = {
 	{.compatible = "mediatek,mt6985-vcodec-enc",},
 	{.compatible = "mediatek,mt6886-vcodec-enc",},
 	{.compatible = "mediatek,mt8195-vcodec-enc",},
+	{.compatible = "mediatek,mt6835-vcodec-enc",},
 	{.compatible = "mediatek,venc_gcon",},
 	{},
 };
@@ -610,6 +623,10 @@ static int mtk_vcodec_enc_remove(struct platform_device *pdev)
 
 	v4l2_device_unregister(&dev->v4l2_dev);
 	mtk_vcodec_release_enc_pm(dev);
+
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_VCP_SUPPORT)
+		venc_vcp_remove(dev);
+#endif
 	return 0;
 }
 

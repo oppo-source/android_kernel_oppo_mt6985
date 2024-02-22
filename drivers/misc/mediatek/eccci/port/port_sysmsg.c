@@ -175,7 +175,9 @@ static int battery_get_bat_voltage(void)
 
 	return prop.intval;
 }
-
+/* #ifdef OPLUS_RF_VOLTAGE */
+/* ORIGIN */
+/*
 static int sys_msg_send_battery(struct port_t *port)
 {
 	int data;
@@ -185,7 +187,18 @@ static int sys_msg_send_battery(struct port_t *port)
 	port_send_msg_to_md(port, MD_GET_BATTERY_INFO, data, 1);
 	return 0;
 }
+*/
+/* NEW */
+static int sys_msg_send_battery_oplus(struct port_t *port)
+{
+	int data;
 
+	data = battery_get_bat_voltage();
+	CCCI_REPEAT_LOG(0, SYS, "get bat voltage new %d\n", data);
+	port_send_msg_to_md(port, MD_GET_BATTERY_INFO, data, 1);
+	return 0;
+}
+/* #endif */ /* OPLUS_RF_VOLTAGE */
 static void sys_msg_handler(struct port_t *port, struct sk_buff *skb)
 {
 	struct ccci_header *ccci_h = (struct ccci_header *)skb->data;
@@ -240,7 +253,12 @@ static void sys_msg_handler(struct port_t *port, struct sk_buff *skb)
 		exec_ccci_sys_call_back(ccci_h->data[1], ccci_h->reserved);
 		break;
 	case MD_GET_BATTERY_INFO:
-		sys_msg_send_battery(port);
+/* #ifdef OPLUS_RF_VOLTAGE */
+/* ORIGIN */
+		//sys_msg_send_battery(port);
+/* NEW */
+		sys_msg_send_battery_oplus(port);
+/* #endif */ /* OPLUS_RF_VOLTAGE */
 		break;
 	case MD_RF_HOPPING_NOTIFY:
 		sys_msg_MD_RF_Notify(ccci_h->reserved, ccci_h->data[0]);

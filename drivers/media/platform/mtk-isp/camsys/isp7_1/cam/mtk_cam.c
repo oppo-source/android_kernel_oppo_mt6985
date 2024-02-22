@@ -4610,6 +4610,9 @@ static int isp_composer_handle_ack(struct mtk_cam_device *cam,
 	struct mtk_raw_device *raw_dev;
 	struct mtk_mraw_device *mraw_dev;
 
+	if (ipi_msg->cookie.session_id >= cam->max_stream_num)
+		return -EINVAL;
+
 	ctx = &cam->ctxs[ipi_msg->cookie.session_id];
 
 	/* check if the ctx is streaming */
@@ -4943,6 +4946,9 @@ static int isp_composer_handler(struct rpmsg_device *rpdev, void *data,
 		return ret;
 
 	} else if (ipi_msg->ack_data.ack_cmd_id == CAM_CMD_DESTROY_SESSION) {
+		if (ipi_msg->cookie.session_id >= cam->max_stream_num)
+			return -EINVAL;
+
 		ctx = &cam->ctxs[ipi_msg->cookie.session_id];
 		complete(&ctx->session_complete);
 		dev_info(dev, "%s:ctx(%d): session destroyed",
@@ -6439,9 +6445,12 @@ static int isp_composer_init(struct mtk_cam_ctx *ctx, unsigned int pipe_id)
 
 	snprintf(msg->name, RPMSG_NAME_SIZE, "mtk-camsys\%d", pipe_id);
 	msg->src = ipi_id;
-	ctx->rpmsg_dev = mtk_create_client_msgdevice(rpmsg_subdev, msg);
-	if (!ctx->rpmsg_dev)
+	ctx->rpmsg_dev = mtk_get_client_msgdevice(rpmsg_subdev, msg);
+	if (!ctx->rpmsg_dev) {
+		dev_info(dev, "%s failed get_client_msgdevice, ctx:%d\n",
+			 __func__, ctx->stream_id);
 		return -EINVAL;
+	}
 
 	ctx->rpmsg_dev->rpdev.ept = rpmsg_create_ept(&ctx->rpmsg_dev->rpdev,
 						     isp_composer_handler,
@@ -6586,21 +6595,17 @@ struct mtk_cam_ctx *mtk_cam_start_ctx(struct mtk_cam_device *cam,
 
 		/* power on the remote proc device */
 		if (!cam->rproc_handle)  {
-			/* Get the remote proc device of composers */
-			cam->rproc_handle =
-				rproc_get_by_phandle(cam->rproc_phandle);
-			if (!cam->rproc_handle) {
-				dev_info(cam->dev,
-					"fail to get rproc_handle\n");
-				return NULL;
-			}
-			/* Power on remote proc device of composers*/
-			ret = rproc_boot(cam->rproc_handle);
-			if (ret) {
-				dev_info(cam->dev,
-					"failed to rproc_boot:%d\n", ret);
-				goto fail_rproc_put;
-			}
+			dev_info(cam->dev,
+				"fail to get rproc_handle\n");
+			return NULL;
+		}
+
+		/* Power on remote proc device of composers*/
+		ret = rproc_boot(cam->rproc_handle);
+		if (ret) {
+			dev_info(cam->dev,
+				"failed to rproc_boot:%d\n", ret);
+			goto fail_rproc_put;
 		}
 
 		/* To catch camsys exception and trigger dump */
@@ -6714,6 +6719,8 @@ struct mtk_cam_ctx *mtk_cam_start_ctx(struct mtk_cam_device *cam,
 
 		if (is_media_entity_v4l2_subdev(entity))
 			*target_sd = media_entity_to_v4l2_subdev(entity);
+		else
+			*target_sd = NULL;
 	}
 
 	return ctx;

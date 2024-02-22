@@ -8,7 +8,6 @@
 #include "kd_imgsensor_api.h"
 #include <linux/ratelimit.h>
 #include <linux/thermal.h>
-
 struct IMGSENSOR_I2C gi2c;
 #ifdef SENSOR_PARALLEISM
 struct mutex i2c_resource_mutex;
@@ -510,8 +509,12 @@ void imgsensor_i2c_set_device(struct IMGSENSOR_I2C_CFG *pi2c_cfg)
 {
 #ifdef SENSOR_PARALLEISM
 	int i = 0;
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	pid_t _tid = sys_gettid();
-
+	#else
+	pid_t _tid = task_pid_vnr(current);
+	#endif
+	//end
 	mutex_lock(&i2c_resource_mutex);
 	if (pi2c_cfg == NULL) {
 		for (i = 0; i < IMGSENSOR_SENSOR_IDX_MAX_NUM; i++) {
@@ -543,7 +546,12 @@ struct IMGSENSOR_I2C_CFG *imgsensor_i2c_get_device(void)
 #ifdef SENSOR_PARALLEISM
 	int i = 0;
 	struct IMGSENSOR_I2C_CFG *pi2c_cfg = NULL;
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	pid_t _tid = sys_gettid();
+	#else
+	pid_t _tid = task_pid_vnr(current);
+	#endif
+	//end chuan change
 	/* mutex_lock(&i2c_resource_mutex); */
 
 	for (i = 0; i < IMGSENSOR_SENSOR_IDX_MAX_NUM; i++) {

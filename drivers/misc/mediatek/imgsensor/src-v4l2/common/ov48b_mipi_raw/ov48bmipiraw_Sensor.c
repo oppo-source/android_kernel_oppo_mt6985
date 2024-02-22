@@ -76,6 +76,7 @@ static struct SET_PD_BLOCK_INFO_T imgsensor_pd_info = {
 	 .i4BlockNumY = 187,
 	 .i4Crop = { {0, 0}, {0, 0}, {0, 200}, {0, 0}, {0, 0},
 			 {0, 0}, {80, 420}, {0, 0}, {0, 0}, {0, 0} },
+	 .i4VCPackNum = 2,
 };
 
 static struct SET_PD_BLOCK_INFO_T imgsensor_pd_info_vid = {
@@ -95,6 +96,7 @@ static struct SET_PD_BLOCK_INFO_T imgsensor_pd_info_vid = {
 	 .i4BlockNumY = 162,
 	 .i4Crop = { {0, 0}, {0, 0}, {0, 200}, {0, 0}, {0, 0},
 			 {0, 0}, {80, 420}, {0, 0}, {0, 0}, {0, 0} },
+	 .i4VCPackNum = 2,
 };
 
 static struct SET_PD_BLOCK_INFO_T imgsensor_pd_info_cus2 = {
@@ -114,6 +116,7 @@ static struct SET_PD_BLOCK_INFO_T imgsensor_pd_info_cus2 = {
 	 .i4BlockNumY = 135,
 	 .i4Crop = { {0, 0}, {0, 0}, {0, 200}, {0, 0}, {0, 0},
 			 {0, 0}, {80, 420}, {0, 0}, {0, 0}, {0, 0} },
+	 .i4VCPackNum = 2,
 };
 
 static struct mtk_mbus_frame_desc_entry frame_desc_prev[] = {
@@ -199,7 +202,7 @@ static struct mtk_mbus_frame_desc_entry frame_desc_cus1[] = {
 			.channel = 0,
 			.data_type = 0x2b,
 			.hsize = 0x0fa0,
-			.vsize = 0x08ca,
+			.vsize = 0x08cc,
 		},
 	},
 };
@@ -329,6 +332,16 @@ static struct mtk_mbus_frame_desc_entry frame_desc_cus13[] = {
 			.data_type = 0x2b,
 			.hsize = 0x0280,
 			.vsize = 0x01e0,
+		},
+	},
+};
+static struct mtk_mbus_frame_desc_entry frame_desc_cus14[] = {
+	{
+		.bus.csi2 = {
+			.channel = 0,
+			.data_type = 0x2b,
+			.hsize = 0x0fa0,
+			.vsize = 0x0bb8,
 		},
 	},
 };
@@ -581,13 +594,13 @@ static struct subdrv_mode_struct mode_struct[] = {
 			.scale_w = 4000,
 			.scale_h = 3000,
 			.x1_offset = 0,
-			.y1_offset = 375,
+			.y1_offset = 374,
 			.w1_size = 4000,
-			.h1_size = 2250,
+			.h1_size = 2252,
 			.x2_tg_offset = 0,
 			.y2_tg_offset = 0,
 			.w2_tg_size = 4000,
-			.h2_tg_size = 2250,
+			.h2_tg_size = 2252,
 		},
 		.pdaf_cap = FALSE,
 		.imgsensor_pd_info = PARAM_UNDEFINED,
@@ -1129,6 +1142,51 @@ static struct subdrv_mode_struct mode_struct[] = {
 			.cphy_settle = 98,
 		},
 	},
+	{
+		.frame_desc = frame_desc_cus14,
+		.num_entries = ARRAY_SIZE(frame_desc_cus14),
+		.mode_setting_table = addr_data_pair_custom14,
+		.mode_setting_len = ARRAY_SIZE(addr_data_pair_custom14),
+		.seamless_switch_group = PARAM_UNDEFINED,
+		.seamless_switch_mode_setting_table = PARAM_UNDEFINED,
+		.seamless_switch_mode_setting_len = PARAM_UNDEFINED,
+		.hdr_group = PARAM_UNDEFINED,
+		.hdr_mode = HDR_NONE,
+		.pclk = 115200000,
+		.linelength = 576,
+		.framelength = 3333,
+		.max_framerate = 600,
+		.mipi_pixel_rate = 956000000,
+		.readout_length = 0,
+		.read_margin = 0,
+		.imgsensor_winsize_info = {
+			.full_w = 8000,
+			.full_h = 6000,
+			.x0_offset = 0,
+			.y0_offset = 0,
+			.w0_size = 8000,
+			.h0_size = 6000,
+			.scale_w = 4000,
+			.scale_h = 3000,
+			.x1_offset = 0,
+			.y1_offset = 0,
+			.w1_size = 4000,
+			.h1_size = 3000,
+			.x2_tg_offset = 0,
+			.y2_tg_offset = 0,
+			.w2_tg_size = 4000,
+			.h2_tg_size = 3000,
+		},
+		.aov_mode = 0,
+		.pdaf_cap = FALSE,
+		.imgsensor_pd_info = PARAM_UNDEFINED,
+		.ae_binning_ratio = 2,
+		.fine_integ_line = 0,
+		.delay_frame = 2,
+		.csi_param = {
+			.cphy_settle = 98,
+		},
+	},
 };
 
 static struct subdrv_static_ctx static_ctx = {
@@ -1196,8 +1254,14 @@ static struct subdrv_static_ctx static_ctx = {
 	.sensor_mode_num = ARRAY_SIZE(mode_struct),
 	.list = feature_control_list,
 	.list_len = ARRAY_SIZE(feature_control_list),
+	#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	.chk_s_off_sta = 1,
 	.chk_s_off_end = 0,
+	#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+	.chk_s_off_before_s_on = 0,
+	.chk_s_off_before_control = 1,
+	.chk_s_off_after_s_off = 0,
+	#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 	.checksum_value = 0x388C7147,
 };
@@ -1321,6 +1385,27 @@ static void ov48b_set_max_framerate_by_scenario(struct subdrv_ctx *ctx, u8 *para
 			scenario_id, ctx->s_ctx.sensor_mode_num);
 		scenario_id = SENSOR_SCENARIO_ID_NORMAL_PREVIEW;
 	}
+
+	if (framerate == 0) {
+		DRV_LOG(ctx, "framerate should not be 0\n");
+		return;
+	}
+
+	if (ctx->s_ctx.mode[scenario_id].linelength == 0) {
+		DRV_LOG(ctx, "linelength should not be 0\n");
+		return;
+	}
+
+	if (ctx->line_length == 0) {
+		DRV_LOG(ctx, "ctx->line_length should not be 0\n");
+		return;
+	}
+
+	if (ctx->frame_length == 0) {
+		DRV_LOG(ctx, "ctx->frame_length should not be 0\n");
+		return;
+	}
+
 	frame_length = ctx->s_ctx.mode[scenario_id].pclk / framerate * 10
 		/ ctx->s_ctx.mode[scenario_id].linelength;
 	ctx->frame_length =

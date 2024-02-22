@@ -20,6 +20,7 @@ struct _panel_rst_ctx {
 };
 
 static DEFINE_MUTEX(panel_ext_lock);
+static DEFINE_MUTEX(panel_boot_lock);
 static LIST_HEAD(panel_ext_list);
 static struct _panel_rst_ctx panel_rst_ctx;
 static enum mtk_lcm_version g_lcm_version;
@@ -116,6 +117,7 @@ int mtk_panel_ext_create(struct device *dev,
 	mtk_panel_init(ext_ctx);
 	ext->params = ext_params;
 	ext->funcs = ext_funcs;
+	ext->is_connected = -1;
 	ext_ctx->ext = ext;
 
 	mtk_panel_add(ext_ctx);
@@ -163,6 +165,18 @@ enum mtk_lcm_version mtk_drm_get_lcm_version(void)
 	return g_lcm_version;
 }
 EXPORT_SYMBOL(mtk_drm_get_lcm_version);
+
+void mtk_panel_lock(void)
+{
+	mutex_lock(&panel_boot_lock);
+}
+EXPORT_SYMBOL(mtk_panel_lock);
+
+void mtk_panel_unlock(void)
+{
+	mutex_unlock(&panel_boot_lock);
+}
+EXPORT_SYMBOL(mtk_panel_unlock);
 
 MODULE_AUTHOR("Tai-Hua Tseng <tai-hua.tseng@mediatek.com>");
 MODULE_DESCRIPTION("MTK DRM panel infrastructure");

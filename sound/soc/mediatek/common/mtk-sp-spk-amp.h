@@ -5,6 +5,7 @@
 
 #ifndef _MTK_SP_SPK_AMP_H
 #define _MTK_SP_SPK_AMP_H
+#include <sound/soc.h>
 
 struct mtk_spk_i2c_ctrl {
 	int (*i2c_probe)(struct i2c_client *client,
@@ -32,6 +33,14 @@ struct mtk_spk_i2c_ctrl {
 #define MTK_SPK_I2S_8_STR "MTK_SPK_I2S_8"
 #define MTK_SPK_I2S_9_STR "MTK_SPK_I2S_9"
 #define MTK_SPK_TINYCONN_I2S_0_STR "MTK_SPK_TINYCONN_I2S_0"
+#define MTK_SPK_TINYCONN_I2S_1_STR "MTK_SPK_TINYCONN_I2S_1"
+#define MTK_SPK_TINYCONN_I2S_2_STR "MTK_SPK_TINYCONN_I2S_2"
+#define MTK_SPK_TINYCONN_I2S_3_STR "MTK_SPK_TINYCONN_I2S_3"
+#define MTK_SPK_TINYCONN_I2S_5_STR "MTK_SPK_TINYCONN_I2S_5"
+#define MTK_SPK_TINYCONN_I2S_6_STR "MTK_SPK_TINYCONN_I2S_6"
+#define MTK_SPK_TINYCONN_I2S_7_STR "MTK_SPK_TINYCONN_I2S_7"
+#define MTK_SPK_TINYCONN_I2S_8_STR "MTK_SPK_TINYCONN_I2S_8"
+#define MTK_SPK_TINYCONN_I2S_9_STR "MTK_SPK_TINYCONN_I2S_9"
 #define MTK_SPK_ETDM_OUT_STR "MTK_SPK_ETDM_OUT"
 #define MTK_SPK_ETDM_IN_STR "MTK_SPK_ETDM_IN"
 
@@ -78,5 +87,9 @@ int mtk_ext_spk_get_status(void);
 void mtk_ext_spk_enable(int enable);
 int mtk_spk_update_info(struct snd_soc_card *card,
 			struct platform_device *pdev);
+int mtk_spk_send_ipi_buf_to_dsp(void *data_buffer, uint32_t data_size);
+int mtk_spk_recv_ipi_buf_from_dsp(int8_t *buffer,
+				  int16_t size,
+				  uint32_t *buf_len);
 #endif
 

@@ -27,10 +27,10 @@ struct debug_info_ctrl {
 };
 
 struct uarthub_gpio_base_addr {
-	unsigned long addr;
-	unsigned long mask;
-	unsigned long value;
-	unsigned long gpio_value;
+	unsigned int addr;
+	unsigned int mask;
+	unsigned int value;
+	unsigned int gpio_value;
 };
 
 struct uarthub_gpio_trx_info {
@@ -58,11 +58,11 @@ struct uarthub_gpio_trx_info {
 };
 
 struct uarthub_uart_ip_debug_info {
-	unsigned long dev0;
-	unsigned long dev1;
-	unsigned long dev2;
-	unsigned long cmm;
-	unsigned long ap;
+	unsigned int dev0;
+	unsigned int dev1;
+	unsigned int dev2;
+	unsigned int cmm;
+	unsigned int ap;
 };
 
 typedef void (*UARTHUB_CORE_IRQ_CB) (unsigned int err_type);
@@ -144,7 +144,7 @@ int uarthub_core_clk_get_from_dts(struct platform_device *pdev);
 int uarthub_core_get_default_baud_rate(int dev_index);
 int uarthub_core_check_irq_err_type(void);
 int uarthub_core_irq_mask_ctrl(int mask);
-int uarthub_core_irq_clear_ctrl(void);
+int uarthub_core_irq_clear_ctrl(int err_type);
 
 int uarthub_core_crc_ctrl(int enable);
 int uarthub_core_clk_univpll_ctrl(int clk_on);

@@ -5,6 +5,7 @@
 
 #include "ccci_fsm_internal.h"
 #include "modem_sys.h"
+#include "md_sys1_platform.h"
 #if IS_ENABLED(CONFIG_MTK_AEE_FEATURE)
 #include <mt-plat/aee.h>
 #endif
@@ -155,7 +156,6 @@ _dump_done:
 		return;
 	} else if (stage == 2) { /* got MD_EX_PASS or second timeout */
 		unsigned long flags;
-		int md_wdt_ee = 0;
 		unsigned int md_dump_flag = 0;
 		struct ccci_smem_region *mdss_dbg
 			= ccci_md_get_smem_by_user_id(SMEM_USER_RAW_MDSS_DBG);
@@ -164,14 +164,7 @@ _dump_done:
 		CCCI_MEM_LOG_TAG(0, FSM, "MD exception stage 2! ee=%x\n",
 			ee_ctl->ee_info_flag);
 
-		spin_lock_irqsave(&ee_ctl->ctrl_lock, flags);
-		if (MD_EE_WDT_GET & ee_ctl->ee_info_flag)
-			md_wdt_ee = 1;
-		spin_unlock_irqrestore(&ee_ctl->ctrl_lock, flags);
-
-		/* Dump MD register, only NO response case dump */
-		if (ee_ctl->ee_case == MD_EE_CASE_NO_RESPONSE)
-			md_dump_flag = DUMP_FLAG_REG | DUMP_FLAG_MD_WDT;
+		md_dump_flag = DUMP_FLAG_REG | DUMP_FLAG_MD_WDT;
 		if (ee_ctl->ee_case == MD_EE_CASE_ONLY_SWINT)
 			md_dump_flag |= (DUMP_FLAG_QUEUE_0
 			| DUMP_FLAG_CCIF | DUMP_FLAG_CCIF_REG);
@@ -339,17 +332,18 @@ int fsm_check_ee_done(struct ccci_fsm_ee *ee_ctl, int timeout)
 int fsm_ee_init(struct ccci_fsm_ee *ee_ctl)
 {
 	int ret = 0;
+	struct ccci_modem *md = ccci_get_modem();
 
 	spin_lock_init(&ee_ctl->ctrl_lock);
-
-#if (MD_GENERATION >= 6297)
-	ret = mdee_dumper_v5_alloc(ee_ctl);
-#elif (MD_GENERATION >= 6292)
-	ret = mdee_dumper_v3_alloc(ee_ctl);
-#elif (MD_GENERATION == 6291)
-	ret = mdee_dumper_v2_alloc(ee_ctl);
-#endif
-
+	if (md->hw_info->plat_val->md_gen  >= 6299)
+		ret = mdee_dumper_v6_alloc(ee_ctl);
+	else if (md->hw_info->plat_val->md_gen  >= 6297)
+		ret = mdee_dumper_v5_alloc(ee_ctl);
+	else if (md->hw_info->plat_val->md_gen  >= 6292)
+		ret = mdee_dumper_v3_alloc(ee_ctl);
+	else if (md->hw_info->plat_val->md_gen  == 6291)
+		ret = mdee_dumper_v2_alloc(ee_ctl);
 	return ret;
 }
+
 

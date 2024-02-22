@@ -6,6 +6,10 @@
 #ifndef _CAM_REGS_H
 #define _CAM_REGS_H
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 /* Raw Part */
 
 /* normal siganl */
@@ -141,13 +145,13 @@
 #define HALT1_EN		0x3
 #define HALT2_EN		0x3
 /* raw_a/yuv_a */
-#define HALT5_EN		0xF92
+#define HALT5_EN		0xF90
 #define HALT6_EN		0x6F
 /* raw_b/yuv_b */
-#define HALT7_EN		0xF92
+#define HALT7_EN		0xF90
 #define HALT8_EN		0x6F
 /* raw_c/yuv_c */
-#define HALT9_EN		0xF92
+#define HALT9_EN		0xF90
 #define HALT10_EN		0x6F
 /* camsv_c/d/e/f */
 #define HALT13_EN		0xFF
@@ -246,7 +250,7 @@
 
 #define CQ_THR0_MODE_IMMEDIATE				BIT(4)
 #define CQ_THR0_MODE_CONTINUOUS				BIT(5)
-#define CQ_THR0_EN							BIT(0)
+#define CQ_THR0_EN							0x1
 
 #define REG_TG_SEN_MODE						0x0700
 #define TG_CMOS_RDY_SEL						BIT(14)
@@ -296,20 +300,33 @@
 #define REG_DMA_DBG_CHASING_STATUS2         0x409c
 
 #define RAWI_R2_SMI_REQ_ST		BIT(0)
+#define UFDI_R2_SMI_REQ_ST		BIT(8)
 #define RAWI_R3_SMI_REQ_ST		BIT(16)
+#define UFDI_R3_SMI_REQ_ST		BIT(24)
 #define RAWI_R5_SMI_REQ_ST		BIT(16)
+#define UFDI_R5_SMI_REQ_ST		BIT(24)
 
 #define CAMCTL_RAWI_R2_EN		BIT(0)
+#define CAMCTL_UFDI_R2_EN		BIT(1)
 #define CAMCTL_RAWI_R3_EN		BIT(2)
+#define CAMCTL_UFDI_R3_EN		BIT(3)
 #define CAMCTL_RAWI_R5_EN		BIT(4)
+#define CAMCTL_UFDI_R5_EN		BIT(5)
+
 #define RST_STAT_RAWI_R2		BIT(4)
+#define RST_STAT_UFDI_R2		BIT(5)
 #define RST_STAT_RAWI_R3		BIT(6)
+#define RST_STAT_UFDI_R3		BIT(7)
 #define RST_STAT_RAWI_R5		BIT(8)
+#define RST_STAT_UFDI_R5		BIT(9)
 
 #define RAW_RST_STAT_CHECK		(0x3fffffff ^ \
 					(RST_STAT_RAWI_R2 |\
+					 RST_STAT_UFDI_R2 |\
 					 RST_STAT_RAWI_R3 |\
-					 RST_STAT_RAWI_R5))
+					 RST_STAT_UFDI_R3 |\
+					 RST_STAT_RAWI_R5 |\
+					 RST_STAT_UFDI_R5))
 #define RAW_RST_STAT2_CHECK		0x7
 #define YUV_RST_STAT_CHECK		0x1efffff
 
@@ -403,6 +420,7 @@
 #define WCNT_BIT_MASK				0xFF00
 #define CNT_BIT_MASK				0xFF0000
 #define TG_FULLSEL_BIT_MASK			0x8000
+#define FBC_RESET				BIT(8)
 /* ORIDMA */
 /* CAMSYS_RAW 0x1a03 */
 #define REG_IMGO_R1_BASE       0x4760

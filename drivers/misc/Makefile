@@ -62,3 +62,19 @@ obj-$(CONFIG_HI6421V600_IRQ)	+= hi6421v600-irq.o
 obj-$(CONFIG_UID_SYS_STATS)	+= uid_sys_stats.o
 obj-y				+= mediatek/
 obj-$(CONFIG_OPEN_DICE)		+= open-dice.o
+
+#ifdef OPLUS_FEATURE_SIM_DETECT
+obj-$(CONFIG_SIM_DETECT)	+= sim_detect/
+#endif
+
+obj-$(CONFIG_OPLUS_GPIO) += oplus_gpio/
+
+#ifdef OPLUS_FEATURE_TP_BASIC
+#oplus add for vib aw86927
+obj-y += aw8697_haptic/
+#endif
+obj-y += tri_state_key/
+
+#ifdef OPLUS_POWER_PROCS_LOAD
+obj-$(CONFIG_OPLUS_POWER_PROCS_LOAD) += oplus_procs_load/
+#endif /* OPLUS_POWER_PROCS_LOAD */

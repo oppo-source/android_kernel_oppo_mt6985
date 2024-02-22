@@ -993,6 +993,22 @@ void *mtk_hcp_get_gce_mem_virt(struct platform_device *pdev)
 }
 EXPORT_SYMBOL(mtk_hcp_get_gce_mem_virt);
 
+phys_addr_t mtk_hcp_get_gce_mem_size(struct platform_device *pdev)
+{
+	struct mtk_hcp *hcp_dev = platform_get_drvdata(pdev);
+	phys_addr_t mem_sz;
+
+	if (!hcp_dev->data->get_gce_mem_size) {
+		dev_info(&pdev->dev, "%s: not supported\n", __func__);
+		return 0;
+	}
+
+	mem_sz = hcp_dev->data->get_gce_mem_size();
+
+	return mem_sz;
+}
+EXPORT_SYMBOL(mtk_hcp_get_gce_mem_size);
+
 int mtk_hcp_get_gce_buffer(struct platform_device *pdev)
 {
 	struct mtk_hcp *hcp_dev = platform_get_drvdata(pdev);
@@ -1459,35 +1475,127 @@ int release_working_buffer_helper(struct platform_device *pdev)
 }
 EXPORT_SYMBOL(release_working_buffer_helper);
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 int mtk_hcp_allocate_working_buffer(struct platform_device *pdev, unsigned int mode)
 {
 	struct mtk_hcp *hcp_dev = platform_get_drvdata(pdev);
+	int ret = 0;
+
+	if (hcp_dev == NULL) {
+		pr_info("%s hcp device in not ready\n", __func__);
+		return -EPROBE_DEFER;
+	}
+
+	if (hcp_dev->is_mem_alloc) {
+		dev_info(&pdev->dev, "%s:alloc at wrong state\n", __func__);
+		return -1;
+	}
 
 	if ((hcp_dev == NULL)
 		|| (hcp_dev->data == NULL)
 		|| (hcp_dev->data->allocate == NULL)) {
 		dev_info(&pdev->dev, "%s:allocate not supported\n", __func__);
-		return allocate_working_buffer_helper(pdev);
+		ret = allocate_working_buffer_helper(pdev);
+	} else {
+		ret = hcp_dev->data->allocate(hcp_dev, mode);
 	}
 
-	return hcp_dev->data->allocate(hcp_dev, mode);
+	hcp_dev->is_mem_alloc = (ret == 0);
+
+	return ret;
 }
 EXPORT_SYMBOL(mtk_hcp_allocate_working_buffer);
 
 int mtk_hcp_release_working_buffer(struct platform_device *pdev)
 {
 	struct mtk_hcp *hcp_dev = platform_get_drvdata(pdev);
+	int ret = 0;
+
+	if (hcp_dev == NULL) {
+		pr_info("%s hcp device in not ready\n", __func__);
+		return -EPROBE_DEFER;
+	}
+
+	if (!hcp_dev->is_mem_alloc) {
+		dev_info(&pdev->dev, "%s:release at wrong state\n", __func__);
+		return -1;
+	}
+
+	if ((hcp_dev == NULL)
+		|| (hcp_dev->data == NULL)
+		|| (hcp_dev->data->release == NULL)) {
+		dev_info(&pdev->dev, "%s:release not supported\n", __func__);
+		ret = release_working_buffer_helper(pdev);
+	} else {
+		ret = hcp_dev->data->release(hcp_dev);
+	}
+
+	hcp_dev->is_mem_alloc = (ret == 0) ? false : true;
+
+	return ret;
+}
+EXPORT_SYMBOL(mtk_hcp_release_working_buffer);
+#else /*OPLUS_FEATURE_CAMERA_COMMON*/
+int mtk_hcp_allocate_working_buffer(struct platform_device *pdev, unsigned int mode)
+{
+	struct mtk_hcp *hcp_dev = platform_get_drvdata(pdev);
+	int ret = 0;
+
+	if (hcp_dev == NULL) {
+		pr_info("%s hcp device in not ready\n", __func__);
+		return -EPROBE_DEFER;
+	}
+
+	if (hcp_dev->is_mem_alloc) {
+		dev_info(&pdev->dev, "%s:alloc at wrong state\n", __func__);
+		return -1;
+	}
 
 	if ((hcp_dev == NULL)
 		|| (hcp_dev->data == NULL)
 		|| (hcp_dev->data->allocate == NULL)) {
-		dev_info(&pdev->dev, "%s:release not supported\n", __func__);
-		return release_working_buffer_helper(pdev);
+		dev_info(&pdev->dev, "%s:allocate not supported\n", __func__);
+		ret = allocate_working_buffer_helper(pdev);
+	} else {
+		ret = hcp_dev->data->allocate(hcp_dev, mode);
 	}
 
-	return hcp_dev->data->release(hcp_dev);
+	hcp_dev->is_mem_alloc = (ret == 0);
+
+	return ret;
+}
+EXPORT_SYMBOL(mtk_hcp_allocate_working_buffer);
+
+int mtk_hcp_release_working_buffer(struct platform_device *pdev)
+{
+	struct mtk_hcp *hcp_dev = platform_get_drvdata(pdev);
+	int ret = 0;
+
+	if (hcp_dev == NULL) {
+		pr_info("%s hcp device in not ready\n", __func__);
+		return -EPROBE_DEFER;
+	}
+
+	if (!hcp_dev->is_mem_alloc) {
+		dev_info(&pdev->dev, "%s:release at wrong state\n", __func__);
+		return -1;
+	}
+
+	if ((hcp_dev == NULL)
+		|| (hcp_dev->data == NULL)
+		|| (hcp_dev->data->release == NULL)) {
+		dev_info(&pdev->dev, "%s:release not supported\n", __func__);
+		ret = release_working_buffer_helper(pdev);
+	} else {
+		ret = hcp_dev->data->release(hcp_dev);
+	}
+
+	hcp_dev->is_mem_alloc = (ret == 0) ? false : true;
+
+	return ret;
 }
 EXPORT_SYMBOL(mtk_hcp_release_working_buffer);
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 int mtk_hcp_get_init_info(struct platform_device *pdev,
 			struct img_init_info *info)
@@ -1646,6 +1754,8 @@ static int mtk_hcp_probe(struct platform_device *pdev)
 	hcp_aee_init(hcp_mtkdev);
 	dev_dbg(&pdev->dev, "hcp aee init done\n");
 	dev_dbg(&pdev->dev, "- X. hcp driver probe success.\n");
+
+	hcp_dev->is_mem_alloc = false;
 
 #if HCP_RESERVED_MEM
 	/* allocate reserved memory */

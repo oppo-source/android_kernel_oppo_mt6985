@@ -594,15 +594,15 @@ static struct mtk_panel_params ext_params = {
 		},
 	},
 	.lp_perline_en = 1,
-#ifdef CONFIG_MTK_ROUND_CORNER_SUPPORT
-	.round_corner_en = 1,
-	.corner_pattern_height = ROUND_CORNER_H_TOP,
-	.corner_pattern_height_bot = ROUND_CORNER_H_BOT,
-	.corner_pattern_tp_size_l = sizeof(top_rc_pattern_l),
-	.corner_pattern_lt_addr_l = (void *)top_rc_pattern_l,
-	.corner_pattern_tp_size_r = sizeof(top_rc_pattern_r),
-	.corner_pattern_lt_addr_r = (void *)top_rc_pattern_r,
-#endif
+// #ifdef CONFIG_MTK_ROUND_CORNER_SUPPORT
+	// .round_corner_en = 1,
+	// .corner_pattern_height = ROUND_CORNER_H_TOP,
+	// .corner_pattern_height_bot = ROUND_CORNER_H_BOT,
+	// .corner_pattern_tp_size_l = sizeof(top_rc_pattern_l),
+	// .corner_pattern_lt_addr_l = (void *)top_rc_pattern_l,
+	// .corner_pattern_tp_size_r = sizeof(top_rc_pattern_r),
+	// .corner_pattern_lt_addr_r = (void *)top_rc_pattern_r,
+// #endif
 };
 
 static struct mtk_panel_params ext_params_90hz = {
@@ -690,16 +690,16 @@ static struct mtk_panel_params ext_params_90hz = {
 		},
 	},
 	.lp_perline_en = 1,
-#ifdef CONFIG_MTK_ROUND_CORNER_SUPPORT
-	.round_corner_en = 1,
-	.corner_pattern_height = ROUND_CORNER_H_TOP,
-	.corner_pattern_height_bot = ROUND_CORNER_H_BOT,
-	.corner_pattern_tp_size_l = sizeof(top_rc_pattern_l),
-	.corner_pattern_lt_addr_l = (void *)top_rc_pattern_l,
-	.corner_pattern_tp_size_r = sizeof(top_rc_pattern_r),
-	.corner_pattern_lt_addr_r = (void *)top_rc_pattern_r,
+// #ifdef CONFIG_MTK_ROUND_CORNER_SUPPORT
+	// .round_corner_en = 1,
+	// .corner_pattern_height = ROUND_CORNER_H_TOP,
+	// .corner_pattern_height_bot = ROUND_CORNER_H_BOT,
+	// .corner_pattern_tp_size_l = sizeof(top_rc_pattern_l),
+	// .corner_pattern_lt_addr_l = (void *)top_rc_pattern_l,
+	// .corner_pattern_tp_size_r = sizeof(top_rc_pattern_r),
+	// .corner_pattern_lt_addr_r = (void *)top_rc_pattern_r,
 
-#endif
+// #endif
 };
 
 static struct mtk_panel_params ext_params_120hz = {
@@ -787,16 +787,16 @@ static struct mtk_panel_params ext_params_120hz = {
 		},
 	},
 	.lp_perline_en = 1,
-#ifdef CONFIG_MTK_ROUND_CORNER_SUPPORT
-	.round_corner_en = 1,
-	.corner_pattern_height = ROUND_CORNER_H_TOP,
-	.corner_pattern_height_bot = ROUND_CORNER_H_BOT,
-	.corner_pattern_tp_size_l = sizeof(top_rc_pattern_l),
-	.corner_pattern_lt_addr_l = (void *)top_rc_pattern_l,
-	.corner_pattern_tp_size_r = sizeof(top_rc_pattern_r),
-	.corner_pattern_lt_addr_r = (void *)top_rc_pattern_r,
+// #ifdef CONFIG_MTK_ROUND_CORNER_SUPPORT
+	// .round_corner_en = 1,
+	// .corner_pattern_height = ROUND_CORNER_H_TOP,
+	// .corner_pattern_height_bot = ROUND_CORNER_H_BOT,
+	// .corner_pattern_tp_size_l = sizeof(top_rc_pattern_l),
+	// .corner_pattern_lt_addr_l = (void *)top_rc_pattern_l,
+	// .corner_pattern_tp_size_r = sizeof(top_rc_pattern_r),
+	// .corner_pattern_lt_addr_r = (void *)top_rc_pattern_r,
 
-#endif
+// #endif
 };
 
 struct drm_display_mode *get_mode_by_id(struct drm_connector *connector,

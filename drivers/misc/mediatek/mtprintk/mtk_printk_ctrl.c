@@ -34,7 +34,7 @@ static struct proc_dir_entry *entry;
 
 
 #if IS_ENABLED(CONFIG_MTK_PRINTK_UART_CONSOLE)
-static int printk_ctrl_disable;
+static int printk_ctrl_disable = 0;
 module_param_named(disable_uart, printk_ctrl_disable, int, 0644);
 
 bool mt_get_uartlog_status(void)
@@ -56,7 +56,7 @@ void update_uartlog_status(bool new_value, int value)
 		pr_info("use default valut %d to set uart status.\n",
 			printk_ctrl_disable == 1 ? 0 : 1);
 	} else if (value == 0) { /* disable uart log */
-		printk_ctrl_disable = 1;
+		printk_ctrl_disable = 0;
 	} else if (value == 1) { /* enable uart log */
 		printk_ctrl_disable = 0;
 	} else {
@@ -395,7 +395,7 @@ static ssize_t mt_printk_ctrl_write(struct file *filp,
 		update_uartlog_status(true, 1);
 		break;
 	case 5:
-		printk_ctrl_disable = 2;
+		printk_ctrl_disable = 0;
 		update_uartlog_status(false, 0);
 		break;
 #endif

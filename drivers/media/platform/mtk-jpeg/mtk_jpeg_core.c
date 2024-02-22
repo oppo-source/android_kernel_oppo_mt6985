@@ -760,13 +760,31 @@ static void mtk_jpeg_dvfs_end(struct mtk_jpeg_ctx *ctx)
 		pr_info("%s  freq: %lu\n", __func__, active_freq);
 	}
 }
+
 static int mtk_jpeg_qbuf(struct file *file, void *priv, struct v4l2_buffer *buf)
 {
-	struct v4l2_fh *fh = file->private_data;
-	struct mtk_jpeg_ctx *ctx = mtk_jpeg_fh_to_ctx(priv);
+	struct v4l2_fh *fh;
+	struct mtk_jpeg_ctx *ctx;
 
 
-	if (buf->type != V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) {
+	if (IS_ERR_OR_NULL(file) || IS_ERR_OR_NULL(priv) || IS_ERR_OR_NULL(buf)) {
+		pr_info("%s %d qbuf error, invalid input param\n", __func__, __LINE__);
+		return -EINVAL;
+	}
+
+	fh = file->private_data;
+	ctx = mtk_jpeg_fh_to_ctx(priv);
+
+	if (IS_ERR_OR_NULL(ctx)) {
+		pr_info("%s %d invalid ctx\n", __func__, __LINE__);
+		return -EINVAL;
+	}
+
+	if (buf->type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
+		if (IS_ERR_OR_NULL(buf->m.planes) || buf->length <= 0) {
+			pr_info("%s %d invalid buffer planes\n", __func__, __LINE__);
+			return -EINVAL;
+		}
 		ctx->dst_offset = buf->m.planes[0].data_offset;
 		pr_info("%s %d data_offset %d\n", __func__, __LINE__, buf->m.planes[0].data_offset);
 	}
@@ -1121,8 +1139,8 @@ static void mtk_jpeg_enc_device_run(void *priv)
 	 * Resetting the hardware every frame is to ensure that all the
 	 * registers are cleared. This is a hardware requirement.
 	 */
-	if (jpeg->gcon_base != NULL)
-		mtk_jpeg_enc_set_34bits(jpeg->gcon_base, jpeg->fake34bits);
+	if (jpeg->gcon_base != NULL && jpeg->fake34bits)
+		mtk_jpeg_enc_set_34bits(ctx, jpeg->gcon_base, &dst_buf->vb2_buf);
 	mtk_jpeg_enc_reset(jpeg->reg_base);
 	mtk_jpeg_set_enc_src(ctx, jpeg->reg_base, &src_buf->vb2_buf);
 	mtk_jpeg_set_enc_dst(ctx, jpeg->reg_base, &dst_buf->vb2_buf);
@@ -1687,7 +1705,6 @@ static int mtk_jpeg_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(&pdev->dev);
 	video_unregister_device(jpeg->vdev);
-	video_device_release(jpeg->vdev);
 	v4l2_m2m_release(jpeg->m2m_dev);
 	v4l2_device_unregister(&jpeg->v4l2_dev);
 	mtk_jpeg_clk_release(jpeg);

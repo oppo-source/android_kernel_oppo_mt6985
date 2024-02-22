@@ -9,7 +9,7 @@
 
 &mmc1 {
 	host-index = <1>;
-	status = "okay";
+	status = "disabled";
 	pinctrl-names = "default", "state_uhs";
 	pinctrl-0 = <&mmc1_pins_default>;
 	pinctrl-1 = <&mmc1_pins_uhs>;
@@ -25,7 +25,7 @@
 	cd-debounce-delay-ms = <0>;
 	cd-gpios = <&pio 11 GPIO_ACTIVE_LOW>;
 	vmmc-supply = <&mt6373_vmch_eint_high>;
-	vqmmc-supply = <&mt6373_vmc>;
+	/* vqmmc-supply = <&mt6373_vmc>; LCD Delete */
 	no-mmc;
 	no-sdio;
 	dvfsrc-vcore-supply = <&dvfsrc_vcore>;
@@ -34,9 +34,9 @@
 
 &mmc2 {
 	host-index = <2>;
-	status = "disabled";
+	status = "okay";
 	pinctrl-names = "default", "state_uhs";
-	pinctrl-0 = <&mmc2_pins_default>;
+	pinctrl-0 = <&mmc2_pins_default &cd_pin_pulldown>;
 	pinctrl-1 = <&mmc2_pins_uhs>;
 	bus-width = <4>;
 	max-frequency = <200000000>;
@@ -46,13 +46,16 @@
 	sd-uhs-sdr50;
 	sd-uhs-sdr104;
 	sd-uhs-ddr50;
-	eint-gpios = <&pio 41 GPIO_ACTIVE_LOW>;
-	vmmc-supply = <&mt6373_vmch>;
+	cd-debounce-delay-ms = <1>;
+	cd-gpios = <&pio 192 GPIO_ACTIVE_HIGH>;
+	ocr-voltage = <0x00FFFF00>;
 	vqmmc-supply = <&mt6363_vio18>;
 	no-mmc;
 	no-sd;
 	cap-sdio-irq;
-	non-removable;
+	filter_enable = <1>;
+	explorer_support = <1>;
+	dvfsrc-vcore-supply = <&dvfsrc_vcore>;
 };
 
 &pio {
@@ -101,12 +104,12 @@
 				<PINMUX_GPIO43__FUNC_MSDC2_DAT3>,
 				<PINMUX_GPIO39__FUNC_MSDC2_CMD>;
 			input-enable;
-			drive-strength = <3>;
+			drive-strength = <1>;
 			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
 		};
 		pins_clk {
 			pinmux = <PINMUX_GPIO38__FUNC_MSDC2_CLK>;
-			drive-strength = <3>;
+			drive-strength = <1>;
 			bias-pull-down = <MTK_PUPD_SET_R1R0_10>;
 		};
 	};

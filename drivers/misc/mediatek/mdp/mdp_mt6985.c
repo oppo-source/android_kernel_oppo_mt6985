@@ -1599,23 +1599,24 @@ u64 cmdq_mdp_get_engine_group_bits(u32 engine_group)
 	return gCmdqEngineGroupBits[engine_group];
 }
 
-static void mdp_enable_larb(bool enable, struct device *larb)
+static s32 mdp_enable_larb(bool enable, struct device *larb)
 {
 #if IS_ENABLED(CONFIG_MTK_SMI)
 	if (!larb) {
 		CMDQ_ERR("%s smi larb not support\n", __func__);
-		return;
+		return TASK_STATE_ERROR;
 	}
 
 	if (enable) {
 		int ret = mtk_smi_larb_get(larb);
+		if (ret) {
+			CMDQ_ERR("%s enable fail ret:%d\n",
+				__func__, ret);
+			return TASK_STATE_ERROR;
+		}
 
 		cmdq_mdp_enable_clock_APB(enable);
 		cmdq_mdp_enable_clock_MDP_MUTEX0(enable);
-
-		if (ret)
-			CMDQ_ERR("%s enable fail ret:%d\n",
-				__func__, ret);
 	} else {
 		/* disable, reverse the sequence */
 		cmdq_mdp_enable_clock_MDP_MUTEX0(enable);
@@ -1632,12 +1633,17 @@ static void mdp_enable_larb(bool enable, struct device *larb)
 	}
 
 #endif
+
+	return 0;
 }
 
-static void cmdq_mdp_enable_common_clock(bool enable, u64 engine_flag)
+static s32 cmdq_mdp_enable_common_clock(bool enable, u64 engine_flag)
 {
 	if (engine_flag & MDP_ENG_LARB2)
-		mdp_enable_larb(enable, larb2);
+		return mdp_enable_larb(enable, larb2);
+
+	CMDQ_ERR("%s engine_flag not include MDP_ENG_LARB\n", __func__);
+	return TASK_STATE_ERROR;
 }
 
 static void cmdq_mdp_check_hw_status(struct cmdqRecStruct *handle)
@@ -1935,6 +1941,43 @@ void mdp_vcp_pq_readback_impl(struct cmdqRecStruct *handle,
 
 }
 
+static u32 mdp_get_poll_gpr(u16 engine, u32 reg_addr)
+{
+	u32 gpr;
+
+	switch (engine) {
+	case ENGBASE_MDP_RDMA0:
+	case ENGBASE_MDP_RDMA2:
+	case ENGBASE_MDP_HDR0:
+	case ENGBASE_MDP_AAL0:
+	case ENGBASE_MDP_RSZ0:
+	case ENGBASE_MDP_BIRSZ0:
+	case ENGBASE_MDP_TDSHP0:
+	case ENGBASE_MDP_COLOR0:
+	case ENGBASE_MDP_WROT0:
+		gpr = CMDQ_GPR_R12;
+		break;
+	case ENGBASE_MDP_RDMA1:
+	case ENGBASE_MDP_RDMA3:
+	case ENGBASE_MDP_HDR1:
+	case ENGBASE_MDP_AAL1:
+	case ENGBASE_MDP_RSZ1:
+	case ENGBASE_MDP_BIRSZ1:
+	case ENGBASE_MDP_TDSHP1:
+	case ENGBASE_MDP_COLOR1:
+	case ENGBASE_MDP_WROT1:
+		gpr = CMDQ_GPR_R14;
+		break;
+	default:
+		CMDQ_ERR("%s engine not support:%hu reg_addr:%#x\n",
+			__func__, engine, reg_addr);
+		gpr = CMDQ_GPR_R12;
+		break;
+	}
+
+	return gpr;
+}
+
 void cmdq_mdp_platform_function_setting(void)
 {
 	struct cmdqMDPFuncStruct *pFunc = cmdq_mdp_get_func();
@@ -1986,6 +2029,7 @@ void cmdq_mdp_platform_function_setting(void)
 	pFunc->mdpIsCaminSupport = mdp_check_camin_support_virtual;
 	pFunc->mdpVcpPQReadbackSupport = mdp_vcp_pq_readback_support;
 	pFunc->mdpVcpPQReadback = mdp_vcp_pq_readback_impl;
+	pFunc->mdpGetPollGpr = mdp_get_poll_gpr;
 
 }
 

@@ -15,6 +15,23 @@
 	"priority=%u,softlimit=%u,pwr_dtime=%u,"\
 	"sc_rets=0x%llx"\
 
+TRACE_EVENT(mdw_dma_alloc,
+  	TP_PROTO(size_t len
+  		),
+  	TP_ARGS(len
+  		),
+  	TP_STRUCT__entry(
+  		__field(size_t,	len)
+  	),
+  	TP_fast_assign(
+  		__entry->len = len;
+  	),
+  	TP_printk(
+  		"len=%zu",
+  		__entry->len
+  	)
+);
+
 TRACE_EVENT(mdw_rv_cmd,
 	TP_PROTO(uint32_t status,
 		pid_t pid,

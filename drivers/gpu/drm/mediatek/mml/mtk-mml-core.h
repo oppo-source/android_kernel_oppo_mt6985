@@ -37,7 +37,8 @@ extern int mml_cmdq_err;
 extern int mml_qos;
 extern int mml_qos_log;
 
-#define align_up(x, n)	(((x) + ((n) - 1)) & ~((n) - 1))
+#define align_down(x, n)	((x) & ~((n) - 1))
+#define align_up(x, n)		(((x) + ((n) - 1)) & ~((n) - 1))
 
 /* define in mtk-mml-wrot.c */
 extern int mml_wrot_bkgd_en;
@@ -181,6 +182,8 @@ struct mml_task_ops {
 	s32 (*dup_task)(struct mml_task *task, u32 pipe);
 	struct mml_tile_cache *(*get_tile_cache)(struct mml_task *task, u32 pipe);
 	void (*kt_setsched)(void *adaptor_ctx);
+	void (*ddren)(struct mml_task *task, struct cmdq_pkt *pkt, bool enable);
+	void (*dispen)(struct mml_task *task, bool enable);
 };
 
 struct mml_config_ops {
@@ -323,7 +326,8 @@ struct mml_frame_config {
 	struct mml_frame_info info;
 	/* frame output pixel size */
 	struct mml_frame_size frame_out[MML_MAX_OUTPUTS];
-	/* direct-link output rect */
+	/* direct-link input roi offset and output rect */
+	struct mml_rect dl_in[MML_DL_OUT_CNT];
 	struct mml_rect dl_out[MML_DL_OUT_CNT];
 	struct list_head tasks;
 	struct list_head await_tasks;
@@ -501,6 +505,11 @@ struct mml_task {
 	bool dump_queued[MMLDUMPT_CNT];
 #endif
 
+	u64 config_pipe_time[MML_PIPE_CNT];
+	u64 bw_time[MML_PIPE_CNT];
+	u64 freq_time[MML_PIPE_CNT];
+	u64 wait_fence_time[MML_PIPE_CNT];
+	u64 flush_time[MML_PIPE_CNT];
 	u32 src_crc[MML_PIPE_CNT];
 	u32 dest_crc[MML_PIPE_CNT];
 };

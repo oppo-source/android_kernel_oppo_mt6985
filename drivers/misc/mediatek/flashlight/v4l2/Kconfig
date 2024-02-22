@@ -36,3 +36,27 @@ config MTK_VIDEO_SY7806
 	  Say Y here if you want a flashlight driver IC SY7806.
 	  Select this only if your board has this IC.
 	  Say M here if you want to compile this driver as a module.
+
+config MTK_VIDEO_AW36515
+	tristate "aw36515 dual flash driver support"
+	depends on I2C && VIDEO_V4L2 && MEDIA_CONTROLLER
+	depends on MEDIA_CAMERA_SUPPORT
+	select REGMAP_I2C
+	help
+	  This is a driver for the aw36515 dual flash controllers. It controls
+	  flash, torch LEDs.
+
+	  Say Y here if you want a flashlight driver IC AW36515.
+	  Select this only if your board has this IC.
+	  Say M here if you want to compile this driver as a module.
+
+config MTK_VIDEO_AW36518_23660
+	tristate "AW36518_23660 flash driver support"
+	depends on I2C && VIDEO_V4L2 && MEDIA_CONTROLLER
+	depends on MEDIA_CAMERA_SUPPORT
+	select REGMAP_I2C
+	help
+	  This is a driver for the aw36518_23660 flash controllers. It controls
+	  flash, torch LEDs.
+
+	  Say M here if you want to compile this driver as a module.

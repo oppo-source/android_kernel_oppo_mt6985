@@ -88,6 +88,7 @@ struct mtk_disp_oddmr_data {
 	bool is_od_need_crop_garbage;
 	bool is_od_need_force_clk;
 	bool is_od_support_sec;
+	bool is_od_merge_lines;
 	int tile_overhead;
 	uint32_t dmr_buffer_size;
 	uint32_t odr_buffer_size;
@@ -96,6 +97,8 @@ struct mtk_disp_oddmr_data {
 };
 
 struct mtk_disp_oddmr_od_data {
+	uint32_t ln_offset;
+	uint32_t merge_lines;
 	int od_sram_read_sel;
 	int od_sram_table_idx[2];
 	/* TODO: sram 0,1 fixed pkg, need support sram1 update */
@@ -129,7 +132,11 @@ struct mtk_disp_oddmr {
 	struct mtk_disp_oddmr_dmr_data dmr_data;
 	struct mtk_disp_oddmr_cfg cfg;
 	atomic_t oddmr_clock_ref;
+	int od_enable_req;
 	int od_enable;
+	int od_enable_last;
+	int od_force_off;
+	int dmr_enable_req;
 	int dmr_enable;
 	unsigned int spr_enable;
 	unsigned int spr_relay;
@@ -150,6 +157,7 @@ struct mtk_disp_oddmr {
 	/* only use in pipe0 */
 	enum ODDMR_STATE od_state;
 	enum ODDMR_STATE dmr_state;
+	uint32_t od_user_gain;
 };
 
 int mtk_drm_ioctl_oddmr_load_param(struct drm_device *dev, void *data,

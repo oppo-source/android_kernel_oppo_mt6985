@@ -28,7 +28,7 @@
 #include "energy_model.h"
 
 
-#define __LKG_PROCFS__ 0
+#define __LKG_PROCFS__ 1
 #define __LKG_DEBUG__ 0
 
 static struct eemsn_log *eemsn_log;
@@ -37,6 +37,7 @@ struct mtk_em_perf_domain *pds;
 
 struct mtk_em_perf_domain *mtk_em_pd_ptr_public;
 struct mtk_em_perf_domain *mtk_em_pd_ptr_private;
+EXPORT_SYMBOL(mtk_em_pd_ptr_public);
 
 struct leakage_data info;
 static unsigned int total_cpu, total_cluster;
@@ -50,7 +51,7 @@ static unsigned int interpolate(unsigned int a, unsigned int b,
 	unsigned int j = y - b;
 	unsigned int l = r - a;
 
-	return j * l / i + b;
+	return ((i == 0) ? b : (j * l / i + b));
 }
 
 static unsigned int mtk_convert_dyn_pwr(unsigned int base_freq,

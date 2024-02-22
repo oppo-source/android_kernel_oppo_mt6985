@@ -73,14 +73,14 @@ enum gpufreq_posdiv {
 };
 
 enum gpufreq_dvfs_state {
-	DVFS_FREE       = 0,      /* 0000 0000 */
-	DVFS_DISABLE    = BIT(0), /* 0000 0001 */
-	DVFS_POWEROFF   = BIT(1), /* 0000 0010 */
-	DVFS_DEBUG_KEEP = BIT(2), /* 0000 0100 */
-	DVFS_AVS_KEEP   = BIT(3), /* 0000 1000 */
-	DVFS_AGING_KEEP = BIT(4), /* 0001 0000 */
-	DVFS_IDLE       = BIT(5), /* 0010 0000 */
-	DVFS_MSSV_TEST  = BIT(6), /* 0100 0000 */
+	DVFS_FREE          = 0,      /* 0000 0000 */
+	DVFS_DISABLE       = BIT(0), /* 0000 0001 */
+	DVFS_POWEROFF      = BIT(1), /* 0000 0010 */
+	DVFS_FIX_OPP       = BIT(2), /* 0000 0100 */
+	DVFS_FIX_FREQ_VOLT = BIT(3), /* 0000 1000 */
+	DVFS_AGING_KEEP    = BIT(4), /* 0001 0000 */
+	DVFS_SLEEP         = BIT(5), /* 0010 0000 */
+	DVFS_MSSV_TEST     = BIT(6), /* 0100 0000 */
 };
 
 enum gpufreq_target {
@@ -105,14 +105,15 @@ enum gpufreq_config_target {
 	CONFIG_DFD              = 5,
 	CONFIG_IMAX_STACK       = 6,
 	CONFIG_IMAX_SRAM        = 7,
-	CONFIG_DYN_STACK        = 8,
-	CONFIG_DYN_SRAM_GPU     = 9,
-	CONFIG_DYN_SRAM_STACK   = 10,
-	CONFIG_IPS              = 11,
-	CONFIG_OCL_TIMESTAMP    = 12,
-	CONFIG_FAKE_MTCMOS_CTRL = 13,
-	CONFIG_MCUETM_CLK       = 14,
-	CONFIG_PTP3             = 15,
+	CONFIG_PMAX_STACK       = 8,
+	CONFIG_DYN_STACK        = 9,
+	CONFIG_DYN_SRAM_GPU     = 10,
+	CONFIG_DYN_SRAM_STACK   = 11,
+	CONFIG_IPS              = 12,
+	CONFIG_OCL_TIMESTAMP    = 13,
+	CONFIG_FAKE_MTCMOS_CTRL = 14,
+	CONFIG_MCUETM_CLK       = 15,
+	CONFIG_PTP3             = 16,
 };
 
 enum gpufreq_config_value {
@@ -130,20 +131,22 @@ enum gpuppm_reserved_idx {
 };
 
 enum gpuppm_limiter {
-	LIMIT_SEGMENT      = 0,
-	LIMIT_DEBUG        = 1,
-	LIMIT_GPM3         = 2,
-	LIMIT_TEMPER_COMP  = 3,
-	LIMIT_THERMAL_AP   = 4,
-	LIMIT_THERMAL_EB   = 5,
-	LIMIT_SRAMRC       = 6,
-	LIMIT_BATT_OC      = 7,
-	LIMIT_BATT_PERCENT = 8,
-	LIMIT_LOW_BATT     = 9,
-	LIMIT_PBM          = 10,
-	LIMIT_APIBOOST     = 11,
-	LIMIT_FPSGO        = 12,
-	LIMIT_NUM          = 13,
+	LIMIT_SEGMENT       = 0,
+	LIMIT_DEBUG         = 1,
+	LIMIT_GPM3          = 2,
+	LIMIT_TEMPER_COMP   = 3,
+	LIMIT_PEAK_POWER_AP = 4,
+	LIMIT_PEAK_POWER_EB = 5,
+	LIMIT_THERMAL_AP    = 6,
+	LIMIT_THERMAL_EB    = 7,
+	LIMIT_SRAMRC        = 8,
+	LIMIT_BATT_OC       = 9,
+	LIMIT_BATT_PERCENT  = 10,
+	LIMIT_LOW_BATT      = 11,
+	LIMIT_PBM           = 12,
+	LIMIT_APIBOOST      = 13,
+	LIMIT_FPSGO         = 14,
+	LIMIT_NUM           = 15,
 };
 
 enum gpuppm_limit_type {
@@ -228,6 +231,7 @@ struct gpufreq_gpm3_info {
 	int ceiling;
 	unsigned int i_stack;
 	unsigned int i_sram;
+	unsigned int p_stack;
 };
 
 struct gpufreq_reg_info {
@@ -352,6 +356,7 @@ struct gpufreq_platform_fp {
 	void (*pdca_config)(enum gpufreq_power_state power);
 	void (*set_shared_status)(struct gpufreq_shared_status *shared_status);
 	int (*mssv_commit)(unsigned int target, unsigned int val);
+	void (*update_temperature)(unsigned int instant_dvfs);
 	/* GPU */
 	unsigned int (*get_cur_fgpu)(void);
 	unsigned int (*get_cur_vgpu)(void);

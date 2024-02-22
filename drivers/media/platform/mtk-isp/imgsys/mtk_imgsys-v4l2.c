@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/of_device.h>
 #include <linux/pm_runtime.h>
+#include <linux/clk-provider.h>
 #include <linux/remoteproc.h>
 #include <linux/suspend.h>
 #include <linux/rtc.h>
@@ -33,6 +34,7 @@
 #include "mtk_imgsys-probe.h"
 
 #define CLK_READY
+//#define IMG_CLK_CHECK
 
 static struct device *imgsys_pm_dev;
 
@@ -422,12 +424,16 @@ static void mtk_imgsys_vb2_buf_queue(struct vb2_buffer *vb)
 	struct vb2_v4l2_buffer *b = to_vb2_v4l2_buffer(vb);
 	struct mtk_imgsys_dev_buffer *dev_buf =
 					mtk_imgsys_vb2_buf_to_dev_buf(vb);
-	struct mtk_imgsys_request *req =
-				mtk_imgsys_media_req_to_imgsys_req(vb->request);
+	struct mtk_imgsys_request *req = NULL;
 	struct mtk_imgsys_video_device *node =
 					mtk_imgsys_vbq_to_node(vb->vb2_queue);
 	struct mtk_imgsys_pipe *pipe = vb2_get_drv_priv(vb->vb2_queue);
 	int buf_count;
+
+	if (!vb->request)
+		return;
+
+	req = mtk_imgsys_media_req_to_imgsys_req(vb->request);
 
 	dev_buf->dev_fmt = node->dev_q.dev_fmt;
 	//support std mode dynamic change buf info & fmt
@@ -697,13 +703,22 @@ static int mtk_imgsys_videoc_try_fmt(struct file *file, void *fh,
 	struct mtk_imgsys_video_device *node = mtk_imgsys_file_to_node(file);
 	const struct mtk_imgsys_dev_format *dev_fmt;
 	struct v4l2_format try_fmt;
+	unsigned int idx;
 
 	memset(&try_fmt, 0, sizeof(try_fmt));
 
 	dev_fmt = mtk_imgsys_pipe_find_fmt(pipe, node,
 					f->fmt.pix_mp.pixelformat);
 	if (!dev_fmt) {
-		dev_fmt = &node->desc->fmts[node->desc->default_fmt_idx];
+		idx = node->desc->default_fmt_idx;
+		if (idx >= node->desc->num_fmts) {
+			idx = 0;
+			dev_info(pipe->imgsys_dev->dev,
+				"%s:%s: invalid idx(%d), must < num_fmts(%d)\n",
+			__func__, node->desc->name, idx, node->desc->num_fmts);
+		}
+
+		dev_fmt = &node->desc->fmts[idx];
 		dev_dbg(pipe->imgsys_dev->dev,
 			"%s:%s:%s: dev_fmt(%d) not found, use default(%d)\n",
 			__func__, pipe->desc->name, node->desc->name,
@@ -732,6 +747,7 @@ static int mtk_imgsys_videoc_s_fmt(struct file *file, void *fh,
 	struct mtk_imgsys_video_device *node = mtk_imgsys_file_to_node(file);
 	struct mtk_imgsys_pipe *pipe = video_drvdata(file);
 	const struct mtk_imgsys_dev_format *dev_fmt;
+	unsigned int idx;
 
 	if (pipe->streaming || vb2_is_busy(&node->dev_q.vbq))
 		return -EBUSY;
@@ -739,7 +755,15 @@ static int mtk_imgsys_videoc_s_fmt(struct file *file, void *fh,
 	dev_fmt = mtk_imgsys_pipe_find_fmt(pipe, node,
 					f->fmt.pix_mp.pixelformat);
 	if (!dev_fmt) {
-		dev_fmt = &node->desc->fmts[node->desc->default_fmt_idx];
+		idx = node->desc->default_fmt_idx;
+		if (idx >= node->desc->num_fmts) {
+			idx = 0;
+			dev_info(pipe->imgsys_dev->dev,
+				"%s:%s: invalid idx(%d), must < num_fmts(%d)\n",
+			__func__, node->desc->name, idx, node->desc->num_fmts);
+		}
+
+		dev_fmt = &node->desc->fmts[idx];
 		dev_dbg(pipe->imgsys_dev->dev,
 			"%s:%s:%s: dev_fmt(%d) not found, use default(%d)\n",
 			__func__, pipe->desc->name, node->desc->name,
@@ -842,21 +866,28 @@ static int mtk_imgsys_videoc_s_meta_fmt(struct file *file, void *fh,
 	struct mtk_imgsys_video_device *node = mtk_imgsys_file_to_node(file);
 	struct mtk_imgsys_pipe *pipe = video_drvdata(file);
 	const struct mtk_imgsys_dev_format *dev_fmt;
+	unsigned int idx;
 
 	if (pipe->streaming || vb2_is_busy(&node->dev_q.vbq))
 		return -EBUSY;
 
 	dev_fmt = mtk_imgsys_pipe_find_fmt(pipe, node,
 						f->fmt.meta.dataformat);
+	if (!dev_fmt) {
+		idx = node->desc->default_fmt_idx;
+		if (idx >= node->desc->num_fmts) {
+			idx = 0;
+			dev_info(pipe->imgsys_dev->dev,
+				"%s:%s: invalid idx(%d), must < num_fmts(%d)\n",
+			__func__, node->desc->name, idx, node->desc->num_fmts);
+		}
 
-		if (!dev_fmt) {
-			dev_fmt =
-				&node->desc->fmts[node->desc->default_fmt_idx];
+		dev_fmt = &node->desc->fmts[idx];
 			dev_info(pipe->imgsys_dev->dev,
 				"%s:%s:%s: dev_fmt(%d) not found, use default(%d)\n",
 				__func__, pipe->desc->name, node->desc->name,
 				f->fmt.meta.dataformat, dev_fmt->format);
-		}
+	}
 
 	memset(&node->vdev_fmt, 0, sizeof(node->vdev_fmt));
 
@@ -905,15 +936,19 @@ static int mtk_imgsys_vidioc_qbuf(struct file *file, void *priv,
 	struct mtk_imgsys_video_device *node = mtk_imgsys_file_to_node(file);
 	struct vb2_buffer *vb;
 	struct mtk_imgsys_dev_buffer *dev_buf;
+	int ret = 0;
+#ifdef DYNAMIC_FMT
 	struct buf_info dyn_buf_info;
-	int ret = 0, i = 0;
+	int i = 0;
 	unsigned long user_ptr = 0;
-	struct mtk_imgsys_request *imgsys_req;
-	struct media_request *req;
 #ifndef USE_V4L2_FMT
 	struct v4l2_plane_pix_format *vfmt;
 	struct plane_pix_format *bfmt;
 #endif
+#endif
+	struct mtk_imgsys_request *imgsys_req;
+	struct media_request *req;
+
 	if ((buf->index >= VB2_MAX_FRAME) || (buf->index < 0)) {
 		dev_info(pipe->imgsys_dev->dev, "[%s] error vb2 index %d\n", __func__, buf->index);
 		return -EINVAL;
@@ -929,10 +964,16 @@ static int mtk_imgsys_vidioc_qbuf(struct file *file, void *priv,
 
 	//support dynamic change size&fmt for std mode flow
 	req = media_request_get_by_fd(&pipe->imgsys_dev->mdev, buf->request_fd);
+	if (IS_ERR(req)) {
+		dev_info(pipe->imgsys_dev->dev, "%s: invalid request_fd\n", __func__);
+		return PTR_ERR(req);
+	}
+
 	imgsys_req = mtk_imgsys_media_req_to_imgsys_req(req);
 	imgsys_req->tstate.time_qbuf = ktime_get_boottime_ns()/1000;
 	media_request_put(req);
 	if (!is_desc_fmt(node->dev_q.dev_fmt)) {
+#ifdef DYNAMIC_FMT
 		user_ptr =
 			(((unsigned long)(buf->m.planes[0].reserved[0]) << 32) |
 			((unsigned long)buf->m.planes[0].reserved[1]));
@@ -1005,6 +1046,7 @@ static int mtk_imgsys_vidioc_qbuf(struct file *file, void *priv,
 				dev_buf->compose = node->compose;
 			}
 		}
+#endif
 	} else {
 		dev_dbg(pipe->imgsys_dev->dev,
 			"[%s]%s:%s: no need to cache bufinfo,videonode fmt is DESC or SingleDevice(%d)!\n",
@@ -1734,6 +1776,7 @@ static int mtkdip_ioc_del_iova(struct v4l2_subdev *subdev, void *arg)
 		dmabuf = dma_buf_get(fd);
 		if (IS_ERR(dmabuf))
 			continue;
+		mutex_lock(&pipe->iova_cache.mlock);
 		list_for_each_entry_safe(iova_info, tmp,
 					&pipe->iova_cache.list, list_entry) {
 
@@ -1751,6 +1794,7 @@ static int mtkdip_ioc_del_iova(struct v4l2_subdev *subdev, void *arg)
 			spin_unlock(&pipe->iova_cache.lock);
 			vfree(iova_info);
 		}
+		mutex_unlock(&pipe->iova_cache.mlock);
 		fd_info.fds_size[i] = dmabuf->size;
 		dma_buf_put(dmabuf);
 
@@ -2644,6 +2688,7 @@ static bool mtk_imgsys_idle(struct device *dev)
 	if (pipe->streaming || num)
 		idle = false;
 
+	dev_dbg(dev, "%s: [imgclk_dbg] idle(%d)\n", __func__, idle);
 	return idle;
 }
 
@@ -2653,6 +2698,7 @@ int __maybe_unused mtk_imgsys_pm_suspend(struct device *dev)
 	int ret, num;
 	bool idle = true;
 
+	dev_dbg(dev, "%s: [imgclk_dbg] pm_suspend\n", __func__);
 	ret = wait_event_timeout
 		(imgsys_dev->flushing_waitq, (idle = mtk_imgsys_idle(dev)),
 		 msecs_to_jiffies(1000 / 30 * DIP_COMPOSING_MAX_NUM * 3));
@@ -2678,6 +2724,7 @@ int __maybe_unused mtk_imgsys_pm_suspend(struct device *dev)
 		return NOTIFY_BAD;
 	}
 #endif
+	dev_dbg(dev, "%s: [imgclk_dbg] return NOTIFY_DONE\n", __func__);
 	return NOTIFY_DONE;
 }
 
@@ -2699,6 +2746,7 @@ int __maybe_unused mtk_imgsys_pm_resume(struct device *dev)
 		return NOTIFY_BAD;
 	}
 #endif
+	dev_dbg(dev, "%s: [imgclk_dbg] pm_resume\n", __func__);
 	return NOTIFY_DONE;
 }
 
@@ -2961,6 +3009,25 @@ bypass_larbs:
 		return ret;
 	}
 #endif
+	//isp_main pd cb
+	dev_dbg(imgsys_dev->dev, "%s: isp_main pd cb +\n", __func__);
+	if (data && data->clk_check) {
+		ret = data->clk_check(imgsys_dev);
+		if (ret) {
+			dev_info(&pdev->dev, "gen pd add notifier fail(%d)\n", ret);
+			return ret;
+		}
+	}
+	dev_dbg(imgsys_dev->dev, "%s: isp_main pd cb -\n", __func__);
+#ifdef IMG_CLK_CHECK
+	//imgsys_clk onoff debug
+	for (i = 0; i < imgsys_dev->num_clks; i++) {
+		if (__clk_is_enabled(imgsys_dev->clks[i].clk))
+			dev_dbg(imgsys_dev->dev, "%s: [imgclk_dbg](%d) on\n", __func__, i);
+		else
+			dev_dbg(imgsys_dev->dev, "%s: [imgclk_dbg](%d) off\n", __func__, i);
+	}
+#endif
 	return 0;
 
 err_release_deinit_v4l2:
@@ -2993,15 +3060,35 @@ EXPORT_SYMBOL(mtk_imgsys_remove);
 int mtk_imgsys_runtime_suspend(struct device *dev)
 {
 	struct mtk_imgsys_dev *imgsys_dev = dev_get_drvdata(dev);
+#ifdef IMG_CLK_CHECK
+	int i;
+#endif
 
 #if MTK_CM4_SUPPORT
 	rproc_shutdown(imgsys_dev->rproc_handle);
 #endif
 
+#ifdef IMG_CLK_CHECK
+	//imgsys_clk onoff debug
+	for (i = 0; i < imgsys_dev->num_clks; i++) {
+		if (__clk_is_enabled(imgsys_dev->clks[i].clk))
+			dev_dbg(dev, "%s: + [imgclk_dbg](%d) on\n", __func__, i);
+		else
+			dev_dbg(dev, "%s: + [imgclk_dbg](%d) off\n", __func__, i);
+	}
+#endif
 	clk_bulk_disable_unprepare(imgsys_dev->num_clks,
 				   imgsys_dev->clks);
-
-	dev_dbg(dev, "%s: disabled imgsys clks\n", __func__);
+#ifdef IMG_CLK_CHECK
+	//imgsys_clk onoff debug
+	for (i = 0; i < imgsys_dev->num_clks; i++) {
+		if (__clk_is_enabled(imgsys_dev->clks[i].clk))
+			dev_dbg(dev, "%s: - [imgclk_dbg](%d) on\n", __func__, i);
+		else
+			dev_dbg(dev, "%s: - [imgclk_dbg](%d) off\n", __func__, i);
+	}
+#endif
+	dev_info(dev, "%s: disabled imgsys clks\n", __func__);
 
 	return 0;
 }
@@ -3011,9 +3098,30 @@ int mtk_imgsys_runtime_resume(struct device *dev)
 {
 	struct mtk_imgsys_dev *imgsys_dev = dev_get_drvdata(dev);
 	int ret;
+#ifdef IMG_CLK_CHECK
+	int i;
+#endif
 
+#ifdef IMG_CLK_CHECK
+	//imgsys_clk onoff debug
+	for (i = 0; i < imgsys_dev->num_clks; i++) {
+		if (__clk_is_enabled(imgsys_dev->clks[i].clk))
+			dev_dbg(dev, "%s: + [imgclk_dbg](%d) on\n", __func__, i);
+		else
+			dev_dbg(dev, "%s: + [imgclk_dbg](%d) off\n", __func__, i);
+	}
+#endif
 	ret = clk_bulk_prepare_enable(imgsys_dev->num_clks,
 				      imgsys_dev->clks);
+#ifdef IMG_CLK_CHECK
+	//imgsys_clk onoff debug
+	for (i = 0; i < imgsys_dev->num_clks; i++) {
+		if (__clk_is_enabled(imgsys_dev->clks[i].clk))
+			dev_dbg(dev, "%s: - [imgclk_dbg](%d) on\n", __func__, i);
+		else
+			dev_dbg(dev, "%s: - [imgclk_dbg](%d) off\n", __func__, i);
+	}
+#endif
 	if (ret) {
 		dev_info(imgsys_dev->dev,
 			"%s: failed to enable dip clks(%d)\n",
@@ -3021,7 +3129,7 @@ int mtk_imgsys_runtime_resume(struct device *dev)
 		return ret;
 	}
 
-	dev_dbg(dev, "%s: enabled imgsys clks\n", __func__);
+	dev_info(dev, "%s: enabled imgsys clks\n", __func__);
 
 #if MTK_CM4_SUPPORT
 	ret = rproc_boot(imgsys_dev->rproc_handle);

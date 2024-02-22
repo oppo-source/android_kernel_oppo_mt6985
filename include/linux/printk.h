@@ -6,7 +6,6 @@
 #include <linux/init.h>
 #include <linux/kern_levels.h>
 #include <linux/linkage.h>
-#include <linux/cache.h>
 #include <linux/ratelimit_types.h>
 #include <linux/once_lite.h>
 
@@ -23,6 +22,7 @@ void set_printk_uart_status(int value);
 
 
 #if defined(CONFIG_MTK_PRINTK_DEBUG)
+#include <linux/cache.h>
 #ifndef KBUILD_MODNAME
 #define KBUILD_MODNAME "unknown module"
 #endif

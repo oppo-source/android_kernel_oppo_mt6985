@@ -662,6 +662,10 @@ static int rt_pd_manager_probe(struct platform_device *pdev)
 	if (ret < 0) {
 		dev_notice(rpmd->dev, "%s init typec fail(%d)\n",
 				      __func__, ret);
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+		ret = -EPROBE_DEFER;
+#endif
 		goto err_init_typec;
 	}
 

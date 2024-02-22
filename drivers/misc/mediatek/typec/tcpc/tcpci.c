@@ -216,6 +216,39 @@ int tcpci_init(struct tcpc_device *tcpc, bool sw_reset)
 }
 EXPORT_SYMBOL(tcpci_init);
 
+int tcpci_update_local_cc(struct tcpc_device *tcpc, int pull)
+{
+#ifdef CONFIG_USB_PD_DBG_ALWAYS_LOCAL_RP
+	if (pull == TYPEC_CC_RP)
+		pull = tcpc->typec_local_rp_level;
+#endif /* CONFIG_USB_PD_DBG_ALWAYS_LOCAL_RP */
+
+#if CONFIG_TYPEC_CHECK_LEGACY_CABLE
+	if (pull == TYPEC_CC_DRP && tcpc->typec_legacy_cable) {
+#if CONFIG_TYPEC_CHECK_LEGACY_CABLE2
+		if (tcpc->typec_legacy_cable == 2)
+			pull = TYPEC_CC_RP;
+		else if (tcpc->typec_legacy_retry_wk > 1)
+			pull = TYPEC_CC_RP_3_0;
+		else
+#endif	/* CONFIG_TYPEC_CHECK_LEGACY_CABLE2 */
+			pull = TYPEC_CC_RP_1_5;
+		TCPC_DBG2("LC->Toggling (%d)\r\n", pull);
+	}
+#endif /* CONFIG_TYPEC_CHECK_LEGACY_CABLE */
+
+	if (pull & TYPEC_CC_DRP) {
+		tcpc->typec_remote_cc[0] =
+			TYPEC_CC_DRP_TOGGLING;
+		tcpc->typec_remote_cc[1] =
+			TYPEC_CC_DRP_TOGGLING;
+	}
+
+	tcpc->typec_local_cc = pull;
+	return 0;
+}
+EXPORT_SYMBOL(tcpci_update_local_cc);
+
 int tcpci_init_alert_mask(struct tcpc_device *tcpc)
 {
 	if (tcpc->ops->init_alert_mask)
@@ -487,6 +520,48 @@ int tcpci_notify_wd0_state(struct tcpc_device *tcpc, bool wd0_state)
 }
 EXPORT_SYMBOL(tcpci_notify_wd0_state);
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+/* oplus charge add for uvlo */
+int tcpci_notify_chrdet_state(struct tcpc_device *tcpc, bool chrdet_state)
+{
+	struct tcp_notify tcp_noti;
+
+	tcp_noti.chrdet_state.chrdet = chrdet_state;
+
+	pr_err("%s chrdet: %d\n", __func__, chrdet_state);
+	TCPC_DBG("chrdet: %d\n", chrdet_state);
+	return tcpc_check_notify_time(tcpc, &tcp_noti, TCP_NOTIFY_IDX_MISC,
+					TCP_NOTIFY_CHRDET_STATE);
+}
+EXPORT_SYMBOL(tcpci_notify_chrdet_state);
+
+int tcpci_notify_bc12_complete_state(struct tcpc_device *tcpc, bool bc12_complete_state)
+{
+	struct tcp_notify tcp_noti;
+
+	tcp_noti.bc12_complete_state.bc12_complete = bc12_complete_state;
+
+	pr_err("%s bc12_complete_state: %d\n", __func__, bc12_complete_state);
+	TCPC_DBG("bc12_complete_state: %d\n", bc12_complete_state);
+	return tcpc_check_notify_time(tcpc, &tcp_noti, TCP_NOTIFY_IDX_MISC,
+					TCP_NOTIFY_BC12_COMPLETE_STATE);
+}
+EXPORT_SYMBOL(tcpci_notify_bc12_complete_state);
+
+int tcpci_notify_hvdcp_detect_dn(struct tcpc_device *tcpc, bool hvdcp_detect_dn)
+{
+	struct tcp_notify tcp_noti;
+
+	tcp_noti.hvdcp_detect.hvdcp_detect_dn = hvdcp_detect_dn;
+
+	pr_err("%s hvdcp_detect_dn: %d\n", __func__, hvdcp_detect_dn);
+	TCPC_DBG("hvdcp_detect_dn: %d\n", hvdcp_detect_dn);
+	return tcpc_check_notify_time(tcpc, &tcp_noti, TCP_NOTIFY_IDX_MISC,
+					TCP_NOTIFY_HVDCP_DETECT_DN);
+}
+EXPORT_SYMBOL(tcpci_notify_hvdcp_detect_dn);
+#endif
+
 int tcpci_notify_plug_out(struct tcpc_device *tcpc)
 {
 	struct tcp_notify tcp_noti;
@@ -518,6 +593,30 @@ int tcpci_set_otp_fwen(struct tcpc_device *tcpc, bool en)
 	return rv;
 }
 EXPORT_SYMBOL(tcpci_set_otp_fwen);
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+int tcpci_notify_switch_get_state(struct tcpc_device *tcpc, bool (*pfunc)(int))
+{
+	struct tcp_notify tcp_noti;
+
+	tcp_noti.switch_get_status.pfunc = pfunc;
+	return tcpc_check_notify_time(tcpc, &tcp_noti, TCP_NOTIFY_IDX_MISC,
+				TCP_NOTIFY_SWITCH_GET_STATE);
+}
+EXPORT_SYMBOL(tcpci_notify_switch_get_state);
+
+int tcpci_notify_switch_set_state(struct tcpc_device *tcpc, bool state, bool (*pfunc)(int))
+{
+	struct tcp_notify tcp_noti;
+
+	tcp_noti.switch_set_status.state = state;
+	tcp_noti.switch_set_status.pfunc = pfunc;
+	pr_err("%s state: %d\n", __func__, state);
+	return tcpc_check_notify_time(tcpc, &tcp_noti, TCP_NOTIFY_IDX_MISC,
+			TCP_NOTIFY_SWITCH_SET_STATE);
+}
+EXPORT_SYMBOL(tcpci_notify_switch_set_state);
+#endif
 
 #if IS_ENABLED(CONFIG_USB_POWER_DELIVERY)
 

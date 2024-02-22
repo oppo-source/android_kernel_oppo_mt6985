@@ -113,6 +113,14 @@ extern void get_most_powerful_pd_and_util_Th(void);
 #define EAS_SBB_TASK_SET			_IOW('g', 16,  unsigned int)
 #define EAS_SBB_TASK_UNSET			_IOW('g', 17,  unsigned int)
 #define EAS_SBB_ACTIVE_RATIO		_IOW('g', 18,  unsigned int)
+#define EAS_SET_TASK_IDLE_PREFER	_IOW('g', 19,  unsigned int)
+#define EAS_UTIL_EST_CONTROL		_IOW('g', 20,  unsigned int)
+#define EAS_TURN_POINT_UTIL_C0		_IOW('g', 21,  unsigned int)
+#define EAS_TARGET_MARGIN_C0		_IOW('g', 22,  unsigned int)
+#define EAS_TURN_POINT_UTIL_C1		_IOW('g', 23,  unsigned int)
+#define EAS_TARGET_MARGIN_C1		_IOW('g', 24,  unsigned int)
+#define EAS_TURN_POINT_UTIL_C2		_IOW('g', 25,  unsigned int)
+#define EAS_TARGET_MARGIN_C2		_IOW('g', 26,  unsigned int)
 
 #if IS_ENABLED(CONFIG_MTK_NEWIDLE_BALANCE)
 extern void mtk_sched_newidle_balance(void *data, struct rq *this_rq,
@@ -134,6 +142,7 @@ extern void rotat_task_newtask(void __always_unused *data, struct task_struct *p
 				unsigned long clone_flags);
 #endif
 extern bool check_freq_update_for_time(struct update_util_data *hook, u64 time);
+extern bool check_freq_update_for_time_uag(struct update_util_data *hook, u64 time);
 extern void mtk_hook_after_enqueue_task(void *data, struct rq *rq,
 				struct task_struct *p, int flags);
 extern void mtk_select_task_rq_rt(void *data, struct task_struct *p, int cpu, int sd_flag,
@@ -153,5 +162,12 @@ extern void sched_pause_init(void);
 #else
 #define cpu_paused(cpu) 0
 #endif
+
+extern int set_target_margin(int gearid, int margin);
+extern int set_turn_point_freq(int gearid, unsigned long turn_freq);
+extern int set_util_est_ctrl(bool enable);
+extern int set_task_idle_prefer(int pid, bool prefer);
+extern bool get_task_idle_prefer_by_pid(int pid);
+extern bool get_task_idle_prefer_by_task(struct task_struct *task);
 
 #endif

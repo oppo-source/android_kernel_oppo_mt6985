@@ -149,6 +149,7 @@ snd-soc-mt6359-objs := mt6359.o
 snd-soc-mt6359-accdet-objs := mt6359-accdet.o
 snd-soc-mt6660-objs := mt6660.o
 snd-soc-mt6368-objs := mt6368.o
+snd-soc-mt6377-objs := mt6377.o
 snd-soc-mt6359p-accdet-objs := mt6359p-accdet.o
 snd-soc-nau8315-objs := nau8315.o
 snd-soc-nau8540-objs := nau8540.o
@@ -483,6 +484,8 @@ obj-$(CONFIG_SND_SOC_MT6359P)	+= snd-soc-mt6359.o
 obj-$(CONFIG_SND_SOC_MT6359P_ACCDET) += mt6359p-accdet.o
 obj-$(CONFIG_SND_SOC_MT6368_ACCDET) += mt6368-accdet.o
 obj-$(CONFIG_SND_SOC_MT6368)	+= snd-soc-mt6368.o
+obj-$(CONFIG_SND_SOC_MT6377_ACCDET) += mt6377-accdet.o
+obj-$(CONFIG_SND_SOC_MT6377)	+= snd-soc-mt6377.o
 obj-$(CONFIG_SND_SOC_NAU8315)   += snd-soc-nau8315.o
 obj-$(CONFIG_SND_SOC_NAU8540)   += snd-soc-nau8540.o
 obj-$(CONFIG_SND_SOC_NAU8810)   += snd-soc-nau8810.o
@@ -577,7 +580,7 @@ obj-$(CONFIG_SND_SOC_TAS5720)	+= snd-soc-tas5720.o
 obj-$(CONFIG_SND_SOC_TAS6424)	+= snd-soc-tas6424.o
 obj-$(CONFIG_SND_SOC_TDA7419)	+= snd-soc-tda7419.o
 obj-$(CONFIG_SND_SOC_TAS2770) += snd-soc-tas2770.o
-obj-$(CONFIG_SND_SOC_TFA9874)	+= tfa98xx/
+#obj-$(CONFIG_SND_SOC_TFA9874)	+= tfa98xx/
 obj-$(CONFIG_SND_SOC_TFA9879)	+= snd-soc-tfa9879.o
 obj-$(CONFIG_SND_SOC_TFA989X)	+= snd-soc-tfa989x.o
 obj-$(CONFIG_SND_SOC_TLV320AIC23)	+= snd-soc-tlv320aic23.o
@@ -681,3 +684,5 @@ obj-$(CONFIG_SND_SOC_LPASS_TX_MACRO)	+= snd-soc-lpass-tx-macro.o
 
 # Mux
 obj-$(CONFIG_SND_SOC_SIMPLE_MUX)	+= snd-soc-simple-mux.o
+
+obj-m	+= audio/

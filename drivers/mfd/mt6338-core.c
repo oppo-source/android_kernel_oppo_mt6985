@@ -17,6 +17,10 @@
 bool mt6338_probe_done;
 EXPORT_SYMBOL_GPL(mt6338_probe_done);
 
+#ifndef OPLUS_ARCH_EXTENDS
+#define OPLUS_ARCH_EXTENDS
+#endif
+
 #define MT6338_MFD_CELL(_name)					\
 	{							\
 		.name = #_name,					\
@@ -73,8 +77,13 @@ void mt6338_Keyunlock(struct mt6338_pmic_info *mpi)
 	regmap_write(mpi->regmap, MT6338_TOP_DIG_WPK_H, 0x63);
 	regmap_write(mpi->regmap, MT6338_TOP_TMA_KEY, 0xc7);
 	regmap_write(mpi->regmap, MT6338_TOP_TMA_KEY_H, 0x9c);
+#ifdef OPLUS_ARCH_EXTENDS
+	regmap_write(mpi->regmap, MT6338_TOP2_ELR2, mpi->scl_drv);
+	regmap_write(mpi->regmap, MT6338_TOP2_ELR3, mpi->sda_drv);
+#else
 	regmap_write(mpi->regmap, MT6338_TOP2_ELR2, 0x2a);
 	regmap_write(mpi->regmap, MT6338_TOP2_ELR3, 0x2a);
+#endif
 }
 
 void mt6338_Keylock(struct mt6338_pmic_info *mpi)
@@ -143,6 +152,47 @@ void mt6338_Suspend_Setting(struct mt6338_pmic_info *mpi)
 	regmap_write(mpi->regmap, MT6338_DA_INTF_STTING1, 0x66);
 	regmap_write(mpi->regmap, MT6338_DA_INTF_STTING1, 0x76);
 }
+
+#ifdef OPLUS_ARCH_EXTENDS
+static int mt6338_pmic_parse_dt(struct mt6338_pmic_info *mpi)
+{
+	int ret, val;
+	int i2c_drv_mux[2];
+	struct device *dev = mpi->dev;
+	struct device_node *np;
+
+	np = of_get_child_by_name(dev->of_node, "mt6338_pmic");
+	if (!np)
+		dev_info(dev, "%s() failed dev->parent->of_node %s\n",
+			 __func__, dev_name(dev));
+
+	/* get driving value */
+	ret = of_property_read_u32_array(dev->of_node, "mediatek,i2c-driving",
+					 i2c_drv_mux, ARRAY_SIZE(i2c_drv_mux));
+	if (ret) {
+		dev_info(dev, "%s() failed to read i2c-driving, default 0xa\n",
+			 __func__);
+		mpi->scl_drv = 0x2a;
+		mpi->sda_drv = 0x2a;
+	} else {
+		dev_info(dev, "%s() , i2c_drv_mux[0] = %d, i2c_drv_mux[1] = %d\n",
+			__func__, i2c_drv_mux[0], i2c_drv_mux[1]);
+		/* get i2c clk driving */
+		val = i2c_drv_mux[0];
+		if (val < ARRAY_SIZE(i2c_drv))
+			mpi->scl_drv = i2c_drv[val];
+		/* get i2c data driving */
+		val = i2c_drv_mux[1];
+		if (val < ARRAY_SIZE(i2c_drv))
+			mpi->sda_drv = i2c_drv[val];
+
+		dev_info(dev, "%s() , mpi->scl_drv = %#x, mpi->sda_drv = %#x\n",
+			__func__, mpi->scl_drv, mpi->sda_drv);
+	}
+
+	return 0;
+}
+#endif
 
 void mt6338_InitSetting(struct mt6338_pmic_info *mpi)
 {
@@ -217,6 +267,14 @@ static int mt6338_pmic_probe(struct i2c_client *client,
 		goto out;
 	}
 	dev_info(&client->dev, "execute InitSetting\n");
+
+#ifdef OPLUS_ARCH_EXTENDS
+	ret = mt6338_pmic_parse_dt(mpi);
+	if (ret) {
+		dev_info(&client->dev,
+			 "%s() fail to parse dts: %d\n", __func__, ret);
+	}
+#endif
 
 	/* initial setting */
 	mt6338_Keyunlock(mpi);

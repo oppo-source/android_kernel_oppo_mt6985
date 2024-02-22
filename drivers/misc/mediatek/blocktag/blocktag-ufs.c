@@ -140,7 +140,7 @@ void mtk_btag_ufs_send_command(__u16 task_id, struct scsi_cmnd *cmd)
 
 	ctx->q_depth++;
 	mtk_btag_mictx_update(ufs_mtk_btag, BTAG_UFS_QUEUE_ID(task_id),
-			      ctx->q_depth, ctx->sum_of_inflight_start);
+			      ctx->q_depth, ctx->sum_of_inflight_start, 0);
 
 	spin_unlock_irqrestore(&ctx->lock, flags);
 }
@@ -152,7 +152,14 @@ __u16 mtk_btag_ufs_mictx_eval_wqd(struct mtk_btag_mictx_data *data,
 	__u64 compl = data->weighted_qd;
 	__u64 inflight = t_cur * data->q_depth - data->sum_of_inflight_start;
 	__u64 dur = t_cur - data->window_begin;
-
+	/*check dur window, return default depth if dur is 0*/
+	if (dur == 0) {
+		pr_notice("[BLOCK_TAG] %s: dur is %llu, t_cur is %llu, weighted_qd is %llu, q_depth is %llu, sum_of_inflight_start is %llu, window_begin is %llu\n",
+			       __func__, dur, t_cur, data->weighted_qd,
+			       data->q_depth, data->sum_of_inflight_start,
+			       data->window_begin);
+		return data->q_depth;
+	}
 	return DIV64_U64_ROUND_UP(compl + inflight, dur);
 }
 
@@ -179,7 +186,7 @@ void mtk_btag_ufs_transfer_req_compl(__u16 task_id, unsigned long req_mask)
 	tsk->t[tsk_req_compl] = sched_clock();
 
 	if (tsk->cmd == READ_6 || tsk->cmd == READ_10 ||
-	    tsk->cmd == READ_16) {
+	    tsk->cmd == READ_16 || tsk->cmd == UFSHPB_READ) {
 		write = false;
 		tp = &ctx->throughput.r;
 	} else if (tsk->cmd == WRITE_6 || tsk->cmd == WRITE_10 ||
@@ -208,7 +215,7 @@ void mtk_btag_ufs_transfer_req_compl(__u16 task_id, unsigned long req_mask)
 	else
 		ctx->q_depth--;
 	mtk_btag_mictx_update(ufs_mtk_btag, BTAG_UFS_QUEUE_ID(task_id),
-			      ctx->q_depth, ctx->sum_of_inflight_start);
+			      ctx->q_depth, ctx->sum_of_inflight_start, 1);
 	mtk_btag_mictx_accumulate_weight_qd(ufs_mtk_btag,
 					    BTAG_UFS_QUEUE_ID(task_id),
 					    tsk->t[tsk_send_cmd],
@@ -220,6 +227,24 @@ void mtk_btag_ufs_transfer_req_compl(__u16 task_id, unsigned long req_mask)
 	spin_unlock_irqrestore(&ctx->lock, flags);
 }
 EXPORT_SYMBOL_GPL(mtk_btag_ufs_transfer_req_compl);
+
+/* evaluate throughput and workload of given context */
+static void mtk_btag_ufs_ctx_eval(struct mtk_btag_ufs_ctx *ctx)
+{
+	__u64 period;
+
+	ctx->workload.usage = ctx->period_usage;
+
+	if (ctx->workload.period > (ctx->workload.usage * 100)) {
+		ctx->workload.percent = 1;
+	} else {
+		period = ctx->workload.period;
+		DIV64_U64_ROUND_UP(period, 100);
+		ctx->workload.percent =
+			(__u32)ctx->workload.usage / (__u32)period;
+	}
+	mtk_btag_throughput_eval(&ctx->throughput);
+}
 
 /* print context to trace ring buffer */
 static void mtk_btag_ufs_work(struct work_struct *work)
@@ -241,26 +266,23 @@ static void mtk_btag_ufs_work(struct work_struct *work)
 			spin_unlock_irqrestore(&rt->lock, flags);
 			break;
 		}
-
 		memset(tr, 0, sizeof(struct mtk_btag_trace));
-		tr->pid = 0;
-		tr->qid = idx;
+		tr->flags |= BTAG_TR_NOCLEAR;
+		spin_unlock_irqrestore(&rt->lock, flags);
 
-		ctx = mtk_btag_ufs_curr_ctx(idx);
-		if (!ctx) {
-			spin_unlock_irqrestore(&rt->lock, flags);
-			break;
-		}
-
-		spin_lock(&ctx->lock);
+		ctx = &((struct mtk_btag_ufs_ctx *)BTAG_CTX(ufs_mtk_btag))[idx];
+		spin_lock_irqsave(&ctx->lock, flags);
 		time = sched_clock();
 		if (time - ctx->period_start_t < BTAG_UFS_TRACE_LATENCY) {
-			spin_unlock(&ctx->lock);
-			spin_unlock_irqrestore(&rt->lock, flags);
+			spin_unlock_irqrestore(&ctx->lock, flags);
 			continue;
 		}
+		ctx->workload.period = time - ctx->period_start_t;
 
+		tr->pid = 0;
+		tr->qid = idx;
 		tr->time = time;
+		mtk_btag_ufs_ctx_eval(ctx);
 		mtk_btag_pidlog_eval(&tr->pidlog, &ctx->pidlog);
 		mtk_btag_vmstat_eval(&tr->vmstat);
 		mtk_btag_cpu_eval(&tr->cpu);
@@ -273,29 +295,17 @@ static void mtk_btag_ufs_work(struct work_struct *work)
 		ctx->period_usage = 0;
 		memset(&ctx->throughput, 0, sizeof(struct mtk_btag_throughput));
 		memset(&ctx->workload, 0, sizeof(struct mtk_btag_workload));
-		spin_unlock(&ctx->lock);
+		spin_unlock_irqrestore(&ctx->lock, flags);
 
-		mtk_btag_next_trace(rt);
+		spin_lock_irqsave(&rt->lock, flags);
+		if (tr->flags & BTAG_TR_NOCLEAR) {
+			tr->flags |= BTAG_TR_READY;
+			mtk_btag_next_trace(rt);
+		} else {
+			memset(tr, 0, sizeof(struct mtk_btag_trace));
+		}
 		spin_unlock_irqrestore(&rt->lock, flags);
 	}
-}
-
-/* evaluate throughput and workload of given context */
-static void mtk_btag_ufs_ctx_eval(struct mtk_btag_ufs_ctx *ctx)
-{
-	__u64 period;
-
-	ctx->workload.usage = ctx->period_usage;
-
-	if (ctx->workload.period > (ctx->workload.usage * 100)) {
-		ctx->workload.percent = 1;
-	} else {
-		period = ctx->workload.period;
-		do_div(period, 100);
-		ctx->workload.percent =
-			(__u32)ctx->workload.usage / (__u32)period;
-	}
-	mtk_btag_throughput_eval(&ctx->throughput);
 }
 
 static void mtk_btag_ufs_ctx_count_usage(struct mtk_btag_ufs_ctx *ctx,
@@ -336,7 +346,6 @@ void mtk_btag_ufs_check(__u16 task_id, unsigned long req_mask)
 	if (period_time >= BTAG_UFS_TRACE_LATENCY) {
 		ctx->period_end_t = end_time;
 		ctx->workload.period = period_time;
-		mtk_btag_ufs_ctx_eval(ctx);
 		queue_work(ufs_mtk_btag_wq, &ufs_mtk_btag_worker);
 	}
 	spin_unlock_irqrestore(&ctx->lock, flags);
@@ -412,7 +421,8 @@ int mtk_btag_ufs_init(struct ufs_mtk_host *host)
 	if (hba_priv->is_mcq_enabled)
 		max_queue = hba_priv->mcq_nr_hw_queue;
 
-	ufs_mtk_btag_wq = alloc_workqueue("ufs_mtk_btag", WQ_FREEZABLE, 1);
+	ufs_mtk_btag_wq = alloc_workqueue("ufs_mtk_btag",
+			WQ_FREEZABLE | WQ_UNBOUND, 1);
 	INIT_WORK(&ufs_mtk_btag_worker, mtk_btag_ufs_work);
 
 	btag = mtk_btag_alloc("ufs",

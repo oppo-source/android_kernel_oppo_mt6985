@@ -14,6 +14,7 @@
 #include "mdw_cmn.h"
 #include "mdw_mem.h"
 #include "mdw_trace.h"
+#include "rv/mdw_rv_events.h"
 
 struct mdw_mem_dma_attachment {
 	struct sg_table *sgt;
@@ -381,7 +382,8 @@ int mdw_mem_dma_alloc(struct mdw_mem *mem)
 	mdbuf->dma_size = PAGE_ALIGN(mem->size);
 	mdw_mem_debug("alloc mem(0x%llx)(%u/%u)\n",
 		(uint64_t) mem, mem->size, mdbuf->dma_size);
-
+        //modify by zhenghaiqing@oppo.com, add trace point for mdw mem dma alloc
+        trace_mdw_dma_alloc(mdbuf->dma_size);
 	if (mem->flags & F_MDW_MEM_HIGHADDR) {
 		dev = mdw_mem_rsc_get_dev(APUSYS_MEMORY_DATA);
 		if (dev)

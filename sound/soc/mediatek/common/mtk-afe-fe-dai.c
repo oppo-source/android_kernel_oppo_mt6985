@@ -31,6 +31,12 @@
 #include "adsp_helper.h"
 #endif
 
+/* scp relate */
+#if IS_ENABLED(CONFIG_MTK_SCP_AUDIO)
+#include "../audio_scp/mtk-scp-audio-pcm.h"
+#include "../audio_scp/mtk-scp-audio-mem-control.h"
+#endif
+
 #if IS_ENABLED(CONFIG_MTK_AEE_FEATURE)
 #include <mt-plat/aee.h>
 #endif
@@ -181,6 +187,7 @@ int mtk_afe_fe_hw_params(struct snd_pcm_substream *substream,
 	snd_pcm_format_t format = params_format(params);
 	struct snd_dma_buffer *dmab = NULL;
 	bool using_dram = false;
+	unsigned int value = 0;
 
 	// mmap don't alloc buffer
 	if (memif->use_mmap_share_mem != 0) {
@@ -262,6 +269,20 @@ int mtk_afe_fe_hw_params(struct snd_pcm_substream *substream,
 		}
 #endif
 
+#if IS_ENABLED(CONFIG_MTK_SCP_AUDIO)
+		if (memif->use_scp_share_mem) {
+			ret = mtk_scp_allocate_mem(substream,
+						    params_buffer_bytes(params));
+			if (ret < 0) {
+				dev_info(afe->dev, "%s(), scp_share_mem: %d, err: %d\n",
+					__func__, memif->use_scp_share_mem, ret);
+				return ret;
+			}
+
+			goto MEM_ALLOCATE_DONE;
+		}
+#endif
+
 #if IS_ENABLED(CONFIG_MTK_ULTRASND_PROXIMITY)
 	if (memif->scp_ultra_enable) {
 		ret = notify_allocate_mem(NOTIFIER_ULTRASOUND_ALLOCATE_MEM, substream);
@@ -286,7 +307,7 @@ int mtk_afe_fe_hw_params(struct snd_pcm_substream *substream,
 	}
 MEM_ALLOCATE_DONE:
 	dev_info(afe->dev,
-		 "%s(), %s, use_adsp_share_mem %d, using_sram %d, use_dram_only %d, ch %d, rate %d, fmt %d, dma_addr %pad, dma_area %p, dma_bytes 0x%zx\n",
+		 "%s(), %s, use_adsp_share_mem %d, using_sram %d, use_dram_only %d, ch %d, rate %d, fmt %d, dma_addr %pad, dma_area %llx, dma_bytes 0x%zx\n",
 		 __func__, memif->data->name,
 		 memif->use_adsp_share_mem,
 		 memif->using_sram, memif->use_dram_only,
@@ -340,6 +361,16 @@ MEM_ALLOCATE_DONE:
 			__func__, id, format, ret);
 		return ret;
 	}
+	/* check the memif already disable */
+	regmap_read(afe->regmap, memif->data->enable_reg, &value);
+	if (value & 0x1 << memif->data->enable_shift) {
+		mtk_memif_set_disable(afe, id);
+		pr_info("-%s memif[%d] is enabled before set_addr, en:0x%x",
+			__func__, id, value);
+#if IS_ENABLED(CONFIG_MTK_AEE_FEATURE)
+		aee_kernel_exception("[Audio]", "Error: AFE memif enable before set_addr");
+#endif
+	}
 #if IS_ENABLED(CONFIG_SND_SOC_MTK_AUDIO_DSP)
 	afe_pcm_ipi_to_dsp(AUDIO_DSP_TASK_PCM_HWPARAM,
 			   substream, params, dai, afe);
@@ -354,6 +385,11 @@ MEM_ALLOCATE_DONE:
 		dmab->dev = substream->dma_buffer.dev;
 		snd_pcm_set_runtime_buffer(substream, dmab);
 	}
+
+#if IS_ENABLED(CONFIG_MTK_SCP_AUDIO)
+	afe_pcm_ipi_to_scp(AUDIO_DSP_TASK_PCM_HWPARAM,
+			   substream, params, dai, afe);
+#endif
 
 	return 0;
 }
@@ -382,6 +418,11 @@ int mtk_afe_fe_hw_free(struct snd_pcm_substream *substream,
 			   substream, NULL, dai, afe);
 #endif
 
+#if IS_ENABLED(CONFIG_MTK_SCP_AUDIO)
+	afe_pcm_ipi_to_scp(AUDIO_DSP_TASK_PCM_HWFREE,
+			   substream, NULL, dai, afe);
+#endif
+
 	if (memif->using_sram == 0 && afe->release_dram_resource)
 		afe->release_dram_resource(afe->dev);
 
@@ -404,6 +445,10 @@ int mtk_afe_fe_hw_free(struct snd_pcm_substream *substream,
 #if IS_ENABLED(CONFIG_SND_SOC_MTK_AUDIO_DSP)
 		if (is_adsp_genpool_addr_valid(substream))
 			return mtk_adsp_free_mem(substream);
+#endif
+#if IS_ENABLED(CONFIG_MTK_SCP_AUDIO)
+		if (is_scp_genpool_addr_valid(substream))
+			return mtk_scp_free_mem(substream);
 #endif
 #if IS_ENABLED(CONFIG_MTK_ULTRASND_PROXIMITY)
 		// ultrasound uses reserve dram, ignore free
@@ -520,6 +565,11 @@ int mtk_afe_fe_prepare(struct snd_pcm_substream *substream,
 			   substream, NULL, dai, afe);
 #endif
 
+#if IS_ENABLED(CONFIG_MTK_SCP_AUDIO)
+	afe_pcm_ipi_to_scp(AUDIO_DSP_TASK_PCM_PREPARE,
+			   substream, NULL, dai, afe);
+#endif
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(mtk_afe_fe_prepare);
@@ -622,6 +672,9 @@ unsigned int is_afe_need_triggered(struct mtk_base_afe_memif *memif)
 
 	if (memif->use_adsp_share_mem ||
 	    memif->vow_barge_in_enable ||
+#if IS_ENABLED(CONFIG_MTK_SCP_AUDIO)
+	    memif->use_scp_share_mem ||
+#endif
 	    memif->scp_ultra_enable)
 		return false;
 
@@ -843,6 +896,8 @@ int mtk_memif_set_addr(struct mtk_base_afe *afe, int id,
 	unsigned int phys_buf_addr = lower_32_bits(dma_addr);
 	unsigned int phys_buf_addr_upper_32 = upper_32_bits(dma_addr);
 	unsigned int value = 0;
+	unsigned int end = 0;
+	bool flag = false;
 
 	/* check the memif already disable */
 	regmap_read(afe->regmap, memif->data->enable_reg, &value);
@@ -862,16 +917,36 @@ int mtk_memif_set_addr(struct mtk_base_afe *afe, int id,
 	/* start */
 	mtk_regmap_write(afe->regmap, memif->data->reg_ofs_base,
 			 phys_buf_addr);
+	regmap_read(afe->regmap, memif->data->reg_ofs_base, &value);
+	if (value != phys_buf_addr) {
+		pr_info("%s phys_buf_addr[0x%x] != read val[0x%x]",
+			__func__, phys_buf_addr, value);
+		flag = true;
+	}
 	/* end */
-	if (memif->data->reg_ofs_end)
+	end = phys_buf_addr + dma_bytes - 1;
+	if (memif->data->reg_ofs_end) {
 		mtk_regmap_write(afe->regmap,
 				 memif->data->reg_ofs_end,
 				 phys_buf_addr + dma_bytes - 1);
-	else
+		regmap_read(afe->regmap, memif->data->reg_ofs_end, &value);
+		if (value != end) {
+			pr_info("%s end[0x%x] != read val[0x%x]",
+				__func__, end, value);
+			flag = true;
+		}
+	} else {
 		mtk_regmap_write(afe->regmap,
 				 memif->data->reg_ofs_base +
 				 AFE_BASE_END_OFFSET,
 				 phys_buf_addr + dma_bytes - 1);
+		regmap_read(afe->regmap, memif->data->reg_ofs_base + AFE_BASE_END_OFFSET, &value);
+		if (value != end) {
+			pr_info("%s end[0x%x] != read val[0x%x]",
+				__func__, end, value);
+			flag = true;
+		}
+	}
 
 	/* set start, end, upper 32 bits */
 	if (memif->data->reg_ofs_base_msb) {
@@ -880,21 +955,64 @@ int mtk_memif_set_addr(struct mtk_base_afe *afe, int id,
 		mtk_regmap_write(afe->regmap,
 				 memif->data->reg_ofs_end_msb,
 				 phys_buf_addr_upper_32);
+		regmap_read(afe->regmap, memif->data->reg_ofs_base_msb, &value);
+		if (value != phys_buf_addr_upper_32) {
+			pr_info("%s phys_buf_addr_upper_32[0x%x] != read val[0x%x]",
+				__func__, phys_buf_addr_upper_32, value);
+			flag = true;
+		}
+		regmap_read(afe->regmap, memif->data->reg_ofs_end_msb, &value);
+		if (value != phys_buf_addr_upper_32) {
+			pr_info("%s 2 phys_buf_addr_upper_32[0x%x] != read val[0x%x]",
+				__func__, phys_buf_addr_upper_32, value);
+			flag = true;
+		}
 	}
 
 	/*
 	 * set MSB to 33-bit, for memif address
 	 * only for memif base address, if msb_end_reg exists
 	 */
-	if (memif->data->msb_reg)
+	if (memif->data->msb_reg) {
 		mtk_regmap_update_bits(afe->regmap, memif->data->msb_reg,
 				       1, msb_at_bit33, memif->data->msb_shift);
+		regmap_read(afe->regmap, memif->data->msb_reg, &value);
+		value = ((value >> memif->data->msb_shift) & 1);
+		if (value != msb_at_bit33) {
+			pr_info("%s msb_at_bit33[0x%x] != read val[0x%x]",
+				__func__, msb_at_bit33, value);
+			flag = true;
+		}
+	}
 
 	/* set MSB to 33-bit, for memif end address */
-	if (memif->data->msb_end_reg)
+	if (memif->data->msb_end_reg) {
 		mtk_regmap_update_bits(afe->regmap, memif->data->msb_end_reg,
 				       1, msb_at_bit33,
 				       memif->data->msb_end_shift);
+		regmap_read(afe->regmap, memif->data->msb_end_reg, &value);
+		value = ((value >> memif->data->msb_end_shift) & 1);
+		if (value != msb_at_bit33) {
+			pr_info("%s msb_at_bit33[0x%x] != read val[0x%x]",
+				__func__, msb_at_bit33, value);
+			flag = true;
+		}
+	}
+	/* check the memif already disable */
+	regmap_read(afe->regmap, memif->data->enable_reg, &value);
+	if (value & 0x1 << memif->data->enable_shift) {
+		mtk_memif_set_disable(afe, id);
+		pr_info("-%s memif[%d] is enabled before set_addr, en:0x%x",
+			__func__, id, value);
+#if IS_ENABLED(CONFIG_MTK_AEE_FEATURE)
+		aee_kernel_exception("[Audio]", "Error: AFE memif enable before set_addr");
+#endif
+	}
+	if (flag) {
+#if IS_ENABLED(CONFIG_MTK_AEE_FEATURE)
+		aee_kernel_exception("[Audio]", "Error: AFE memif enable before set_addr");
+#endif
+	}
 
 	return 0;
 }

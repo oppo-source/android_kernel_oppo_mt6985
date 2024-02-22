@@ -26,6 +26,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
+#include <linux/interconnect.h>
 #include <linux/interrupt.h>
 #include <linux/reset.h>
 
@@ -510,6 +511,7 @@ struct msdc_host {
 	struct clk *src_clk;	/* msdc source clock */
 	struct clk *h_clk;      /* msdc h_clk */
 	struct clk *bus_clk;	/* bus clock which used to access register */
+	struct clk *new_rx_clk;    /* msdc new rx clock that is for new rx path */
 	struct clk *macro_clk;	/* msdc macro clock */
 	struct clk *crypto_clk;    /* msdc crypto clock */
 	struct clk *crypto_cg;     /* msdc crypto clock control gate */
@@ -544,6 +546,11 @@ struct msdc_host {
 	u32 ocr_volt;
 	struct regulator *dvfsrc_vcore_power;
 	struct pm_qos_request pm_qos_req;
+	u32 filter_enable;       /*explorer not support cmd52*/
+	u32 explorer_support;    /* explorer support or not */
+	bool qos_enable;
+	struct icc_path *bw_path;
+	unsigned int peak_bw;
 };
 
 #endif  /* _MTK_MMC_H_ */

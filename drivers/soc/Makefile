@@ -29,3 +29,30 @@ obj-y				+= ti/
 obj-$(CONFIG_ARCH_U8500)	+= ux500/
 obj-$(CONFIG_PLAT_VERSATILE)	+= versatile/
 obj-y				+= xilinx/
+
+#ifdef OPLUS_FEATURE_OEM_OCDT
+obj-$(CONFIG_OPLUS_SYSTEM_KERNEL)	+= oplus/system/
+#endif /* OPLUS_FEATURE_OEM_OCDT */
+
+#ifdef OPLUS_TP_BASIC
+obj-$(CONFIG_OPLUS_DEVICE_IFNO)		+= oplus/device_info/
+#endif /* OPLUS_TP_BASIC */
+
+obj-$(CONFIG_OPLUS_FEATURE_MIDAS_GKI) += oplus/midas/
+
+#ifdef OPLUS_DFR_FEATURE
+obj-y += oplus/dfr/
+#endif /* OPLUS_DFR_FEATURE */
+
+#ifdef OPLUS_BOOT_FEATURE
+obj-y += oplus/boot/
+#endif /* OPLUS_BOOT_FEATURE */
+
+#ifdef OPLUS_DFT_FEATURE
+obj-y += oplus/dft/
+#endif /* OPLUS_DFT_FEATURE */
+
+#ifdef OPLUS_FEATURE_MM_FEEDBACK
+obj-$(CONFIG_OPLUS_FEATURE_MM_FEEDBACK)	+= oplus/oplus_mm_fb/
+#endif /* OPLUS_FEATURE_MM_FEEDBACK */
+obj-y	+= oplus/storage/

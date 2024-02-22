@@ -38,6 +38,8 @@
 #include "mtk_pbm.h"
 #endif
 
+extern atomic_t md_ee_occurred;
+
 struct ccci_md_regulator {
 	struct regulator *reg_ref;
 	unsigned char *reg_name;
@@ -51,6 +53,8 @@ static struct ccci_md_regulator md_reg_table[] = {
 	{ NULL, "md-vsram", 825000, 825000},
 	{ NULL, "md-vdigrf", 700000, 700000},
 };
+
+static unsigned int ap_plat_info;
 
 static struct ccci_plat_val md_cd_plat_val_ptr;
 
@@ -105,7 +109,7 @@ static int md_cd_io_remap_md_side_register(struct ccci_modem *md)
 	unsigned long long buf_addr, buf_size;
 
 	arm_smccc_smc(MTK_SIP_KERNEL_CCCI_CONTROL, MD_DEBUG_DUMP,
-		MD_REG_DUMP_START, MD_REG_DUMP_MAGIC, 0, 0, 0, 0, &res);
+		MD_REG_GET_DUMP_ADDRESS, MD_REG_DUMP_MAGIC, 0, 0, 0, 0, &res);
 
 	buf_addr = res.a1;
 	buf_size = res.a2;
@@ -137,16 +141,21 @@ void md_cd_lock_modem_clock_src(int locked)
 
 	arm_smccc_smc(MTK_SIP_KERNEL_CCCI_CONTROL, MD_CLOCK_REQUEST,
 		MD_REG_AP_MDSRC_REQ, locked, 0, 0, 0, 0, &res);
-	if (res.a0)
-		CCCI_ERROR_LOG(-1, TAG,
-			"md clock source requeset ret = 0x%llX\n", res.a0);
+	if (res.a0) {
+		if (locked)
+			CCCI_ERROR_LOG(-1, TAG,
+				"md source requeset fail (0x%lX)\n", res.a0);
+		else
+			CCCI_ERROR_LOG(-1, TAG,
+				"md source release fail (0x%lX)\n", res.a0);
+	}
 
 	if (locked) {
 		arm_smccc_smc(MTK_SIP_KERNEL_CCCI_CONTROL, MD_CLOCK_REQUEST,
 			MD_REG_AP_MDSRC_SETTLE, 0, 0, 0, 0, 0, &res);
 
 		CCCI_MEM_LOG_TAG(-1, TAG,
-			"a0 = 0x%llX; a1 = 0x%llX\n", res.a0, res.a1);
+			"a0 = 0x%lX; a1 = 0x%lX\n", res.a0, res.a1);
 
 		if (res.a1 == 0 && res.a0 > 0 && res.a0 < 10)
 			settle = res.a0; /* ATF */
@@ -155,17 +164,21 @@ void md_cd_lock_modem_clock_src(int locked)
 		else {
 			settle = 3;
 			CCCI_ERROR_LOG(-1, TAG,
-				"settle fail (0x%llX, 0x%llX) set = %d\n",
+				"md source settle fail (0x%lX, 0x%lX) set = %d\n",
 				res.a0, res.a1, settle);
 		}
 		mdelay(settle);
 
 		arm_smccc_smc(MTK_SIP_KERNEL_CCCI_CONTROL, MD_CLOCK_REQUEST,
 			MD_REG_AP_MDSRC_ACK, 0, 0, 0, 0, 0, &res);
+		if (res.a0)
+			CCCI_ERROR_LOG(-1, TAG,
+				"md source ack fail (0x%lX)\n", res.a0);
+
 		CCCI_MEM_LOG_TAG(-1, TAG,
-			"settle = %d; ret = 0x%llX\n", settle, res.a0);
+			"settle = %d; ret = 0x%lX\n", settle, res.a0);
 		CCCI_NOTICE_LOG(-1, TAG,
-			"settle = %d; ret = 0x%llX\n", settle, res.a0);
+			"settle = %d; ret = 0x%lX\n", settle, res.a0);
 	}
 }
 
@@ -587,6 +600,23 @@ static int md1_disable_sequencer_setting(struct ccci_modem *md)
 
 	return 0;
 }
+static void ccci_md_emi_req_mask(unsigned int mask)
+{
+	struct arm_smccc_res res;
+
+	memset(&res, 0, sizeof(res));
+	arm_smccc_smc(MTK_SIP_KERNEL_CCCI_CONTROL, MD_CLOCK_REQUEST,
+		MD_SPM_EMI_REQ_MASK, mask, 0, 0, 0, 0, &res);
+	if (res.a0) {
+		if (mask)
+			CCCI_ERROR_LOG(-1, TAG,
+				"ccci md emi req mask fail (0x%lx)\n", res.a0);
+		else
+			CCCI_ERROR_LOG(-1, TAG,
+				"ccci md emi req unmask fail (0x%lx)\n", res.a0);
+	}
+
+}
 
 static int md_cd_power_off(struct ccci_modem *md, unsigned int timeout)
 {
@@ -599,7 +629,8 @@ static int md_cd_power_off(struct ccci_modem *md, unsigned int timeout)
 	inform_nfc_vsim_change(0, 0);
 #endif
 
-	if ((md_cd_plat_val_ptr.md_gen == 6298) && md_cd_plat_val_ptr.md_sub_ver) {
+	if (!atomic_read(&md_ee_occurred) && (md_cd_plat_val_ptr.md_gen == 6298) &&
+	    md_cd_plat_val_ptr.md_sub_ver) {
 		reg = ioremap_wc(0x20020000, 0x1000);
 		if (!reg) {
 			CCCI_ERROR_LOG(0, TAG, "%s, ioremap_wc fail\n", __func__);
@@ -609,8 +640,10 @@ static int md_cd_power_off(struct ccci_modem *md, unsigned int timeout)
 		CCCI_BOOTUP_LOG(0, TAG, "[POWER OFF] gen98+ stop MD UART\n");
 		CCCI_NORMAL_LOG(0, TAG, "[POWER OFF] gen98+ stop MD UART\n");
 
+		md_cd_lock_modem_clock_src(1);
 		ccci_write32(reg, 0x180, ccci_read32(reg, 0x180) | 0x4);
 		ccci_write32(reg, 0x1A0, ccci_read32(reg, 0x1A0) | 0x4);
+		md_cd_lock_modem_clock_src(0);
 		iounmap(reg);
 	}
 
@@ -682,6 +715,11 @@ static int md_cd_power_off(struct ccci_modem *md, unsigned int timeout)
 	CCCI_BOOTUP_LOG(0, TAG,
 		"Call end kicker_pbm_by_md(0,false)\n");
 #endif
+	/* only used for 6835 */
+	if (ap_plat_info == 6835) {
+		CCCI_NORMAL_LOG(0, TAG, "[POWER OFF] ccci_md_emi_req_mask start\n");
+		ccci_md_emi_req_mask(0);
+	}
 
 	return ret;
 }
@@ -736,6 +774,7 @@ static int md_start_platform(struct ccci_modem *md)
 	if (ret != 0) {
 		/* BROM */
 		CCCI_ERROR_LOG(0, TAG, "BROM Failed\n");
+		md_cd_dump_debug_register(md, true);
 	}
 
 	md_cd_power_off(md, 0);
@@ -1045,12 +1084,16 @@ static int md_cd_power_on(struct ccci_modem *md)
 	}
 
 	/* disable sequencer setting to AOC2.5 for gen98 */
-	if (md_cd_plat_val_ptr.md_gen >= 6298) {
+	if (md_cd_plat_val_ptr.md_gen == 6298) {
 		ret = md1_disable_sequencer_setting(md);
 		if (ret)
 			return ret;
 	}
-
+	/* only used for 6835 */
+	if (ap_plat_info == 6835) {
+		CCCI_NORMAL_LOG(0, TAG, "[POWER ON] ccci_md_emi_req_mask start\n");
+		ccci_md_emi_req_mask(1);
+	}
 	/* steip 3: power on MD_INFRA and MODEM_TOP */
 	flight_mode_set_by_atf(md, false);
 	CCCI_BOOTUP_LOG(0, TAG,
@@ -1147,6 +1190,12 @@ static int md_cd_get_modem_hw_info(struct platform_device *dev_ptr,
 		CCCI_ERROR_LOG(0, TAG, "modem is not enabled, exit\n");
 		return -1;
 	}
+	ret = of_property_read_u32(dev_ptr->dev.of_node,
+		"mediatek,ap-plat-info", &ap_plat_info);
+	if (ret < 0)
+		CCCI_ERROR_LOG(0, TAG, "%s: get DTS: ap-plat-info fail\n", __func__);
+	else
+		CCCI_NORMAL_LOG(0, TAG, "ap_plat_info: %u\n", ap_plat_info);
 
 	memset(dev_cfg, 0, sizeof(struct ccci_dev_cfg));
 

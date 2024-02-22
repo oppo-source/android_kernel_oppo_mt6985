@@ -776,7 +776,6 @@ static void mtk_cam_vb2_buf_queue(struct vb2_buffer *vb)
 	struct mtk_cam_request *req = to_mtk_cam_req(vb->request);
 	struct mtk_cam_request_stream_data *req_stream_data;
 	struct mtk_cam_video_device *node = mtk_cam_vbq_to_vdev(vb->vb2_queue);
-	struct mtk_raw_pde_config *pde_cfg;
 	struct device *dev = cam->dev;
 	unsigned int desc_id;
 	unsigned int dma_port;
@@ -785,7 +784,6 @@ static void mtk_cam_vb2_buf_queue(struct vb2_buffer *vb)
 	struct mtkcam_ipi_meta_input *meta_in;
 	struct mtkcam_ipi_meta_output *meta_out;
 	struct mtk_raw_pipeline *raw_pipline;
-	int pdo_max_sz;
 
 	dma_port = node->desc.dma_port;
 	pipe_id = node->uid.pipe_id;
@@ -830,15 +828,6 @@ static void mtk_cam_vb2_buf_queue(struct vb2_buffer *vb)
 		meta_out->buf.size = node->active_fmt.fmt.meta.buffersize;
 		meta_out->buf.iova = buf->daddr;
 		meta_out->uid.id = dma_port;
-		vaddr = vb2_plane_vaddr(vb, 0);
-		pdo_max_sz = 0;
-		if (raw_pipline) {
-			pde_cfg = &raw_pipline->pde_config;
-			if (pde_cfg->pde_info[CAM_SET_CTRL].pd_table_offset)
-				pdo_max_sz = pde_cfg->pde_info[CAM_SET_CTRL].pdo_max_size;
-		}
-		CALL_PLAT_V4L2(set_meta_stats_info, dma_port, vaddr, pdo_max_sz,
-			mtk_cam_scen_is_rgbw_enabled(req_stream_data->feature.scen));
 		break;
 	default:
 		dev_dbg(dev, "%s:pipe(%d):buffer with invalid port(%d)\n",
@@ -1459,8 +1448,14 @@ int mtk_cam_fill_pixfmt_mp(struct v4l2_pix_format_mplane *pixfmt,
 				if (stride > plane->bytesperline)
 					plane->bytesperline = stride;
 				plane->sizeimage = stride * height;
-				plane->sizeimage += ALIGN((aligned_width / 64), 8) * height;
+				plane->sizeimage += ALIGN((aligned_width / 64),
+						UFBC_TABLE_STRIDE_ALIGNMENT) * height;
 				plane->sizeimage += sizeof(struct UfbcBufferHeader);
+				pr_debug("%s UFO stride(%d) sizeimage(%d) header size(%d) imgo size(%d) ufeo size(%d)\n",
+					__func__, plane->bytesperline, plane->sizeimage,
+					sizeof(struct UfbcBufferHeader),
+					stride * height, ALIGN((aligned_width / 64),
+						UFBC_TABLE_STRIDE_ALIGNMENT) * height);
 			} else if (is_4_plane_rgb(pixelformat)) {
 				/* width should be bus_size align */
 				aligned_width = ALIGN(DIV_ROUND_UP(width / 2
@@ -1540,7 +1535,7 @@ int mtk_cam_fill_pixfmt_mp(struct v4l2_pix_format_mplane *pixfmt,
 	return 0;
 }
 
-static void cal_image_pix_mp(unsigned int node_id,
+void cal_image_pix_mp(unsigned int node_id,
 			     struct v4l2_pix_format_mplane *mp,
 			     unsigned int pixel_mode)
 {
@@ -2326,27 +2321,21 @@ int mtk_cam_video_s_fmt_chk_feature(struct mtk_cam_video_device *node,
 	/* re-config rawi for dc mode */
 	if (node->desc.id == MTK_RAW_MAIN_STREAM_OUT) {
 		struct v4l2_format *img_fmt;
-		unsigned int sink_ipi_fmt;
 		struct mtk_raw_pipeline *pipe;
 
+		// TODO: UFO
 		if (is_raw_subdev(node->uid.pipe_id)) {
 			pipe = mtk_cam_dev_get_raw_pipeline(cam, node->uid.pipe_id);
 			if (pipe && mtk_cam_hw_mode_is_dc(pipe->res_config.hw_mode)) {
 				img_fmt = &pipe->img_fmt_sink_pad;
-				img_fmt->fmt.pix_mp.width = try_fmt.fmt.pix_mp.width;
-				img_fmt->fmt.pix_mp.height = try_fmt.fmt.pix_mp.height;
-				img_fmt->fmt.pix_mp.pixelformat = try_fmt.fmt.pix_mp.pixelformat;
-				sink_ipi_fmt = mtk_cam_get_img_fmt(try_fmt.fmt.pix_mp.pixelformat);
-				img_fmt->fmt.pix_mp.plane_fmt[0].bytesperline =
-					mtk_cam_dmao_xsize(
-						try_fmt.fmt.pix_mp.width, sink_ipi_fmt, 3);
-				img_fmt->fmt.pix_mp.plane_fmt[0].sizeimage =
-						img_fmt->fmt.pix_mp.plane_fmt[0].bytesperline *
-						img_fmt->fmt.pix_mp.height;
+				mtk_raw_set_dcif_rawi_fmt(cam->dev,
+					  img_fmt, pipe->user_res.sensor_res.width,
+					  pipe->user_res.sensor_res.height,
+					  pipe->user_res.sensor_res.code, &try_fmt);
 				dev_info(cam->dev,
-					"%s id:%d hwmode:0x%x ipi_fmt:%d pixelformat:0x%x\n",
+					"%s id:%d hwmode:0x%x pixelformat:0x%x\n",
 					__func__, node->desc.id,
-					pipe->res_config.hw_mode, sink_ipi_fmt,
+					pipe->res_config.hw_mode,
 					img_fmt->fmt.pix_mp.pixelformat);
 			}
 		}
@@ -2399,7 +2388,7 @@ int mtk_cam_video_s_fmt_common(struct mtk_cam_video_device *node,
 		try_fmt.fmt.pix_mp.num_planes = 1;
 
 	if (try_fmt.fmt.pix_mp.num_planes > MAX_SUBSAMPLE_PLANE_NUM) {
-		dev_info_ratelimited(cam->dev, "%s:%s:pipe(%d):%s:invalid num_planes(%d)\n",
+		dev_dbg(cam->dev, "%s:%s:pipe(%d):%s:invalid num_planes(%d)\n",
 			 __func__, dbg_str, node->uid.pipe_id, node->desc.name,
 			 try_fmt.fmt.pix_mp.num_planes);
 		try_fmt.fmt.pix_mp.num_planes = MAX_SUBSAMPLE_PLANE_NUM;
@@ -2433,7 +2422,7 @@ int mtk_cam_video_s_fmt_common(struct mtk_cam_video_device *node,
 				sizeimage;
 		}
 
-		dev_info_ratelimited(cam->dev,
+		dev_dbg(cam->dev,
 			 "%s:%s:pipe(%d):%s:stride:%d, size:%d, num_planes(%d)\n",
 			 __func__, dbg_str, node->uid.pipe_id, node->desc.name,
 			 bytesperline, sizeimage,
@@ -2514,8 +2503,10 @@ int mtk_cam_vidioc_try_fmt(struct file *file, void *fh,
 
 	ret = mtk_cam_video_s_fmt_common(node, f, "try_fmt");
 
-	if (is_camsv_subdev(node->uid.pipe_id))
+	if (is_camsv_subdev(node->uid.pipe_id) &&
+		!is_raw_ufo(f->fmt.pix_mp.pixelformat)) {
 		ret |= mtk_cam_sv_update_image_size(node, f);
+	}
 
 	return ret;
 }
@@ -2557,27 +2548,33 @@ int mtk_cam_vidioc_g_meta_fmt(struct file *file, void *fh,
 		if (extmeta_size) {
 			f->fmt.meta.buffersize = extmeta_size;
 			f->fmt.meta.dataformat = default_fmt->fmt.meta.dataformat;
+			/* fake for backend compose */
+			node->active_fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_SBGGR8;
+			node->active_fmt.fmt.pix_mp.width = cam->raw
+				.pipelines[node->uid.pipe_id].cfg[node->desc.id].mbus_fmt.width;
+			node->active_fmt.fmt.pix_mp.height = cam->raw
+				.pipelines[node->uid.pipe_id].cfg[node->desc.id].mbus_fmt.height;
+			node->active_fmt.fmt.pix_mp.num_planes = 1;
+			cal_image_pix_mp(node->desc.id, &node->active_fmt.fmt.pix_mp, 3);
+			dev_info(cam->dev,
+				"%s:extmeta name:%s buffersize:%d, fmt:0x%x, w/h/byteline:%d/%d/%d\n",
+				__func__, node->desc.name, f->fmt.meta.buffersize,
+				node->active_fmt.fmt.pix_mp.pixelformat,
+				node->active_fmt.fmt.pix_mp.width,
+				node->active_fmt.fmt.pix_mp.height,
+				node->active_fmt.fmt.pix_mp.plane_fmt[0].bytesperline);
 		} else {
 			f->fmt.meta.buffersize =
 				CAMSV_EXT_META_0_WIDTH * CAMSV_EXT_META_0_HEIGHT;
 			f->fmt.meta.dataformat = default_fmt->fmt.meta.dataformat;
+			dev_info(cam->dev,
+				"%s:zero size:extmeta name:%s buffersize:%d, fmt:0x%x, w/h/byteline:%d/%d/%d\n",
+				__func__, node->desc.name, f->fmt.meta.buffersize,
+				node->active_fmt.fmt.pix_mp.pixelformat,
+				node->active_fmt.fmt.pix_mp.width,
+				node->active_fmt.fmt.pix_mp.height,
+				node->active_fmt.fmt.pix_mp.plane_fmt[0].bytesperline);
 		}
-		/* fake for backend compose */
-		node->active_fmt.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_SBGGR8;
-		node->active_fmt.fmt.pix_mp.width = cam->raw
-			.pipelines[node->uid.pipe_id].cfg[node->desc.id].mbus_fmt.width;
-		node->active_fmt.fmt.pix_mp.height = cam->raw
-			.pipelines[node->uid.pipe_id].cfg[node->desc.id].mbus_fmt.height;
-		node->active_fmt.fmt.pix_mp.num_planes = 1;
-		cal_image_pix_mp(node->desc.id, &node->active_fmt.fmt.pix_mp, 3);
-		dev_dbg(cam->dev,
-			"%s:extmeta name:%s buffersize:%d, fmt:0x%x, w/h/byteline:%d/%d/%d\n",
-			__func__, node->desc.name, node->active_fmt.fmt.meta.buffersize,
-			node->active_fmt.fmt.pix_mp.pixelformat,
-			node->active_fmt.fmt.pix_mp.width,
-			node->active_fmt.fmt.pix_mp.height,
-			node->active_fmt.fmt.pix_mp.plane_fmt[0].bytesperline);
-
 		return 0;
 	default:
 		break;
@@ -2597,13 +2594,17 @@ int mtk_cam_vidioc_try_meta_fmt(struct file *file, void *fh,
 {
 	struct mtk_cam_device *cam = video_drvdata(file);
 	struct mtk_cam_video_device *node = file_to_mtk_cam_node(file);
+	struct mtk_raw_pipeline *raw_pipeline;
 	const struct v4l2_format *fmt;
+	int tuned_sz;
 
 	switch (node->desc.dma_port) {
 	case MTKCAM_IPI_RAW_META_STATS_CFG:
 	case MTKCAM_IPI_RAW_META_STATS_0:
 	case MTKCAM_IPI_RAW_META_STATS_1:
 		fmt = mtk_cam_dev_find_fmt(&node->desc, f->fmt.meta.dataformat);
+		raw_pipeline =
+			mtk_cam_dev_get_raw_pipeline(cam, node->uid.pipe_id);
 		if (fmt) {
 			f->fmt.meta.dataformat = fmt->fmt.meta.dataformat;
 			f->fmt.meta.buffersize = fmt->fmt.meta.buffersize;
@@ -2615,7 +2616,7 @@ int mtk_cam_vidioc_try_meta_fmt(struct file *file, void *fh,
 					((char *)&f->fmt.meta.dataformat)[2],
 					((char *)&f->fmt.meta.dataformat)[3],
 					f->fmt.meta.buffersize);
-		} else
+		} else {
 			dev_info(cam->dev, "%s: unknown meta format(%c%c%c%c, size %d) for port(%d)",
 					__func__,
 					((char *)&f->fmt.meta.dataformat)[0],
@@ -2624,6 +2625,20 @@ int mtk_cam_vidioc_try_meta_fmt(struct file *file, void *fh,
 					((char *)&f->fmt.meta.dataformat)[3],
 					f->fmt.meta.buffersize,
 					node->desc.dma_port);
+		}
+
+		if (fmt && mtk_cam_pde_is_enabled(raw_pipeline)) {
+			tuned_sz = mtk_cam_pde_try_meta_size(raw_pipeline,
+							     node->desc.id,
+							     fmt->fmt.meta.buffersize);
+			if (tuned_sz) {
+				f->fmt.meta.buffersize = tuned_sz;
+				dev_info(cam->dev,
+					"%s: force update %s size %d",
+					__func__, node->desc.name, tuned_sz);
+			}
+		}
+
 		return (fmt) ? 0 : -EINVAL;
 	default:
 		break;
@@ -2646,10 +2661,9 @@ int mtk_cam_vidioc_s_meta_fmt(struct file *file, void *fh,
 	case MTKCAM_IPI_RAW_META_STATS_0:
 	case MTKCAM_IPI_RAW_META_STATS_1:
 		fmt = mtk_cam_dev_find_fmt(&node->desc, f->fmt.meta.dataformat);
-
+		raw_pipeline =
+			mtk_cam_dev_get_raw_pipeline(cam, node->uid.pipe_id);
 		if (fmt) {
-			raw_pipeline =
-				mtk_cam_dev_get_raw_pipeline(cam, node->uid.pipe_id);
 			node->active_fmt.fmt.meta.dataformat = fmt->fmt.meta.dataformat;
 			node->active_fmt.fmt.meta.buffersize = f->fmt.meta.buffersize;
 		} else {
@@ -2660,21 +2674,22 @@ int mtk_cam_vidioc_s_meta_fmt(struct file *file, void *fh,
 					node->desc.dma_port);
 			ret = -EINVAL;
 		}
+
+		if (fmt && mtk_cam_pde_is_enabled(raw_pipeline)) {
+			ret = mtk_cam_pde_set_meta_size(raw_pipeline,
+							node->desc.id,
+							fmt->fmt.meta.buffersize,
+							f->fmt.meta.buffersize);
+			if (ret)
+				dev_info(cam->dev,
+					"%s: wrong %s size %d",
+					__func__, node->desc.name,
+					f->fmt.meta.buffersize);
+		}
+
 		break;
 	default:
 		break;
-	}
-
-	if (!ret && node->desc.dma_port == MTKCAM_IPI_RAW_META_STATS_CFG) {
-		ret = mtk_cam_update_pd_meta_cfg_info(raw_pipeline, CAM_SET_CTRL);
-		if (ret)
-			dev_info(cam->dev, "%s: mtk_cam_update_pd_info fail %d",
-				__func__, ret);
-	} else if (!ret && node->desc.dma_port == MTKCAM_IPI_RAW_META_STATS_0) {
-		ret = mtk_cam_update_pd_meta_out_info(raw_pipeline, CAM_SET_CTRL);
-		if (ret)
-			dev_info(cam->dev, "%s: mtk_cam_update_pd_info fail %d",
-				__func__, ret);
 	}
 
 	return ((ret) ? ret : mtk_cam_vidioc_g_meta_fmt(file, fh, f));

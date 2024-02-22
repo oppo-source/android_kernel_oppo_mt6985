@@ -412,6 +412,13 @@ config LATTICE_ECP3_CONFIG
 
 	  If unsure, say N.
 
+#change 'y' to 'n', if you want fo close this controller
+config OPLUS_GPIO
+    tristate "oplus gpio controller"
+    default n
+    help
+      define this config to control oplus gpio.
+
 config SRAM
 	bool "Generic on-chip SRAM driver"
 	depends on HAS_IOMEM
@@ -497,6 +504,30 @@ config OPEN_DICE
 
 	  If unsure, say N.
 
+#ifdef OPLUS_FEATURE_SIM_DETECT
+config SIM_DETECT
+	tristate "SIM_DETECT system"
+	default n
+	help
+	  Say Y here to enable sim detect system support
+#endif /* OPLUS_FEATURE_SIM_DETECT */
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+#oplus modify for vibrator feedback
+config HAPTIC_FEEDBACK
+    tristate "Haptic driver feedback for awinic aw8697 series"
+    help
+      This option enables support for aw8697 series Haptic Driver Feedback.
+#endif
+
+#ifdef OPLUS_POWER_PROCS_LOAD
+config OPLUS_POWER_PROCS_LOAD
+    tristate "oplus power procs load feature"
+    default n
+    help
+      define this config to enable oplus power procs load feature.
+#endif /* OPLUS_POWER_PROCS_LOAD */
+
 source "drivers/misc/c2port/Kconfig"
 source "drivers/misc/eeprom/Kconfig"
 source "drivers/misc/cb710/Kconfig"
@@ -515,4 +546,9 @@ source "drivers/misc/cardreader/Kconfig"
 source "drivers/misc/habanalabs/Kconfig"
 source "drivers/misc/uacce/Kconfig"
 source "drivers/misc/pvpanic/Kconfig"
+source "drivers/misc/aw8697_haptic/Kconfig"
+
+#ifdef CONFIG_OPLUS_TRIKEY_HALL
+source "drivers/misc/tri_state_key/Kconfig"
+#endif CONFIG_OPLUS_TRIKEY_HALL
 endmenu

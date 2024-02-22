@@ -385,6 +385,15 @@ config REGULATOR_FAN53880
 	  (PMIC), it is controlled by I2C and provides one BUCK, one BOOST
 	  and four LDO outputs.
 
+config PMIC_FAN53870
+	tristate "Fairchild FAN53870 PMIC"
+	depends on I2C && (OF || COMPILE_TEST)
+	select REGMAP_I2C
+	help
+	  This driver supports Fairchild (ON Semiconductor) FAN53870
+	  regulator. The regulator is a programmable power management IC
+	  (PMIC), it is controlled by I2C and provides LDO outputs.
+
 config REGULATOR_GPIO
 	tristate "GPIO regulator support"
 	depends on GPIOLIB || COMPILE_TEST
@@ -852,6 +861,18 @@ config REGULATOR_MT6373
 
 	  The driver can also be build as a module.
 	  If so, the module will be called mt6373_regulator
+
+config REGULATOR_MT6377
+	tristate "MT6377 SPMI Regulator driver"
+	depends on MFD_MTK_SPMI_PMIC
+	help
+	  Say y here to select this option to enable the power regulator of
+	  MediaTek MT6377 PMIC.
+	  This driver supports the control of different power rails of device
+	  through regulator interface.
+
+	  The driver can also be build as a module.
+	  If so, the module will be called mt6377_regulator
 
 config REGULATOR_MT6380
 	tristate "MediaTek MT6380 PMIC"

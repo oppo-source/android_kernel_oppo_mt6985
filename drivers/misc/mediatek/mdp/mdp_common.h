@@ -89,7 +89,7 @@ typedef const char *(*CmdqPraseErrorModByEngFlag) (
 
 typedef u64 (*CmdqMdpGetEngineGroupBits) (u32 engine_group);
 
-typedef void (*CmdqMdpEnableCommonClock) (bool enable, u64 engine_flag);
+typedef s32 (*CmdqMdpEnableCommonClock) (bool enable, u64 engine_flag);
 
 typedef void (*CmdqCheckHwStatus) (struct cmdqRecStruct *handle);
 
@@ -108,6 +108,8 @@ typedef void (*MdpQosInit) (struct platform_device *pdev, u32 thread_id);
 typedef void *(*MdpQosPathGet) (u32 thread_id, u32 port);
 
 typedef void (*MdpQosClearAll) (u32 thread_id);
+
+typedef void (*MdpQosCheckBWLimit) (u32 thread_id, u32 port, u32 user_bw, u32 set_bw);
 
 typedef u32 (*MdpGetGroup) (void);
 
@@ -138,6 +140,7 @@ typedef bool (*MdpSvpSupportMetaData) (void);
 
 typedef u16 (*MdpGetReadbackEventLock) (void);
 typedef u16 (*MdpGetReadbackEventUnlock) (void);
+typedef u32 (*MdpGetPollGpr) (u16 engine, u32 reg_addr);
 
 struct cmdqMDPFuncStruct {
 #ifdef CONFIG_MTK_SMI_EXT
@@ -187,6 +190,7 @@ struct cmdqMDPFuncStruct {
 	MdpQosPathGet qosGetPath;
 	MdpQosClearAll qosClearAll;
 	MdpQosClearAll qosClearAllIsp;
+	MdpQosCheckBWLimit qosCheckBWLimit;
 	MdpGetGroup getGroupMax;
 	MdpGetGroup getGroupIsp;
 	MdpGetGroup getGroupMdp;
@@ -205,6 +209,7 @@ struct cmdqMDPFuncStruct {
 	MdpSvpSupportMetaData mdpSvpSupportMetaData;
 	MdpGetReadbackEventLock mdpGetReadbackEventLock;
 	MdpGetReadbackEventUnlock mdpGetReadbackEventUnlock;
+	MdpGetPollGpr mdpGetPollGpr;
 
 };
 
@@ -336,6 +341,7 @@ s32 cmdq_mdp_get_rdma_idx(u32 base);
 u32 cmdq_mdp_vcp_pq_readback_support(void);
 void cmdq_mdp_vcp_pq_readback(struct cmdqRecStruct *handle, u16 engine,
 	u32 vcp_offset, u32 count);
+u32 cmdq_mdp_get_poll_gpr(u16 engine, u32 reg_addr);
 u16 mdp_get_rb_event_lock(void);
 u16 mdp_get_rb_event_unlock(void);
 

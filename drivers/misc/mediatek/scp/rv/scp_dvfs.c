@@ -133,14 +133,14 @@ const char *scp_dvfs_hw_chip_ver[MAX_SCP_DVFS_CHIP_HW] __initconst = {
 struct ulposc_cali_regs cali_regs[MAX_ULPOSC_VERSION] __initdata = {
 	[ULPOSC_VER_1] = {
 		REG_DEFINE(con0, 0x2C0, REG_MAX_MASK, 0)
-		REG_DEFINE(cali, 0x2C0, GENMASK(CAL_BITS, 0), 0)
+		REG_DEFINE(cali, 0x2C0, GENMASK(CAL_BITS - 1, 0), 0)
 		REG_DEFINE(con1, 0x2C4, REG_MAX_MASK, 0)
 		REG_DEFINE(con2, 0x2C8, REG_MAX_MASK, 0)
 	},
 	[ULPOSC_VER_2] = { /* Suppose VLP_CKSYS is from 0x1C013000 */
 		REG_DEFINE(con0, 0x210, REG_MAX_MASK, 0)
-		REG_DEFINE(cali_ext, 0x210, GENMASK(CAL_EXT_BITS, 0), 7)
-		REG_DEFINE_WITH_INIT(cali, 0x210, GENMASK(CAL_BITS, 0), 0, 0x40, 0)
+		REG_DEFINE(cali_ext, 0x210, GENMASK(CAL_EXT_BITS - 1, 0), 7)
+		REG_DEFINE_WITH_INIT(cali, 0x210, GENMASK(CAL_BITS - 1, 0), 0, 0x40, 0)
 		REG_DEFINE(con1, 0x214, REG_MAX_MASK, 0)
 		REG_DEFINE(con2, 0x218, REG_MAX_MASK, 0)
 	},
@@ -265,6 +265,19 @@ int scp_resource_req(unsigned int req_type)
 		pr_notice("[%s]: resource request failed, req: %u\n",
 			__func__, req_type);
 
+	return res.a0;
+}
+
+static int scp_set_scp2spm_vol(unsigned int spm_opp)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_smc(MTK_SIP_SCP_DVFS_CONTROL, SCP2SPM_VOL_SET,
+		spm_opp, 0, 0, 0, 0, 0, &res);
+
+	if (res.a0)
+		pr_notice("[%s] smc call failed with error: %d\n",
+		__func__, res.a0);
 	return res.a0;
 }
 
@@ -536,7 +549,10 @@ static void scp_vcore_request(unsigned int clk_opp)
 	}
 
 	/* SCP vcore request to SPM */
-	DRV_WriteReg32(SCP_SCP2SPM_VOL_LV, dvfs.opp[idx].spm_opp);
+	if (dvfs.secure_access_scp)
+		scp_set_scp2spm_vol(dvfs.opp[idx].spm_opp);
+	else
+		DRV_WriteReg32(SCP_SCP2SPM_VOL_LV, dvfs.opp[idx].spm_opp);
 }
 
 void scp_init_vcore_request(void)
@@ -1370,22 +1386,24 @@ static void __init mt_pmic_sshub_init(void)
 
 static_assert(CAL_BITS + CAL_EXT_BITS <= 8 * sizeof(unsigned short),
 "error: there are only 16bits available in IPI\n");
-void sync_ulposc_cali_data_to_scp(void)
+bool sync_ulposc_cali_data_to_scp(void)
 {
 	unsigned int sel_clk = 0;
 	unsigned int ipi_data[2];
 	unsigned short *p = (unsigned short *)&ipi_data[1];
 	int i, ret;
+	bool cali_ok = true;
 
 	if (!dvfs.ulposc_hw.do_ulposc_cali) {
 		pr_notice("[%s]: ulposc2 calibration is not done by AP\n",
 			__func__);
-		return;
+		/* u2 is usable, return true */
+		return true;
 	}
 
 	if (dvfs.ulposc_hw.cali_failed) {
 		pr_notice("[%s]: ulposc2 calibration failed\n", __func__);
-		return;
+		return false;
 	}
 
 	if (!dvfs.sleep_init_done)
@@ -1417,6 +1435,7 @@ void sync_ulposc_cali_data_to_scp(void)
 				dvfs.ulposc_hw.cali_freq[i],
 				*(p + 1));
 			WARN_ON(1);
+			cali_ok = false;
 		}
 	}
 
@@ -1426,6 +1445,7 @@ void sync_ulposc_cali_data_to_scp(void)
 		pr_notice("[%s]:ERROR scp is not switched to ULPOSC, CLK_SW_SEL=0x%x\n",
 			__func__, sel_clk);
 		WARN_ON(1);
+		cali_ok = false;
 	} else {
 		/*
 		 * After syncing, scp will be changed to default freq, which is not set by kernel.
@@ -1433,6 +1453,7 @@ void sync_ulposc_cali_data_to_scp(void)
 		 */
 		last_scp_expected_freq = 0;
 	}
+	return cali_ok;
 }
 
 static inline bool __init is_ulposc_cali_pass(unsigned int cur,

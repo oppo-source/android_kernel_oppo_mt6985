@@ -20,6 +20,11 @@
 #define SGEN_MUTE_CH1_KCONTROL_NAME "Audio_SineGen_Mute_Ch1"
 #define SGEN_MUTE_CH2_KCONTROL_NAME "Audio_SineGen_Mute_Ch2"
 
+#if IS_ENABLED(CONFIG_MTK_ULTRASND_PROXIMITY)
+extern unsigned int elliptic_add_platform_controls(void *platform);
+#endif
+
+
 static const char * const mt6985_sgen_mode_str[] = {
 	"I0I1",   "I2",     "I3I4",   "I5I6",
 	"I7I8",   "I9",     "I10I11", "I12I13",
@@ -125,6 +130,12 @@ static int mt6985_sgen_set(struct snd_kcontrol *kcontrol,
 				   INNER_LOOP_BACK_MODE_MASK_SFT,
 				   mode_idx << INNER_LOOP_BACK_MODE_SFT);
 		regmap_write(afe->regmap, AFE_SINEGEN_CON0, 0x04ac2ac1);
+
+		regmap_update_bits(afe->regmap, ETDM_0_3_COWORK_CON3, 
+								ETDM_OUT1_USE_SGEN_MASK_SFT|ETDM_OUT0_USE_SGEN_MASK_SFT, 
+								1 << ETDM_OUT1_USE_SGEN_SFT | 1 << ETDM_OUT0_USE_SGEN_SFT);
+
+		
 	} else {
 		/* disable sgen */
 		regmap_update_bits(afe->regmap, AFE_SINEGEN_CON0,
@@ -134,6 +145,7 @@ static int mt6985_sgen_set(struct snd_kcontrol *kcontrol,
 				   INNER_LOOP_BACK_MODE_MASK_SFT,
 				   0x3f << INNER_LOOP_BACK_MODE_SFT);
 	}
+
 
 	afe_priv->sgen_mode = mode;
 	return 0;
@@ -631,6 +643,10 @@ int mt6985_add_misc_control(struct snd_soc_component *component)
 	snd_soc_add_component_controls(component,
 					  mt6985_afe_barge_in_controls,
 					  ARRAY_SIZE(mt6985_afe_barge_in_controls));
+	//for ellipitc mixer control
+	#if IS_ENABLED(CONFIG_MTK_ULTRASND_PROXIMITY)
+	elliptic_add_platform_controls(component);
+	#endif
 
 	return 0;
 }

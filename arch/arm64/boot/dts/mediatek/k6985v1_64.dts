@@ -11,21 +11,84 @@
 
 &chosen {
 bootargs_ext = "console=tty0 root=/dev/ram vmalloc=400M \
-loglevel=8 \
 androidboot.hardware=mt6985 \
-8250.nr_uarts=4 \
-initcall_debug=1";
+8250.nr_uarts=4";
+};
+
+/* Trustonic Mobicore real driver */
+&mobicore {
+        trustonic,real-drv = <1>;
+};
+
+/** #ifdef OPLUS_DISPLAY_FEATURE **/
+&odm {
+	led0:led@0 {
+		compatible = "mediatek,red";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led1:led@1 {
+		compatible = "mediatek,green";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led2:led@2 {
+		compatible = "mediatek,blue";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led3:led@3 {
+		compatible = "mediatek,jogball-backlight";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led4:led@4 {
+		compatible = "mediatek,keyboard-backlight";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led5:led@5 {
+		compatible = "mediatek,button-backlight";
+		led_mode = <0>;
+		data = <1>;
+		pwm_config = <0 0 0 0 0>;
+	};
+	led6:led@6 {
+		compatible = "mediatek,lcd-backlight";
+		led_mode = <4>;
+		data = <1>;
+		pwm_config = <0 1 0 0 0>;
+	};
+	vibrator0:vibrator@0 {
+		compatible = "mediatek,vibrator";
+		vib_timer = <25>;
+		vib_limit = <9>;
+		vib_vol= <9>;
+	};
+
+	usb_c_pinctrl:usb_c_pinctrl {
+		compatible = "mediatek,usb_c_pinctrl";
+	};
 };
 
 &mtk_leds {
-	compatible = "mediatek,i2c-leds";
-
-	backlight {
-		led_mode = <6>;
-		gate_enable = <1>;
-		pwm_config = <0 1 0 0 0>;
+		compatible = "mediatek,disp-leds";
+		backlight {
+			label = "lcd-backlight";
+			led_mode = <4>;
+			max-brightness = <10239>;
+			max-hw-brightness = <10239>;
+			led-bits = <13>;
+			trans-bits = <13>;
+			default-state = "on";
 	};
 };
+/** #endif OPLUS_DISPLAY_FEATURE **/
 
 &connfem {
 	/* Support Wifi & BT ePA/eLNA FEM on customer load */
@@ -106,6 +169,7 @@ initcall_debug=1";
 			output-low;
 		};
 	};
+
 	mtkfb_pins_lcm_dsi_te: lcm_dsi_te {
 		pins_cmd_dat {
 			pinmux = <PINMUX_GPIO85__FUNC_DSI_TE>;
@@ -127,13 +191,32 @@ initcall_debug=1";
 			output-low;
 		};
 	};
+
+	mtkfb_pins_lcm_dsi1_te: lcm-dsi1-te {
+		pins-cmd-dat {
+			pinmux = <PINMUX_GPIO74__FUNC_DSI1_TE>;
+		};
+	};
+
+	mtkfb_pins_lcm_dsi_gpio: lcm-dsi-gpio {
+		pins-cmd-dat {
+			pinmux = <PINMUX_GPIO85__FUNC_GPIO85>;
+		};
+	};
+	mtkfb_pins_lcm_dsi1_gpio: lcm-dsi1-gpio {
+		pins-cmd-dat {
+			pinmux = <PINMUX_GPIO74__FUNC_GPIO74>;
+		};
+	};
+
 };
 
 &mtkfb {
 	pinctrl-names = "lcd_bias_enp1_gpio", "lcd_bias_enp0_gpio",
 		"lcd_bias_enn1_gpio", "lcd_bias_enn0_gpio",
 		"lcm_rst_out1_gpio", "lcm_rst_out0_gpio",
-		"mode_te_te", "lcm_led_en1_gpio", "lcm_led_en0_gpio";
+		"mode_te_te", "lcm_led_en1_gpio", "lcm_led_en0_gpio",
+		"mode_te_te1";
 	pinctrl-0 = <&mtkfb_pins_lcd_bias_enp1>;
 	pinctrl-1 = <&mtkfb_pins_lcd_bias_enp0>;
 	pinctrl-2 = <&mtkfb_pins_lcd_bias_enn1>;
@@ -143,13 +226,15 @@ initcall_debug=1";
 	pinctrl-6 = <&mtkfb_pins_lcm_dsi_te>;
 	pinctrl-7 = <&mtkfb_pins_lcm_led_en1>;
 	pinctrl-8 = <&mtkfb_pins_lcm_led_en0>;
+	pinctrl-9 = <&mtkfb_pins_lcm_dsi1_te>;
 
 	status = "okay";
 };
 
 &dispsys_config {
-	pinctrl-names = "mode_te_te";
+	pinctrl-names = "mode_te_te", "mode_te_te1";
 	pinctrl-0 = <&mtkfb_pins_lcm_dsi_te>;
+	pinctrl-1 = <&mtkfb_pins_lcm_dsi1_te>;
 	status = "okay";
 };
 
@@ -163,6 +248,9 @@ initcall_debug=1";
 		pm-enable-gpios = <&pio 68 0>;
 		reset-gpios = <&pio 75 0>;
 		gate-ic = <4831>;
+//		swap-from-dts;
+		lane-swap-setting = <1 2 0 3 4 2>;
+		pn-swap-setting = <1 1 1 1 1 1>;
 		pinctrl-names = "default";
 		port {
 			panel21_in: endpoint {
@@ -179,16 +267,24 @@ initcall_debug=1";
 	};
 };
 
+&dsi1_te {
+	interrupt-parent = <&pio>;
+	interrupts = <74 1 74 1>;
+	status = "okay";
+};
+
 &dsi0 {
 	status = "okay";
 	#address-cells = <1>;
 	#size-cells = <0>;
+	/** #ifdef OPLUS_DISPLAY_FEATURE **/
 	panel1@0 {
-		compatible = "jdi,nt36672e,vdo,120hz";
+		compatible = "oplus21135,tm,nt37705,cmd";
 		reg = <0>;
-		pm-enable-gpios = <&pio 68 0>;
+		pm-enable-gpios = <&pio 165 0>;
 		reset-gpios = <&pio 86 0>;
-		gate-ic = <4831>;
+		1p8-supply = <&mt6373_vrfio18_aif>;
+		3p0-supply = <&mt6373_vmc>;
 		pinctrl-names = "default";
 		port {
 			panel_in1: endpoint {
@@ -196,12 +292,16 @@ initcall_debug=1";
 			};
 		};
 	};
+	/** #endif OPLUS_DISPLAY_FEATURE **/
 	panel2@1 {
 		compatible = "truly,td4330,cmd";
 		reg = <1>;
 		pm-enable-gpios = <&pio 68 0>;
 		reset-gpios = <&pio 86 0>;
 		gate-ic = <4831>;
+//		swap-from-dts;
+		lane-swap-setting = <1 2 0 3 4 2>;
+		pn-swap-setting = <1 1 1 1 1 1>;
 		pinctrl-names = "default";
 		port {
 			panel_in2: endpoint {
@@ -255,6 +355,7 @@ initcall_debug=1";
 		};
 	};
 };
+
 /* GPS GPIO standardization start */
 &pio {
 	gps_pins_default: gps_default {
@@ -294,6 +395,7 @@ initcall_debug=1";
 		};
 	};
 };
+
 &gps {
 	pinctrl-names = "default",
 		"gps_l1_lna_disable",
@@ -411,11 +513,12 @@ initcall_debug=1";
 #include "mediatek/cust_mt6985_touch_1080x2400.dtsi"
 
 &i2c6 {
+        clock-frequency = <400000>;
 	spk1: speaker_amp@5c {
 		compatible = "richtek,rt5512";
 		#sound-dai-cells = <0>;
 		reg = <0x5c>;
-		status = "okay";
+		status = "disable";
 		sound-name-prefix = "Left";
 	};
 
@@ -423,9 +526,48 @@ initcall_debug=1";
 		compatible = "richtek,rt5512";
 		#sound-dai-cells = <0>;
 		reg = <0x5d>;
-		status = "okay";
+		status = "disable";
 		sound-name-prefix = "Right";
 	};
+	tfa98xx_L: tfa98xx@34 {
+		compatible = "nxp,tfa98xx";
+		reg = <0x34>;
+		reset-gpio = <&mt6373_pio 1 0>;
+		tfa_min_range = <5000>;
+		tfa_max_range = <8000>;
+		tfa_channel = <0>;
+		status = "okay";
+	};
+
+	tfa98xx_R: tfa98xx@35 {
+		compatible = "nxp,tfa98xx";
+		reg = <0x35>;
+		reset-gpio = <&mt6373_pio 2 0>;
+		power-gpio = <&mt6373_pio 4 0>;
+		tfa_min_range = <5000>;
+		tfa_max_range = <8000>;
+		tfa_channel = <1>;
+		status = "okay";
+	};
+
+	tfa98xx_L1: tfa98xx@36 {
+		compatible = "nxp,tfa98xx";
+		reg = <0x36>;
+		reset-gpio = <&mt6373_pio 3 0>;
+		tfa_min_range = <5000>;
+		tfa_max_range = <8000>;
+		tfa_channel = <0>;
+		status = "okay";
+	};
+};
+&audio_extend {
+ 	//for nxp speaker
+ 	oplus,speaker-vendor = "nxp";
+ 	oplus,speaker-i2s-id = <7>;
+ 	oplus,speaker-i2s-id-in = <6>;
+ 	oplus,speaker-codec-name = "tfa98xx.6-0034","tfa98xx.6-0035","tfa98xx.6-0036";
+ 	oplus,speaker-codec-dai-name = "tfa98xx-aif-6-34","tfa98xx-aif-6-35","tfa98xx-aif-6-36";
+	oplus,spk-i2s-index = <18 19>;
 };
 
 &sound {
@@ -436,7 +578,7 @@ initcall_debug=1";
 };
 
 &pdc {
-	pd_vbus_upper_bound = <12000000>;
+	pd-vbus-upper-bound = <9000000>;
 };
 
 #include "mediatek/cust_k6985_connfem.dtsi"

@@ -22,8 +22,13 @@
 #include <linux/string.h>
 #include <linux/iopoll.h>
 #include "soc_temp_lvts.h"
+#include "thermal_interface.h"
 #include "../thermal_core.h"
+#include <soc/oplus/system/oplus_project.h>
 
+#if IS_ENABLED(CONFIG_MTK_TINYSYS_SCP_SUPPORT)
+#include "scp.h"
+#endif  /* #if IS_ENABLED(CONFIG_MTK_TINYSYS_SCP_SUPPORT) */
 /*==================================================
  * LVTS debug patch
  *==================================================
@@ -50,7 +55,7 @@ static unsigned int g_lvts_device_value_b[LVTS_CONTROLLER_DEBUG_NUM]
 static unsigned int g_lvts_device_value_e[LVTS_CONTROLLER_DEBUG_NUM]
 	[NUM_LVTS_DEVICE_REG];
 
-#define NUM_LVTS_CONTROLLER_REG (26)
+#define NUM_LVTS_CONTROLLER_REG (27)
 static const unsigned int g_lvts_controller_addrs[NUM_LVTS_CONTROLLER_REG] = {
 	LVTSMONCTL0_0,
 	LVTSMONCTL1_0,
@@ -77,6 +82,7 @@ static const unsigned int g_lvts_controller_addrs[NUM_LVTS_CONTROLLER_REG] = {
 	LVTSPROTCTL_0,
 	LVTSPROTTC_0,
 	LVTSCLKEN_0,
+	LVTSSPARE0_0,
 	LVTSSPARE3_0};
 static unsigned int g_lvts_controller_value_b[LVTS_CONTROLLER_DEBUG_NUM]
 	[NUM_LVTS_CONTROLLER_REG];
@@ -185,7 +191,7 @@ static int lvts_read_all_tc_temperature(struct lvts_data *lvts_data, bool in_isr
 	return max_temp;
 }
 
-static int lvts_read_tc_temperature(struct lvts_data *lvts_data, unsigned int tz_id)
+static int lvts_read_tc_temperature(struct lvts_data *lvts_data, unsigned int tz_id, bool in_isr)
 {
 	struct tc_settings *tc = lvts_data->tc;
 	unsigned int i, j, msr_raw;
@@ -207,11 +213,13 @@ static int lvts_read_tc_temperature(struct lvts_data *lvts_data, unsigned int tz
 			else
 				current_temp = ops->lvts_raw_to_temp(&(tc[i].coeff), j, msr_raw);
 
-			mutex_lock(&lvts_data->sen_data_lock);
+			if (!in_isr)
+				mutex_lock(&lvts_data->sen_data_lock);
+
 			lvts_data->sen_data[s_index].msr_raw = msr_raw;
 			lvts_data->sen_data[s_index].temp = current_temp;
-			mutex_unlock(&lvts_data->sen_data_lock);
-
+			if (!in_isr)
+				mutex_unlock(&lvts_data->sen_data_lock);
 			return current_temp;
 		}
 	}
@@ -227,7 +235,7 @@ static int soc_temp_lvts_read_temp(void *data, int *temperature)
 	if (lvts_tz->id == 0)
 		*temperature = lvts_read_all_tc_temperature(lvts_data, false);
 	else if (lvts_tz->id - 1 < lvts_data->num_sensor)
-		*temperature = lvts_read_tc_temperature(lvts_data, lvts_tz->id);
+		*temperature = lvts_read_tc_temperature(lvts_data, lvts_tz->id, false);
 	else
 		return -EINVAL;
 
@@ -321,19 +329,6 @@ static void wait_all_tc_sensing_point_idle(struct lvts_data *lvts_data)
 	}
 }
 
-static void lvts_reset(struct lvts_data *lvts_data)
-{
-	int i;
-
-	for (i = 0; i < lvts_data->num_domain; i++) {
-		if (lvts_data->domain[i].reset)
-			reset_control_assert(lvts_data->domain[i].reset);
-
-		if (lvts_data->domain[i].reset)
-			reset_control_deassert(lvts_data->domain[i].reset);
-	}
-}
-
 static void device_identification_v1(struct lvts_data *lvts_data)
 {
 	struct device *dev = lvts_data->dev;
@@ -357,6 +352,38 @@ static void device_identification_v1(struct lvts_data *lvts_data)
 	}
 }
 
+static void release_all_sensing_points(struct lvts_data *lvts_data)
+{
+	unsigned int i;
+	void __iomem *base;
+
+	/* do not care the number of sensors in controller while release */
+	for (i = 0; i < lvts_data->num_tc; i++) {
+		base = GET_BASE_ADDR(i);
+		writel(0x0, LVTSMSRCTL1_0 + base);
+	}
+}
+
+static void pause_all_sensing_points(struct lvts_data *lvts_data)
+{
+	unsigned int i;
+	void __iomem *base;
+
+	/* do not care the number of sensors in controller while pause */
+	for (i = 0; i < lvts_data->num_tc; i++) {
+		base = GET_BASE_ADDR(i);
+		writel(PAUSE_SENSING_POINT, LVTSMSRCTL1_0 + base);
+	}
+}
+
+static void disable_sensing_points(struct lvts_data *lvts_data, unsigned int tc_id)
+{
+	void __iomem *base;
+
+	base = GET_BASE_ADDR(tc_id);
+	writel(DISABLE_SENSING_POINT, LVTSMONCTL0_0 + base);
+}
+
 static void disable_all_sensing_points(struct lvts_data *lvts_data)
 {
 	unsigned int i;
@@ -368,34 +395,32 @@ static void disable_all_sensing_points(struct lvts_data *lvts_data)
 	}
 }
 
-static void enable_all_sensing_points(struct lvts_data *lvts_data)
+static void enable_sensing_points(struct lvts_data *lvts_data, unsigned int tc_id)
 {
 	struct device *dev = lvts_data->dev;
 	struct tc_settings *tc = lvts_data->tc;
-	unsigned int i, j, num;
+	unsigned int j, num;
 	void __iomem *base;
 	unsigned int flag;
 
-	for (i = 0; i < lvts_data->num_tc; i++) {
-		base = GET_BASE_ADDR(i);
-		num = tc[i].num_sensor;
+	base = GET_BASE_ADDR(tc_id);
+	num = tc[tc_id].num_sensor;
 
-		if (num > ALL_SENSING_POINTS) {
-			dev_err(dev,
-				"%s, LVTS%d, illegal number of sensors: %d\n",
-				__func__, i, tc[i].num_sensor);
-			continue;
-		}
-
-		flag = LVTS_SINGLE_SENSE;
-		for (j = 0; j < tc[i].num_sensor; j++) {
-			if (tc[i].sensor_on_off[j] != SEN_ON)
-				continue;
-
-			flag = flag | (0x1<<j);
-		}
-		writel(flag, LVTSMONCTL0_0 + base);
+	if (num > ALL_SENSING_POINTS) {
+		dev_info(dev,
+			"%s, LVTS%d, illegal number of sensors: %d\n",
+			__func__, tc_id, tc[tc_id].num_sensor);
+		return;
 	}
+
+	flag = LVTS_SINGLE_SENSE;
+	for (j = 0; j < tc[tc_id].num_sensor; j++) {
+		if (tc[tc_id].sensor_on_off[j] != SEN_ON)
+			continue;
+
+		flag = flag | (0x1<<j);
+	}
+	writel(flag, LVTSMONCTL0_0 + base);
 }
 
 #ifdef DUMP_MORE_LOG
@@ -449,20 +474,6 @@ static int lvts_write_device_reg(struct lvts_data *lvts_data, unsigned int confi
 	udelay(5);
 
 	return 1;
-}
-
-static void read_device_reg_before_active(struct lvts_data *lvts_data)
-{
-	int i, j;
-	unsigned int addr, data;
-
-	for (i = 0; i < lvts_data->num_tc; i++) {
-		for (j = 0; j < NUM_LVTS_DEVICE_REG; j++) {
-			addr = g_lvts_device_addrs[j];
-			data =  lvts_read_device(lvts_data, addr, i);
-			g_lvts_device_value_b[i][j] = data;
-		}
-	}
 }
 
 static void read_device_reg_when_error(struct lvts_data *lvts_data)
@@ -932,11 +943,18 @@ static void set_tc_hw_reboot_threshold(struct lvts_data *lvts_data,
 
 static void set_all_tc_hw_reboot(struct lvts_data *lvts_data)
 {
+	struct device *dev = lvts_data->dev;
 	struct tc_settings *tc = lvts_data->tc;
 	int i, trip_point;
 
 	for (i = 0; i < lvts_data->num_tc; i++) {
-		trip_point = tc[i].hw_reboot_trip_point;
+		/* if high temp aging version, force trip temp = 200'C */
+		if (get_eng_version() != HIGH_TEMP_AGING) {
+			trip_point = tc[i].hw_reboot_trip_point;
+		} else {
+			trip_point = 200000;
+			dev_info(dev, "high temp aging version, force trip temp.\n");
+		}
 
 		if (tc[i].num_sensor == 0)
 			continue;
@@ -965,6 +983,14 @@ static int soc_temp_lvts_set_trip_temp(void *data, int trip, int temp)
 	struct soc_temp_tz *lvts_tz = (struct soc_temp_tz *) data;
 	struct lvts_data *lvts_data = lvts_tz->lvts_data;
 	const struct thermal_trip *trip_points;
+	struct device *dev = lvts_data->dev;
+	int ret;
+
+	if (temp <= MIN_THERMAL_HW_REBOOT_POINT && temp != THERMAL_TEMP_INVALID) {
+		dev_info(dev, "input temperature is lower than %d\n",
+			MIN_THERMAL_HW_REBOOT_POINT);
+		return -EINVAL;
+	}
 
 	trip_points = of_thermal_get_trip_points(lvts_data->tz_dev);
 	if (!trip_points)
@@ -974,180 +1000,21 @@ static int soc_temp_lvts_set_trip_temp(void *data, int trip, int temp)
 		return 0;
 
 	update_all_tc_hw_reboot_point(lvts_data, temp);
-	set_all_tc_hw_reboot(lvts_data);
 
-	return 0;
+	pause_all_sensing_points(lvts_data);
+	wait_all_tc_sensing_point_idle(lvts_data);
+	set_all_tc_hw_reboot(lvts_data);
+	release_all_sensing_points(lvts_data);
+
+	ret = set_reboot_temperature(temp);
+
+	return ret;
 }
 
 static const struct thermal_zone_of_device_ops soc_temp_lvts_ops = {
 	.get_temp = soc_temp_lvts_read_temp,
 	.set_trip_temp = soc_temp_lvts_set_trip_temp,
 };
-
-static bool lvts_lk_init_check(struct lvts_data *lvts_data)
-{
-	struct device *dev = lvts_data->dev;
-	unsigned int i, data;
-	void __iomem *base;
-	bool ret = false;
-
-
-	for (i = 0; i < lvts_data->num_tc; i++) {
-		base = GET_BASE_ADDR(i);
-
-		/* Check LVTS device ID */
-		data = (readl(LVTSSPARE0_0 + base) & GENMASK(11, 0));
-
-		if (data == LK_LVTS_MAGIC) {
-			writel(0x0, LVTSSPARE0_0 + base);
-			ret = true;
-		} else {
-			dev_info(dev, "%s, %d\n", __func__, i);
-			ret = false;
-			break;
-		}
-	}
-	return ret;
-}
-
-static bool lvts_tfa_init_check(struct lvts_data *lvts_data)
-{
-	struct device *dev = lvts_data->dev;
-	unsigned int i, data;
-	void __iomem *base;
-
-	for (i = 0; i < lvts_data->num_tc; i++) {
-		base = GET_BASE_ADDR(i);
-
-		/* Check LVTS device ID */
-		data = (readl(LVTSSPARE2_0 + base) & GENMASK(11, 0));
-
-		if (data == LK_LVTS_MAGIC) {
-			dev_info(dev, "%s, tfa init controller%d\n", __func__, i);
-			return true;
-		}
-	}
-	dev_info(dev, "%s, tfa no init\n", __func__);
-	return false;
-}
-
-static int read_calibration_data(struct lvts_data *lvts_data)
-{
-	struct tc_settings *tc = lvts_data->tc;
-	unsigned int i, j, s_index;
-	void __iomem *base;
-	struct device *dev = lvts_data->dev;
-	struct sensor_cal_data *cal_data = &lvts_data->cal_data;
-
-	cal_data->efuse_data = devm_kcalloc(dev, lvts_data->num_sensor,
-				sizeof(*cal_data->efuse_data), GFP_KERNEL);
-	if (!cal_data->efuse_data)
-		return -ENOMEM;
-
-	for (i = 0; i < lvts_data->num_tc; i++) {
-		base = GET_BASE_ADDR(i);
-
-		for (j = 0; j < tc[i].num_sensor; j++) {
-			if (tc[i].sensor_on_off[j] != SEN_ON)
-				continue;
-
-			s_index = tc[i].sensor_map[j];
-
-			cal_data->efuse_data[s_index] =
-				readl(LVTSEDATA00_0 + base + 0x4 * j);
-
-			dev_info(dev, "%s, i=%d, j=%d, efuse_data= 0x%x\n", __func__, i, j,
-				cal_data->efuse_data[s_index]);
-		}
-	}
-
-	return 0;
-}
-
-static int lvts_init(struct lvts_data *lvts_data)
-{
-	struct platform_ops *ops = &lvts_data->ops;
-	struct device *dev = lvts_data->dev;
-	int ret = 0;
-	bool lk_init, tfa_init;
-
-	if (!lvts_data->clock_gate_no_need) {
-		ret = clk_prepare_enable(lvts_data->clk);
-		if (ret)
-			dev_err(dev,
-				"Error: Failed to enable lvts controller clock: %d\n",
-				ret);
-
-	}
-
-	tfa_init = lvts_tfa_init_check(lvts_data);
-	if (tfa_init == true) {
-
-#ifdef DUMP_MORE_LOG
-		clear_lvts_register_value_array(lvts_data);
-		read_controller_reg_before_active(lvts_data);
-#endif
-		lvts_data->init_done = true;
-		dev_info(dev, "%s, TFA init LVTS\n", __func__);
-		return ret;
-
-	}
-
-	lk_init = lvts_lk_init_check(lvts_data);
-	if (lk_init == true) {
-		ret = read_calibration_data(lvts_data);
-		set_all_tc_hw_reboot(lvts_data);
-
-#ifdef DUMP_MORE_LOG
-		clear_lvts_register_value_array(lvts_data);
-		read_controller_reg_before_active(lvts_data);
-#endif
-		lvts_data->init_done = true;
-		dev_info(dev, "%s, LK init LVTS\n", __func__);
-		return ret;
-	}
-
-	if (!lvts_data->reset_no_need)
-		lvts_reset(lvts_data);
-
-
-	if (ops->device_identification)
-		ops->device_identification(lvts_data);
-
-	if (ops->device_enable_and_init)
-		ops->device_enable_and_init(lvts_data);
-
-	if (IS_ENABLE(FEATURE_DEVICE_AUTO_RCK)) {
-		if (ops->device_enable_auto_rck)
-			ops->device_enable_auto_rck(lvts_data);
-	} else {
-		if (ops->device_read_count_rc_n)
-			ops->device_read_count_rc_n(lvts_data);
-	}
-
-	if (ops->set_cal_data)
-		ops->set_cal_data(lvts_data);
-
-	disable_all_sensing_points(lvts_data);
-	wait_all_tc_sensing_point_idle(lvts_data);
-	if (ops->init_controller)
-		ops->init_controller(lvts_data);
-
-#ifdef DUMP_MORE_LOG
-	clear_lvts_register_value_array(lvts_data);
-	read_controller_reg_before_active(lvts_data);
-	read_device_reg_before_active(lvts_data);
-#endif
-
-	enable_all_sensing_points(lvts_data);
-
-	set_all_tc_hw_reboot(lvts_data);
-
-	lvts_data->init_done = true;
-
-	return 0;
-}
-
 
 static void check_cal_data_v1(struct lvts_data *lvts_data)
 {
@@ -1421,42 +1288,80 @@ static int of_update_lvts_data(struct lvts_data *lvts_data,
 	return 0;
 }
 
-static void lvts_device_close(struct lvts_data *lvts_data)
+static enum interrupt_type interrupt_type_switch(struct lvts_data *lvts_data,
+	unsigned int tc_id, unsigned int interrupt_reg_status)
 {
-	unsigned int i;
 	void __iomem *base;
+	unsigned int interrupt_reg_val;
+	enum interrupt_type ret;
 
-	for (i = 0; i < lvts_data->num_tc; i++) {
-		base = GET_BASE_ADDR(i);
+	base = GET_BASE_ADDR(tc_id);
+	interrupt_reg_val = readl(LVTSMONINT_0 + base);
 
-		lvts_write_device(lvts_data, RESET_ALL_DEVICES, i);
-		writel(DISABLE_LVTS_CTRL_CLK, LVTSCLKEN_0 + base);
+	if (interrupt_reg_status & THERMAL_HOT_INTERRUPT_0) {
+		interrupt_reg_val = interrupt_reg_val & ~(HOT_INT0_EN);
+
+		interrupt_reg_val = interrupt_reg_val | (COLD_INT0_EN);
+
+		ret = HOT;
+	} else if (interrupt_reg_status & THERMAL_COLD_INTERRUPT_0) {
+		interrupt_reg_val = interrupt_reg_val | (HOT_INT0_EN);
+
+		interrupt_reg_val = interrupt_reg_val & ~(COLD_INT0_EN);
+
+		ret = COLD;
+	} else {
+		ret = OTHER;
+		return ret;
 	}
+
+	disable_sensing_points(lvts_data, tc_id);
+	writel(interrupt_reg_val, LVTSMONINT_0 + base);
+	enable_sensing_points(lvts_data, tc_id);
+
+	return ret;
 }
 
-static void lvts_close(struct lvts_data *lvts_data)
-{
-	bool tfa_init;
-
-	tfa_init = lvts_tfa_init_check(lvts_data);
-	if (tfa_init)
-		return;
-
-	disable_all_sensing_points(lvts_data);
-	wait_all_tc_sensing_point_idle(lvts_data);
-	lvts_device_close(lvts_data);
-	if (!lvts_data->clock_gate_no_need)
-		clk_disable_unprepare(lvts_data->clk);
-
-}
-
-static void tc_irq_handler(struct lvts_data *lvts_data, int tc_id)
+static void tc_irq_handler(struct lvts_data *lvts_data, int tc_id, char thermintst_str[])
 {
 	struct device *dev = lvts_data->dev;
 	unsigned int ret = 0;
 	void __iomem *base;
 	int temp;
 
+	if (IS_ENABLE(FEATURE_SCP_OC)) {
+		if (tc_id == SCP_APPOINTED_CONTROLLER) {
+			enum interrupt_type ignore_dump_log = OTHER;
+
+			base = GET_BASE_ADDR(tc_id);
+			ret = readl(LVTSMONINTSTS_0 + base);
+			ignore_dump_log = interrupt_type_switch(lvts_data, tc_id, ret);
+			if (ignore_dump_log == HOT || ignore_dump_log == COLD) {
+				int change_cold = 0;
+				enum SCP_THERMAL_TYPE scp_thermal_type;
+#if (SCP_OC_DUMP_LOG == 1)
+				struct tc_settings *tc = lvts_data->tc;
+				int s_index = tc[tc_id].sensor_map[SCP_APPOINTED_SENSOR];
+				char *hotOrCold = (ignore_dump_log == HOT)?"hot":"cold";
+
+				temp = lvts_read_tc_temperature(lvts_data, s_index + 1, true);
+				dev_info(dev, "%s", thermintst_str);
+				dev_info(dev, "it is controller%d, sensor%d %s interrupt, temp = %d\n",
+					tc_id, SCP_APPOINTED_SENSOR, hotOrCold, temp);
+#endif
+
+				change_cold = (ignore_dump_log == HOT)?1:0;
+				scp_thermal_type = (ignore_dump_log == HOT) ? SCP_THERMAL_TYPE_HOT :
+					SCP_THERMAL_TYPE_COLD;
+				set_cold_interrupt_enable_addr(change_cold);
+				scp_send_thermal_wq(scp_thermal_type);
+				/* Write back to clear interrupt status */
+				writel(ret, LVTSMONINTSTS_0 + base);
+				return;
+			}
+		}
+		dev_info(dev, "%s", thermintst_str);
+	}
 #ifdef DUMP_MORE_LOG
 	temp = lvts_read_all_tc_temperature(lvts_data, true);
 	dump_lvts_error_info(lvts_data);
@@ -1484,7 +1389,8 @@ static void tc_irq_handler(struct lvts_data *lvts_data, int tc_id)
 	if (ret & THERMAL_PROTECTION_STAGE_3)
 		dev_info(dev, "[Thermal IRQ]: Thermal protection stage 3 interrupt triggered, Thermal HW reboot\n");
 
-	BUG();
+	if (get_eng_version() != HIGH_TEMP_AGING)
+		BUG();
 }
 
 static irqreturn_t irq_handler(int irq, void *dev_id)
@@ -1494,16 +1400,32 @@ static irqreturn_t irq_handler(int irq, void *dev_id)
 	struct tc_settings *tc = lvts_data->tc;
 	unsigned int i;
 	void __iomem *base;
+	char thermintst_str[200];
+	int thermintst_str_size = sizeof(thermintst_str);
+	int thermintst_str_offset = 0;
 
 	for (i = 0; i < lvts_data->num_domain; i++) {
 		base = lvts_data->domain[i].base;
 		lvts_data->irq_bitmap[i] = readl(THERMINTST + base);
-		dev_info(dev, "%s : THERMINTST = 0x%x\n", __func__, lvts_data->irq_bitmap[i]);
+		if (!IS_ENABLE(FEATURE_SCP_OC))
+			dev_info(dev, "%s : THERMINTST = 0x%x\n", __func__,
+				lvts_data->irq_bitmap[i]);
+		else
+			thermintst_str_offset += snprintf(thermintst_str + thermintst_str_offset,
+				thermintst_str_size - thermintst_str_offset,
+				"%s : THERMINTST = 0x%x\n", __func__, lvts_data->irq_bitmap[i]);
 	}
+	if (thermintst_str_offset < 0)
+		return -EINVAL;
+	if (thermintst_str_offset >= thermintst_str_size)
+		return -ENOMEM;
+
+	thermintst_str[thermintst_str_offset] = '\0';
 
 	for (i = 0; i < lvts_data->num_tc; i++) {
-		if ((lvts_data->irq_bitmap[tc[i].domain_index] & tc[i].irq_bit) == 0)
-			tc_irq_handler(lvts_data, i);
+		if ((lvts_data->irq_bitmap[tc[i].domain_index] & tc[i].irq_bit) == 0 &&
+			lvts_data->irq_bitmap[tc[i].domain_index] != 0)
+			tc_irq_handler(lvts_data, i, thermintst_str);
 	}
 
 	return IRQ_HANDLED;
@@ -1531,7 +1453,6 @@ static int lvts_register_irq_handler(struct lvts_data *lvts_data)
 			dev_err(dev,
 				"Failed to register LVTS IRQ, ret %d, domain %d irq_num %d\n",
 				ret, i, lvts_data->domain[i].irq_num);
-			lvts_close(lvts_data);
 			return ret;
 		}
 	}
@@ -1548,7 +1469,6 @@ static int lvts_register_thermal_zone(int id, struct lvts_data *lvts_data,
 
 	lvts_tz = devm_kzalloc(dev, sizeof(*lvts_tz), GFP_KERNEL);
 	if (!lvts_tz) {
-		lvts_close(lvts_data);
 		return -ENOMEM;
 	}
 
@@ -1563,7 +1483,6 @@ static int lvts_register_thermal_zone(int id, struct lvts_data *lvts_data,
 		dev_err(dev,
 			"Error: Failed to register lvts tz %d, ret = %d\n",
 			lvts_tz->id, ret);
-		lvts_close(lvts_data);
 	}
 	return ret;
 }
@@ -1617,9 +1536,10 @@ static int lvts_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, lvts_data);
 
-	ret = lvts_init(lvts_data);
-	if (ret)
-		return ret;
+#ifdef DUMP_MORE_LOG
+	clear_lvts_register_value_array(lvts_data);
+	read_controller_reg_before_active(lvts_data);
+#endif
 
 	ret = lvts_register_irq_handler(lvts_data);
 	if (ret)
@@ -1640,35 +1560,29 @@ static int lvts_remove(struct platform_device *pdev)
 
 	lvts_data = (struct lvts_data *) platform_get_drvdata(pdev);
 
-	lvts_close(lvts_data);
 
 	return 0;
 }
 
 static int lvts_suspend_noirq(struct device *dev)
 {
-	struct lvts_data *lvts_data;
-
-	lvts_data = (struct lvts_data *) dev_get_drvdata(dev);
 	dev_info(dev, "[Thermal/LVTS]%s\n", __func__);
 
-	lvts_close(lvts_data);
 
 	return 0;
 }
 
 static int lvts_resume_noirq(struct device *dev)
 {
-	int ret;
 	struct lvts_data *lvts_data;
 
 	lvts_data = (struct lvts_data *) dev_get_drvdata(dev);
 	dev_info(dev, "[Thermal/LVTS]%s\n", __func__);
 
-	ret = lvts_init(lvts_data);
-	if (ret)
-		return ret;
-
+#ifdef DUMP_MORE_LOG
+	clear_lvts_register_value_array(lvts_data);
+	read_controller_reg_before_active(lvts_data);
+#endif
 	return 0;
 }
 /*==================================================
@@ -4068,7 +3982,7 @@ static struct lvts_data mt6985_lvts_data = {
 		.check_cal_data = mt6985_check_cal_data,
 		.update_coef_data = mt6985_update_coef_data,
 	},
-	.feature_bitmap = FEATURE_DEVICE_AUTO_RCK,
+	.feature_bitmap = FEATURE_DEVICE_AUTO_RCK | FEATURE_SCP_OC,
 	.num_efuse_addr = 35,
 	.num_efuse_block = 2,
 	.cal_data = {
@@ -5640,6 +5554,203 @@ static struct lvts_data mt6886_lvts_data = {
 };
 
 /*==================================================
+ * LVTS MT6835
+ *==================================================
+ */
+
+enum mt6835_lvts_domain {
+	MT6835_AP_DOMAIN,
+	MT6835_MCU_DOMAIN,
+	MT6835_NUM_DOMAIN
+};
+
+enum mt6835_lvts_sensor_enum {
+	MT6835_TS1_0,
+	MT6835_TS1_1,
+	MT6835_TS1_2,
+	MT6835_TS1_3,
+	MT6835_TS2_0,
+	MT6835_TS2_1,
+	MT6835_TS2_2,
+	MT6835_TS2_3,
+	MT6835_TS3_0,
+	MT6835_TS3_1,
+	MT6835_TS4_0,
+	MT6835_TS4_1,
+	MT6835_TS4_2,
+	MT6835_TS4_3,
+	MT6835_TS5_0,
+	MT6835_TS5_1,
+	MT6835_TS5_2,
+	MT6835_TS5_3,
+	MT6835_NUM_TS
+};
+
+enum mt6835_lvts_controller_enum {
+	MT6835_LVTS_MCU_CTRL0,
+	MT6835_LVTS_MCU_CTRL1,
+	MT6835_LVTS_AP_CTRL0,
+	MT6835_LVTS_AP_CTRL1,
+	MT6835_LVTS_AP_CTRL2,
+	MT6835_LVTS_CTRL_NUM
+};
+
+static void mt6835_efuse_to_cal_data(struct lvts_data *lvts_data)
+{
+	struct sensor_cal_data *cal_data = &lvts_data->cal_data;
+
+	cal_data->golden_temp = GET_CAL_DATA_BITMASK(0, 31, 24);
+	cal_data->count_r[MT6835_TS1_0] = GET_CAL_DATA_BITMASK(1, 31, 16);
+	cal_data->count_r[MT6835_TS1_1] = GET_CAL_DATA_BITMASK(1, 15, 0);
+	cal_data->count_r[MT6835_TS1_2] = GET_CAL_DATA_BITMASK(2, 31, 16);
+	cal_data->count_r[MT6835_TS1_3] = GET_CAL_DATA_BITMASK(2, 15, 0);
+
+	cal_data->count_r[MT6835_TS2_0] = GET_CAL_DATA_BITMASK(3, 31, 16);
+	cal_data->count_r[MT6835_TS2_1] = GET_CAL_DATA_BITMASK(3, 15, 0);
+	cal_data->count_r[MT6835_TS2_2] = GET_CAL_DATA_BITMASK(4, 31, 16);
+	cal_data->count_r[MT6835_TS2_3] = GET_CAL_DATA_BITMASK(4, 15, 0);
+
+	cal_data->count_r[MT6835_TS3_0] = GET_CAL_DATA_BITMASK(5, 31, 16);
+	cal_data->count_r[MT6835_TS3_1] = GET_CAL_DATA_BITMASK(5, 15, 0);
+
+	cal_data->count_r[MT6835_TS4_0] = GET_CAL_DATA_BITMASK(6, 31, 16);
+	cal_data->count_r[MT6835_TS4_1] = GET_CAL_DATA_BITMASK(6, 15, 0);
+	cal_data->count_r[MT6835_TS4_2] = GET_CAL_DATA_BITMASK(7, 31, 16);
+	cal_data->count_r[MT6835_TS4_3] = GET_CAL_DATA_BITMASK(7, 15, 0);
+
+	cal_data->count_r[MT6835_TS5_0] = GET_CAL_DATA_BITMASK(8, 31, 16);
+	cal_data->count_r[MT6835_TS5_1] = GET_CAL_DATA_BITMASK(8, 15, 0);
+	cal_data->count_r[MT6835_TS5_2] = GET_CAL_DATA_BITMASK(9, 31, 16);
+	cal_data->count_r[MT6835_TS5_3] = GET_CAL_DATA_BITMASK(9, 15, 0);
+
+
+	cal_data->count_rc[MT6835_LVTS_MCU_CTRL0] = GET_CAL_DATA_BITMASK(12, 23, 0);
+
+	cal_data->count_rc[MT6835_LVTS_MCU_CTRL1] = GET_CAL_DATA_BITMASK(13, 23, 0);
+
+	cal_data->count_rc[MT6835_LVTS_AP_CTRL0] =  GET_CAL_DATA_BITMASK(14, 23, 0);
+
+	cal_data->count_rc[MT6835_LVTS_AP_CTRL1] =  GET_CAL_DATA_BITMASK(15, 23, 0);
+
+	cal_data->count_rc[MT6835_LVTS_AP_CTRL2] =  GET_CAL_DATA_BITMASK(16, 23, 0);
+
+}
+
+static struct tc_settings mt6835_tc_settings[] = {
+	[MT6835_LVTS_MCU_CTRL0] = {
+		.domain_index = MT6835_MCU_DOMAIN,
+		.addr_offset = 0x0,
+		.num_sensor = 4,
+		.sensor_map = {MT6835_TS1_0, MT6835_TS1_1, MT6835_TS1_2, MT6835_TS1_3},
+		.sensor_on_off = {SEN_ON, SEN_ON, SEN_ON, SEN_ON},
+		.tc_speed = SET_TC_SPEED_IN_US(10, 1440, 10, 10),
+		.hw_filter = LVTS_FILTER_1,
+		.dominator_sensing_point = SENSING_POINT0,
+		.hw_reboot_trip_point = 113500,
+		.irq_bit = BIT(1),
+		.coeff = {
+			.a = {-250460},
+			.cali_mode = CALI_NT,
+		},
+	},
+	[MT6835_LVTS_MCU_CTRL1] = {
+		.domain_index = MT6835_MCU_DOMAIN,
+		.addr_offset = 0x100,
+		.num_sensor = 4,
+		.sensor_map = {MT6835_TS2_0, MT6835_TS2_1, MT6835_TS2_2, MT6835_TS2_3},
+		.sensor_on_off = {SEN_ON, SEN_ON, SEN_ON, SEN_ON},
+		.tc_speed = SET_TC_SPEED_IN_US(10, 2460, 10, 10),
+		.hw_filter = LVTS_FILTER_1,
+		.dominator_sensing_point = SENSING_POINT0,
+		.hw_reboot_trip_point = 113500,
+		.irq_bit = BIT(2),
+		.coeff = {
+			.a = {-250460},
+			.cali_mode = CALI_NT,
+		},
+	},
+	[MT6835_LVTS_AP_CTRL0] = {
+		.domain_index = MT6835_AP_DOMAIN,
+		.addr_offset = 0x0,
+		.num_sensor = 2,
+		.sensor_map = {MT6835_TS3_0, MT6835_TS3_1},
+		.sensor_on_off = {SEN_ON, SEN_ON},
+		.tc_speed = SET_TC_SPEED_IN_US(305, 75030, 305, 73200),
+		.hw_filter = LVTS_FILTER_1,
+		.dominator_sensing_point = SENSING_POINT0,
+		.hw_reboot_trip_point = 113500,
+		.irq_bit = BIT(1),
+		.coeff = {
+			.a = {-250460},
+			.cali_mode = CALI_NT,
+		},
+	},
+	[MT6835_LVTS_AP_CTRL1] = {
+		.domain_index = MT6835_AP_DOMAIN,
+		.addr_offset = 0x100,
+		.num_sensor = 4,
+		.sensor_map = {MT6835_TS4_0, MT6835_TS4_1, MT6835_TS4_2, MT6835_TS4_3},
+		.sensor_on_off = {SEN_ON, SEN_ON, SEN_ON, SEN_ON},
+		.tc_speed = SET_TC_SPEED_IN_US(158, 37920, 158, 37288),
+		.hw_filter = LVTS_FILTER_1,
+		.dominator_sensing_point = SENSING_POINT3,
+		.hw_reboot_trip_point = 113500,
+		.irq_bit = BIT(2),
+		.coeff = {
+			.a = {-250460},
+			.cali_mode = CALI_NT,
+		},
+	},
+	[MT6835_LVTS_AP_CTRL2] = {
+		.domain_index = MT6835_AP_DOMAIN,
+		.addr_offset = 0x200,
+		.num_sensor = 4,
+		.sensor_map = {MT6835_TS5_0, MT6835_TS5_1, MT6835_TS5_2, MT6835_TS5_3},
+		.sensor_on_off = {SEN_ON, SEN_ON, SEN_ON, SEN_ON},
+		.tc_speed = SET_TC_SPEED_IN_US(158, 37920, 158, 37288),
+		.hw_filter = LVTS_FILTER_1,
+		.dominator_sensing_point = SENSING_POINT1,
+		.hw_reboot_trip_point = 113500,
+		.irq_bit = BIT(3),
+		.coeff = {
+			.a = {-250460},
+			.cali_mode = CALI_NT,
+		},
+	},
+};
+
+static struct lvts_data mt6835_lvts_data = {
+	.num_domain = MT6835_NUM_DOMAIN,
+	.num_tc = MT6835_LVTS_CTRL_NUM,
+	.tc = mt6835_tc_settings,
+	.num_sensor = MT6835_NUM_TS,
+	.ops = {
+		.device_identification = device_identification_v1,
+		.efuse_to_cal_data = mt6835_efuse_to_cal_data,
+		.device_enable_and_init = device_enable_and_init_v5,
+		.device_enable_auto_rck = device_enable_auto_rck_v4,
+		.device_read_count_rc_n = device_read_count_rc_n_v5,
+		.set_cal_data = set_calibration_data_v4,
+		.init_controller = init_controller_v4,
+		.lvts_temp_to_raw = lvts_temp_to_raw_v1,
+		.lvts_raw_to_temp = lvts_raw_to_temp_v1,
+		.check_cal_data = check_cal_data_v1,
+	},
+	.feature_bitmap = 0,
+	.num_efuse_addr = 18,
+	.num_efuse_block = 2,
+	.cal_data = {
+		.default_golden_temp = 60,
+		.default_count_r = 35000,
+		.default_count_rc = 2750,
+	},
+	.init_done = false,
+	.enable_dump_log = 0,
+	.clock_gate_no_need = false,
+	.reset_no_need = false,
+};
+
+/*==================================================
  * Support chips
  *==================================================
  */
@@ -5692,6 +5803,10 @@ static const struct of_device_id lvts_of_match[] = {
 	{
 		.compatible = "mediatek,mt6886-lvts",
 		.data = (void *)&mt6886_lvts_data,
+	},
+	{
+		.compatible = "mediatek,mt6835-lvts",
+		.data = (void *)&mt6835_lvts_data,
 	},
 	{
 	},

@@ -36,6 +36,12 @@
 #include "mtk_cam-seninf-route.h"
 #include "imgsensor-user.h"
 #include "mtk_cam-seninf-ca.h"
+#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+#include "oplus_cam_olc_exception.h"
+#endif
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
 
 #define ESD_RESET_SUPPORT 1
 #define V4L2_CID_MTK_SENINF_BASE	(V4L2_CID_USER_BASE | 0xf000)
@@ -1090,12 +1096,10 @@ static int set_aov_test_model_param(struct seninf_ctx *ctx,
 		/* must enable mux(clk) before clk_set_parent
 		 * pm_runtime_get_sync will call runtime_resume.
 		 */
-		mtk_mmdvfs_enable_vcp(true, VCP_PWR_USR_SENIF);
 		ret = pm_runtime_get_sync(ctx->dev);
 		if (ret < 0) {
 			dev_info(ctx->dev, "%s pm_runtime_get_sync ret %d\n", __func__, ret);
 			pm_runtime_put_noidle(ctx->dev);
-			mtk_mmdvfs_enable_vcp(false, VCP_PWR_USR_SENIF);
 			return ret;
 		}
 
@@ -1123,7 +1127,6 @@ static int set_aov_test_model_param(struct seninf_ctx *ctx,
 		}
 	} else {
 		pm_runtime_put_sync(ctx->dev);
-		mtk_mmdvfs_enable_vcp(false, VCP_PWR_USR_SENIF);
 		/* array size of aov_ctx[] is
 		 * 6: most number of sensors support
 		 */
@@ -1185,12 +1188,10 @@ static int set_test_model(struct seninf_ctx *ctx, char enable)
 	}
 
 	if (enable) {
-		mtk_mmdvfs_enable_vcp(true, VCP_PWR_USR_SENIF);
 		ret = pm_runtime_get_sync(ctx->dev);
 		if (ret < 0) {
 			dev_info(ctx->dev, "%s pm_runtime_get_sync ret %d\n", __func__, ret);
 			pm_runtime_put_noidle(ctx->dev);
-			mtk_mmdvfs_enable_vcp(false, VCP_PWR_USR_SENIF);
 			return ret;
 		}
 
@@ -1221,7 +1222,7 @@ static int set_test_model(struct seninf_ctx *ctx, char enable)
 
 			g_seninf_ops->_set_test_model(ctx,
 					vc[i]->dest[0].mux, vc[i]->dest[0].cam, vc[i]->pixel_mode,
-					vc_dt_filter, i, vc[i]->vc, vc[i]->dt);
+					vc_dt_filter, i, vc[i]->vc, vc[i]->dt, vc[i]->vc);
 
 			if (vc[i]->out_pad == PAD_SRC_PDAF0)
 				mdelay(40);
@@ -1235,7 +1236,6 @@ static int set_test_model(struct seninf_ctx *ctx, char enable)
 			seninf_dfs_set(ctx, 0);
 
 		pm_runtime_put_sync(ctx->dev);
-		mtk_mmdvfs_enable_vcp(false, VCP_PWR_USR_SENIF);
 	}
 
 	ctx->streaming = enable;
@@ -1653,12 +1653,10 @@ static int seninf_csi_s_stream(struct v4l2_subdev *sd, int enable)
 					ctx->sensor_pad_idx, &ctx->buffered_pixel_rate);
 
 		get_customized_pixel_rate(ctx, ctx->sensor_sd, &ctx->customized_pixel_rate);
-		mtk_mmdvfs_enable_vcp(true, VCP_PWR_USR_SENIF);
 		ret = pm_runtime_get_sync(ctx->dev);
 		if (ret < 0) {
 			dev_info(ctx->dev, "%s pm_runtime_get_sync ret %d\n", __func__, ret);
 			pm_runtime_put_noidle(ctx->dev);
-			mtk_mmdvfs_enable_vcp(false, VCP_PWR_USR_SENIF);
 			return ret;
 		}
 
@@ -1679,21 +1677,7 @@ static int seninf_csi_s_stream(struct v4l2_subdev *sd, int enable)
 		//update_sensor_frame_desc(ctx);
 #endif
 
-		ret = v4l2_subdev_call(ctx->sensor_sd, video, s_stream, 1);
-		if (ret) {
-			dev_info(ctx->dev, "sensor stream-on fail,ret(%d)\n", ret);
-			return  ret;
-		}
-#ifdef SENINF_UT_DUMP
-		g_seninf_ops->_debug(ctx);
-#endif
-
 	} else {
-		ret = v4l2_subdev_call(ctx->sensor_sd, video, s_stream, 0);
-		if (ret) {
-			dev_info(ctx->dev, "sensor stream-off fail,ret(%d)\n", ret);
-			return ret;
-		}
 #ifdef SENSOR_SECURE_MTEE_SUPPORT
 		if (ctx->is_secure == 1) {
 			dev_info(ctx->dev, "sensor kernel ca_free");
@@ -1710,7 +1694,6 @@ static int seninf_csi_s_stream(struct v4l2_subdev *sd, int enable)
 		g_seninf_ops->_poweroff(ctx);
 		ctx->dbg_last_dump_req = 0;
 		pm_runtime_put_sync(ctx->dev);
-		mtk_mmdvfs_enable_vcp(false, VCP_PWR_USR_SENIF);
 	}
 
 	ctx->csi_streaming = enable;
@@ -1744,6 +1727,11 @@ static int seninf_s_stream(struct v4l2_subdev *sd, int enable)
 		if (!pad_inited) {
 			dev_info(ctx->dev,
 				 "[%s] pad_inited(%d)\n", __func__, pad_inited);
+			// stream on sensor while csi streamed
+			mutex_lock(&ctx->delay_s_sensor_mutex);
+			ctx->delay_s_sensor_flag = 1;
+			mutex_unlock(&ctx->delay_s_sensor_mutex);
+			stream_sensor(ctx, enable);
 			return 0;
 		}
 	}
@@ -1752,6 +1740,11 @@ static int seninf_s_stream(struct v4l2_subdev *sd, int enable)
 		dev_info(ctx->dev,
 			"[%s] is_ctx_streaming(%d)\n",
 			__func__, ctx->streaming);
+
+		if (!enable) {
+			// ensure forget cammux setting
+			mtk_cam_seninf_forget_camtg_setting(ctx);
+		}
 		return 0;
 	}
 
@@ -1784,7 +1777,19 @@ static int seninf_s_stream(struct v4l2_subdev *sd, int enable)
 	}
 
 	ctx->streaming = enable;
-	notify_fsync_listen_target_with_kthread(ctx, 2);
+	if (enable && ctx->is_aov_real_sensor) {
+		// stream on sensor immediately in aov flow
+		mutex_lock(&ctx->delay_s_sensor_mutex);
+		ctx->delay_s_sensor_flag = 1;
+		mutex_unlock(&ctx->delay_s_sensor_mutex);
+		stream_sensor(ctx, enable);
+
+		notify_fsync_listen_target_with_kthread(ctx, 2);
+	} else {
+		// stream on sensor in worker (after fsync notify)
+		// stream off works immediately
+		notify_fsync_with_kthread_and_s_stream(ctx, 2, enable);
+	}
 
 	if (core->aov_abnormal_deinit_flag) {
 		ctx->is_aov_real_sensor = 0;
@@ -2457,7 +2462,9 @@ static int seninf_probe(struct platform_device *pdev)
 	ctx->dbg_chmux_param = NULL;
 
 	ctx->open_refcnt = 0;
+	ctx->delay_s_sensor_flag = 0;
 	mutex_init(&ctx->mutex);
+	mutex_init(&ctx->delay_s_sensor_mutex);
 
 	ret = get_csi_port(dev, &port);
 	if (ret) {
@@ -2639,6 +2646,7 @@ static int runtime_suspend(struct device *dev)
 				break;
 			default:
 				dev_info(dev, "invalid seninfIdx(%d)\n", ctx->seninfIdx);
+				mutex_unlock(&core->mutex);
 				return -EINVAL;
 			}
 		} else {
@@ -2688,6 +2696,7 @@ static int runtime_resume(struct device *dev)
 				dev_info(dev,
 					"[%s] seninf_core_pm_runtime_get_sync(fail),ret(%d)\n",
 					__func__, ret);
+				mutex_unlock(&core->mutex);
 				return ret;
 			}
 			/* enable camtg_sel as phya clk */
@@ -2704,6 +2713,7 @@ static int runtime_resume(struct device *dev)
 						"[%s] clk_prepare_enable clk[CLK_CAM_SENINF:%u]:%s(fail),ret(%d)\n",
 						__func__, CLK_CAM_SENINF,
 						clk_names[CLK_CAM_SENINF], ret);
+					mutex_unlock(&core->mutex);
 					return ret;
 				}
 				dev_dbg(dev,
@@ -2728,6 +2738,7 @@ static int runtime_resume(struct device *dev)
 							"[%s] clk_prepare_enable clk[CLK_TOP_SENINF:%u]:%s(fail),ret(%d)\n",
 							__func__, CLK_TOP_SENINF,
 							clk_names[CLK_TOP_SENINF], ret);
+						mutex_unlock(&core->mutex);
 						return ret;
 					}
 					dev_dbg(dev,
@@ -2745,6 +2756,7 @@ static int runtime_resume(struct device *dev)
 							"[%s] clk_prepare_enable clk[CLK_TOP_SENINF1:%u]:%s(fail),ret(%d)\n",
 							__func__, CLK_TOP_SENINF1,
 							clk_names[CLK_TOP_SENINF1], ret);
+						mutex_unlock(&core->mutex);
 						return ret;
 					}
 					dev_dbg(dev,
@@ -2762,6 +2774,7 @@ static int runtime_resume(struct device *dev)
 							"[%s] clk_prepare_enable clk[CLK_TOP_SENINF2:%u]:%s(fail),ret(%d)\n",
 							__func__, CLK_TOP_SENINF2,
 							clk_names[CLK_TOP_SENINF2], ret);
+						mutex_unlock(&core->mutex);
 						return ret;
 					}
 					dev_dbg(dev,
@@ -2779,6 +2792,7 @@ static int runtime_resume(struct device *dev)
 							"[%s] clk_prepare_enable clk[CLK_TOP_SENINF3:%u]:%s(fail),ret(%d)\n",
 							__func__, CLK_TOP_SENINF3,
 							clk_names[CLK_TOP_SENINF3], ret);
+						mutex_unlock(&core->mutex);
 						return ret;
 					}
 					dev_dbg(dev,
@@ -2796,6 +2810,7 @@ static int runtime_resume(struct device *dev)
 							"[%s] clk_prepare_enable clk[CLK_TOP_SENINF4:%u]:%s(fail),ret(%d)\n",
 							__func__, CLK_TOP_SENINF4,
 							clk_names[CLK_TOP_SENINF4], ret);
+						mutex_unlock(&core->mutex);
 						return ret;
 					}
 					dev_dbg(dev,
@@ -2813,6 +2828,7 @@ static int runtime_resume(struct device *dev)
 							"[%s] clk_prepare_enable clk[CLK_TOP_SENINF5:%u]:%s(fail),ret(%d)\n",
 							__func__, CLK_TOP_SENINF5,
 							clk_names[CLK_TOP_SENINF5], ret);
+						mutex_unlock(&core->mutex);
 						return ret;
 					}
 					dev_dbg(dev,
@@ -2823,6 +2839,7 @@ static int runtime_resume(struct device *dev)
 				break;
 			default:
 				dev_info(dev, "invalid seninfIdx %d\n", ctx->seninfIdx);
+				mutex_unlock(&core->mutex);
 				return -EINVAL;
 			}
 		} else {
@@ -2833,6 +2850,7 @@ static int runtime_resume(struct device *dev)
 						"[%s] clk_prepare_enable clk[CLK_TOP_CAMTM:%u]:%s(fail),ret(%d)\n",
 						__func__, CLK_TOP_CAMTM,
 						clk_names[CLK_TOP_CAMTM], ret);
+					mutex_unlock(&core->mutex);
 					return ret;
 				}
 				dev_dbg(dev,
@@ -2975,6 +2993,9 @@ int mtk_cam_seninf_check_timeout(struct v4l2_subdev *sd, u64 time_after_sof)
 	struct v4l2_subdev *sensor_sd = ctx->sensor_sd;
 	struct v4l2_ctrl *ctrl;
 
+	#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+	struct olc_params olc_data;
+	#endif
 	ctrl = v4l2_ctrl_find(sensor_sd->ctrl_handler, V4L2_CID_MTK_SOF_TIMEOUT_VALUE);
 	if (!ctrl) {
 		dev_info(ctx->dev, "no timeout value in subdev %s\n", sd->name);
@@ -2997,6 +3018,17 @@ int mtk_cam_seninf_check_timeout(struct v4l2_subdev *sd, u64 time_after_sof)
 		ret,
 		SOF_TIMEOUT_RATIO,
 		val);
+
+	#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+	if (ret == -1) {
+		/*report the exception data to imgsensor module.*/
+		olc_data.frame_time = frame_time;
+		olc_data.time_after_sof = time_after_sof;
+		strncpy(olc_data.name, sd->name, strlen(sd->name));
+		sensor_sd->ops->core->command(sensor_sd, V4L2_CMD_OLC_EVENT, &olc_data);
+	}
+	#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 	return ret;
 }
 
@@ -3025,6 +3057,7 @@ int mtk_cam_seninf_dump(struct v4l2_subdev *sd, u32 seq_id, bool force_check)
 	struct v4l2_ctrl *ctrl;
 	int val = 0;
 	int reset_by_user = 0;
+	bool in_reset = 0;
 
 	if (!force_check && ctx->dbg_last_dump_req != 0 &&
 		ctx->dbg_last_dump_req == seq_id) {
@@ -3041,30 +3074,34 @@ int mtk_cam_seninf_dump(struct v4l2_subdev *sd, u32 seq_id, bool force_check)
 		if (val > 0)
 			ctx->dbg_timeout = val;
 	}
-
-	mtk_mmdvfs_enable_vcp(true, VCP_PWR_USR_SENIF);
 	ret = pm_runtime_get_sync(ctx->dev);
 	if (ret < 0) {
 		dev_info(ctx->dev, "%s pm_runtime_get_sync ret %d\n", __func__, ret);
 		pm_runtime_put_noidle(ctx->dev);
-		mtk_mmdvfs_enable_vcp(false, VCP_PWR_USR_SENIF);
 		return ret;
 	}
 
+	/* query if sensor in reset */
+	sensor_sd->ops->core->command(sensor_sd,
+			V4L2_CMD_SENSOR_IN_RESET, &in_reset);
+
 	if (ctx->streaming) {
-		ret = g_seninf_ops->_debug(sd_to_ctx(sd));
+		if (!in_reset) {
+			ret = g_seninf_ops->_debug(sd_to_ctx(sd));
 #if ESD_RESET_SUPPORT
-		if (ret != 0) {
-			reset_by_user = is_reset_by_user(sd_to_ctx(sd));
-			if (!reset_by_user)
-				reset_sensor(sd_to_ctx(sd));
-		}
+			if (ret != 0) {
+				reset_by_user = is_reset_by_user(sd_to_ctx(sd));
+				if (!reset_by_user)
+					reset_sensor(sd_to_ctx(sd));
+			}
 #endif
+		} else
+			dev_info(ctx->dev, "%s skip dump, sensor is in resetting\n", __func__);
 	} else
 		dev_info(ctx->dev, "%s should not dump during stream off\n", __func__);
 
+
 	pm_runtime_put_sync(ctx->dev);
-	mtk_mmdvfs_enable_vcp(false, VCP_PWR_USR_SENIF);
 
 	dev_info(ctx->dev, "%s ret(%d), req(%u), force(%d) reset_by_user(%d)\n",
 		 __func__, ret, seq_id, force_check, reset_by_user);
@@ -3128,6 +3165,8 @@ int mtk_cam_seninf_aov_runtime_suspend(unsigned int sensor_id)
 			"[%s] please check aov_deinit times?(%d)\n",
 			__func__,
 			core->pwr_refcnt_for_aov);
+		core->pwr_refcnt_for_aov = 0;
+		mutex_unlock(&core->mutex);
 		return -ENODEV;
 	}
 	dev_info(ctx->dev,
@@ -3163,6 +3202,7 @@ int mtk_cam_seninf_aov_runtime_suspend(unsigned int sensor_id)
 							CLK_TOP_SENINF1, clk_names[CLK_TOP_SENINF1],
 							CLK_TOP_OSC_D4, clk_names[CLK_TOP_OSC_D4],
 							ret);
+						mutex_unlock(&core->mutex);
 						return ret;
 					}
 					dev_info(ctx->dev,
@@ -3175,6 +3215,7 @@ int mtk_cam_seninf_aov_runtime_suspend(unsigned int sensor_id)
 					dev_info(ctx->dev,
 						"[%s] Please check clk get whether NULL?\n",
 						__func__);
+					mutex_unlock(&core->mutex);
 					return -EINVAL;
 				}
 			}
@@ -3202,6 +3243,7 @@ int mtk_cam_seninf_aov_runtime_suspend(unsigned int sensor_id)
 							CLK_TOP_CAMTM, clk_names[CLK_TOP_CAMTM],
 							CLK_TOP_OSC_D4, clk_names[CLK_TOP_OSC_D4],
 							ret);
+						mutex_unlock(&core->mutex);
 						return ret;
 					}
 					dev_info(ctx->dev,
@@ -3214,6 +3256,7 @@ int mtk_cam_seninf_aov_runtime_suspend(unsigned int sensor_id)
 					dev_info(ctx->dev,
 						"[%s] Please check clk get whether NULL?\n",
 						__func__);
+					mutex_unlock(&core->mutex);
 					return -EINVAL;
 				}
 			}
@@ -3315,6 +3358,8 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 			"[%s] please check aov_deinit times?(%d)\n",
 			__func__,
 			core->pwr_refcnt_for_aov);
+		core->pwr_refcnt_for_aov = 0;
+		mutex_unlock(&core->mutex);
 		return -ENODEV;
 	}
 	dev_info(ctx->dev,
@@ -3341,6 +3386,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 						__func__,
 						CLK_TOP_CAMTG, clk_names[CLK_TOP_CAMTG],
 						ret);
+					mutex_unlock(&core->mutex);
 					return ret;
 				}
 				dev_info(ctx->dev,
@@ -3359,6 +3405,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 						CLK_TOP_CAMTG, clk_names[CLK_TOP_CAMTG],
 						CLK_TOP_OSC_D20, clk_names[CLK_TOP_OSC_D20],
 						ret);
+					mutex_unlock(&core->mutex);
 					return ret;
 				}
 				dev_info(ctx->dev,
@@ -3371,6 +3418,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 				dev_info(ctx->dev,
 					"[%s] Please check clk get whether NULL?\n",
 					__func__);
+				mutex_unlock(&core->mutex);
 				return -EINVAL;
 			}
 			/* enable seninf cg */
@@ -3382,6 +3430,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 						__func__,
 						CLK_CAM_SENINF, clk_names[CLK_CAM_SENINF],
 						ret);
+					mutex_unlock(&core->mutex);
 					return ret;
 				}
 				dev_info(ctx->dev,
@@ -3407,6 +3456,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 						__func__,
 						CLK_TOP_SENINF1, clk_names[CLK_TOP_SENINF1],
 						ret);
+					mutex_unlock(&core->mutex);
 					return ret;
 				}
 				dev_info(ctx->dev,
@@ -3418,6 +3468,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 				dev_info(ctx->dev,
 					"[%s] Please check clk get whether NULL?\n",
 					__func__);
+				mutex_unlock(&core->mutex);
 				return -EINVAL;
 			}
 			/* SCP side to AP */
@@ -3435,6 +3486,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 							CLK_TOP_MAINPLL2_D9,
 							clk_names[CLK_TOP_MAINPLL2_D9],
 							ret);
+						mutex_unlock(&core->mutex);
 						return ret;
 					}
 					dev_info(ctx->dev,
@@ -3447,6 +3499,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 					dev_info(ctx->dev,
 						"[%s] Please check clk get whether NULL?\n",
 						__func__);
+					mutex_unlock(&core->mutex);
 					return -EINVAL;
 				}
 			}
@@ -3461,6 +3514,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 						__func__,
 						CLK_TOP_CAMTM, clk_names[CLK_TOP_CAMTM],
 						ret);
+					mutex_unlock(&core->mutex);
 					return ret;
 				}
 				dev_info(ctx->dev,
@@ -3472,6 +3526,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 				dev_info(ctx->dev,
 					"[%s] Please check clk get whether NULL?\n",
 					__func__);
+				mutex_unlock(&core->mutex);
 				return -EINVAL;
 			}
 			/* SCP side to AP */
@@ -3489,6 +3544,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 							CLK_TOP_MAINPLL2_D9,
 							clk_names[CLK_TOP_MAINPLL2_D9],
 							ret);
+						mutex_unlock(&core->mutex);
 						return ret;
 					}
 					dev_info(ctx->dev,
@@ -3501,6 +3557,7 @@ int mtk_cam_seninf_aov_runtime_resume(unsigned int sensor_id,
 					dev_info(ctx->dev,
 						"[%s] Please check clk get whether NULL?\n",
 						__func__);
+					mutex_unlock(&core->mutex);
 					return -EINVAL;
 				}
 			}

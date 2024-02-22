@@ -20,6 +20,10 @@
 #include "mtu3_debug.h"
 #include "mtu3_trace.h"
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+static struct mtu3 *g_mtu;
+#endif
+
 static int ep_fifo_alloc(struct mtu3_ep *mep, u32 seg_size)
 {
 	struct mtu3_fifo_info *fifo = mep->fifo;
@@ -897,7 +901,7 @@ static void mtu3_check_params(struct mtu3 *mtu)
 		break;
 	}
 
-	if (!mtu->is_u3_ip && (mtu->max_speed > USB_SPEED_HIGH))
+	if ((!mtu->is_u3_ip || mtu->ssusb->u2_ip) && (mtu->max_speed > USB_SPEED_HIGH))
 		mtu->max_speed = USB_SPEED_HIGH;
 
 	mtu->speed = mtu->max_speed;
@@ -972,6 +976,61 @@ static int mtu3_set_dma_mask(struct mtu3 *mtu)
 	return ret;
 }
 
+/* #define OPLUS_FEATURE_CHG_BASIC */
+/* default value 0 */
+#ifdef OPLUS_FEATURE_CHG_BASIC
+static int usb_rdy;
+bool is_usb_rdy(void)
+{
+	if(!g_mtu){
+		pr_err("g_mtu is null");
+		return false;
+	}
+
+	if (g_mtu->is_gadget_ready) {
+		usb_rdy = 1;
+		pr_info("[MTU3]set usb_rdy, wake up bat\n");
+	}
+
+	if (usb_rdy)
+		return true;
+	else
+		return false;
+}
+EXPORT_SYMBOL(is_usb_rdy);
+
+/* BC1.2 */
+/* Duplicate define in phy-mtk-tphy */
+#define PHY_MODE_BC11_SW_SET 1
+#define PHY_MODE_BC11_SW_CLR 2
+
+void Charger_Detect_Init(void)
+{
+	if(!g_mtu){
+		pr_err("g_mtu is null");
+		return;
+	}
+
+	phy_set_mode_ext(g_mtu->ssusb->phys[0], PHY_MODE_USB_DEVICE, PHY_MODE_BC11_SW_SET);
+
+	pr_info("[MTU3]%s\n", __func__);
+}
+EXPORT_SYMBOL(Charger_Detect_Init);
+
+void Charger_Detect_Release(void)
+{
+	if(!g_mtu){
+		pr_err("g_mtu is null");
+		return;
+	}
+
+	phy_set_mode_ext(g_mtu->ssusb->phys[0], PHY_MODE_USB_DEVICE, PHY_MODE_BC11_SW_CLR);
+
+	pr_info("[MTU3]%s\n", __func__);
+}
+EXPORT_SYMBOL(Charger_Detect_Release);
+/* #endif */
+#endif
 int ssusb_gadget_init(struct ssusb_mtk *ssusb)
 {
 	struct device *dev = ssusb->dev;
@@ -1009,7 +1068,9 @@ int ssusb_gadget_init(struct ssusb_mtk *ssusb)
 	mtu->ssusb = ssusb;
 	mtu->max_speed = usb_get_maximum_speed(dev);
 	mtu->u3_lpm = !of_property_read_bool(dev->of_node, "usb3-lpm-disable");
-
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	g_mtu = mtu;
+#endif
 	dev_dbg(dev, "mac_base=0x%p, ippc_base=0x%p\n",
 		mtu->mac_base, mtu->ippc_base);
 
@@ -1032,8 +1093,6 @@ int ssusb_gadget_init(struct ssusb_mtk *ssusb)
 		dev_err(dev, "request irq %d failed!\n", mtu->irq);
 		goto irq_err;
 	}
-
-	device_init_wakeup(dev, true);
 
 	/* power down device IP for power saving by default */
 	mtu3_stop(mtu);

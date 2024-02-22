@@ -40,6 +40,7 @@ struct pd_capacity_info {
 	// for util mapping in O(1)
 	int nr_util_opp_map;
 	int *util_opp_map;
+	int *util_opp_map_legacy;
 
 	// for freq mapping in O(1)
 	unsigned int DFreq;
@@ -79,7 +80,16 @@ struct sugov_policy {
 
 	bool			limits_changed;
 	bool			need_freq_update;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+	unsigned int	flags;
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_CPUFREQ_IOWAIT_PROTECT)
+	u64			last_update;
+#endif
 };
+
+#define MAX_CLUSTERS 3
+static int init_flag[MAX_CLUSTERS];
 
 #if IS_ENABLED(CONFIG_MTK_OPP_CAP_INFO)
 int init_opp_cap_info(struct proc_dir_entry *dir);
@@ -97,6 +107,7 @@ extern struct mtk_em_perf_state *pd_get_util_ps(int cpu, unsigned long util, int
 extern unsigned long pd_get_util_freq(int cpu, unsigned long util);
 extern unsigned long pd_get_util_pwr_eff(int cpu, unsigned long util);
 extern unsigned long pd_get_util_opp(int cpu, unsigned long util);
+extern unsigned long pd_get_util_opp_legacy(int cpu, unsigned long util);
 extern unsigned long pd_get_opp_pwr_eff(int cpu, int opp);
 extern unsigned int pd_get_cpu_opp(int cpu);
 extern unsigned int pd_get_opp_leakage(unsigned int cpu, unsigned int opp,
@@ -108,6 +119,9 @@ void mtk_arch_set_freq_scale(void *data, const struct cpumask *cpus,
 				unsigned long freq, unsigned long max, unsigned long *scale);
 extern int set_sched_capacity_margin_dvfs(unsigned int capacity_margin);
 extern unsigned int get_sched_capacity_margin_dvfs(void);
+void nonlinear_map_util_freq(void *data, unsigned long util, unsigned long freq,
+		unsigned long cap, unsigned long *next_freq, struct cpufreq_policy *policy,
+		bool *need_freq_update);
 #endif
 #endif
 extern void set_sbb(int flag, int pid, bool set);

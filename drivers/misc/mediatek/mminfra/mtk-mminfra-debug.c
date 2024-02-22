@@ -108,6 +108,26 @@ static void do_mminfra_bkrs(bool is_restore)
 	}
 }
 
+static struct device *mminfra_get_if_in_use(void)
+{
+	s32 i, ret = 0;
+
+	for (i = 0; i < MAX_SMI_COMM_NUM; i++) {
+		if (!dev || !dbg || !dbg->comm_dev[i])
+			break;
+
+		ret = pm_runtime_get_if_in_use(dbg->comm_dev[i]);
+		if (ret <= 0)
+			continue;
+		else
+			return dbg->comm_dev[i];
+	}
+
+	pr_info("MMinfra may off, idx:%d ret=%d\n", i, ret);
+
+	return NULL;
+}
+
 static void mminfra_clk_set(bool is_enable)
 {
 	int err = 0;
@@ -174,18 +194,6 @@ static void mminfra_cg_check(bool on)
 				|| (con1_val & GCE26M_CG_BIT))
 				cmdq_dump_usage();
 		}
-	} else {
-		/* SMI CG still on */
-		if (!(con0_val & (SMI_CG_BIT)) || !(con0_val & GCEM_CG_BIT)
-			|| !(con0_val & GCED_CG_BIT) || !(con1_val & GCE26M_CG_BIT)) {
-			pr_notice("%s Scg still on, CG_CON0:0x%x CG_CON1:0x%x\n",
-						__func__, con0_val, con1_val);
-			if (!(con0_val & (SMI_CG_BIT)))
-				mtk_smi_dbg_cg_status();
-			if (!(con0_val & GCEM_CG_BIT) || !(con0_val & GCED_CG_BIT)
-				|| !(con1_val & GCE26M_CG_BIT))
-				cmdq_dump_usage();
-		}
 	}
 }
 
@@ -223,15 +231,19 @@ static int mtk_mminfra_pd_callback(struct notifier_block *nb,
 			BUG_ON(1);
 		}
 		iounmap(test_base);
-		pr_notice("%s: enable clk ref_cnt=%d\n", __func__, count);
 		writel(0x20002, dbg->gce_base + GCE_GCTL_VALUE);
-		pr_notice("%s: enable gce apsrc: %#x=%#x\n",
-			__func__, GCE_BASE + GCE_GCTL_VALUE, readl(dbg->gce_base + GCE_GCTL_VALUE));
+		pr_notice("%s: enable clk ref_cnt=%d, enable gce apsrc: %#x=%#x\n",
+			__func__, count, GCE_BASE + GCE_GCTL_VALUE,
+			readl(dbg->gce_base + GCE_GCTL_VALUE));
 	} else if (flags == GENPD_NOTIFY_PRE_OFF) {
+		writel(0, dbg->gce_base + GCE_GCTL_VALUE);
+		pr_notice("%s: disable gce apsrc: %#x=%#x\n",
+			__func__, GCE_BASE + GCE_GCTL_VALUE, readl(dbg->gce_base + GCE_GCTL_VALUE));
 		test_base = ioremap(bkrs_reg_pa, 4);
 		bk_val = readl_relaxed(test_base);
 		if (mminfra_bkrs)
 			do_mminfra_bkrs(false);
+		iounmap(test_base);
 		count = atomic_read(&clk_ref_cnt);
 		if (count != 1) {
 			pr_notice("%s: wrong clk ref_cnt=%d in PRE_OFF\n",
@@ -249,6 +261,7 @@ static int mtk_mminfra_pd_callback(struct notifier_block *nb,
 
 int mminfra_scmi_test(const char *val, const struct kernel_param *kp)
 {
+#ifdef MMINFRA_DEBUG
 	int ret, arg0;
 	unsigned int test_case;
 	void __iomem *test_base = ioremap(0x1e800280, 4);
@@ -274,7 +287,7 @@ int mminfra_scmi_test(const char *val, const struct kernel_param *kp)
 	}
 
 	iounmap(test_base);
-
+#endif
 	return 0;
 }
 
@@ -426,11 +439,18 @@ static int mminfra_smi_dbg_cb(struct notifier_block *nb,
 static bool aee_dump;
 static irqreturn_t mminfra_irq_handler(int irq, void *data)
 {
+	struct device *comm_dev;
 	//char buf[LINK_MAX + 1] = {0};
 
 	pr_notice("handle mminfra irq!\n");
 	if (!dev || !dbg || !dbg->comm_dev[0])
 		return IRQ_NONE;
+
+	comm_dev = mminfra_get_if_in_use();
+	if (!comm_dev) {
+		pr_notice("%s: mminfra is power off\n", __func__);
+		return IRQ_HANDLED;
+	}
 
 	cmdq_util_mminfra_cmd(1);
 
@@ -446,6 +466,8 @@ static irqreturn_t mminfra_irq_handler(int irq, void *data)
 	}
 
 	cmdq_util_mminfra_cmd(0);
+
+	pm_runtime_put(comm_dev);
 
 	return IRQ_HANDLED;
 }

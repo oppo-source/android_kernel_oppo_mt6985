@@ -14,6 +14,7 @@
 #define MML_MAX_INPUTS		2
 #define MML_MAX_OUTPUTS		2
 #define MML_MAX_PLANES		3
+#define MML_PIPE_CNT		2
 
 struct mml_job {
 	uint32_t jobid;
@@ -111,6 +112,7 @@ enum mml_pq_video_mode {
 	MML_PQ_AISPQ,
 	MML_PQ_AISDR2HDR,
 	MML_PQ_AIREGION,
+	MML_PQ_CCORR,
 };
 
 struct mml_pq_param {
@@ -126,6 +128,7 @@ struct mml_pq_param {
 	struct mml_pq_video_param video_param;
 	uint32_t user_info;
 	uint32_t app_hint;
+	uint32_t connector_id;
 };
 
 struct mml_frame_data {
@@ -210,6 +213,7 @@ struct mml_frame_buffer {
  *		MML try to match same info in cache and reuse same commands.
  * @buffer:	Buffer fd and related parameters.
  * @layer:	Rect on display screen for mml detect layout (left/right pipe).
+ * @dl_out:	Direct Link output ROI.
  * @sec:	End-Time for time value second
  * @usec:	End-Time for time value usecond
  * @pq_param:	PQ parameters pointer. Leave empty also disable PQ.
@@ -222,6 +226,7 @@ struct mml_submit {
 	struct mml_frame_info info;
 	struct mml_frame_buffer buffer;
 	struct mml_rect layer;
+	struct mml_rect dl_out[MML_PIPE_CNT];
 	struct timeval_t {
 		uint64_t sec;
 		uint64_t nsec;

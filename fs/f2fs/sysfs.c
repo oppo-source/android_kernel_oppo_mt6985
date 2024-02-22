@@ -513,7 +513,6 @@ out:
 
 	if (!strcmp(a->attr.name, "gc_urgent_high_remaining")) {
 		spin_lock(&sbi->gc_urgent_high_lock);
-		sbi->gc_urgent_high_limited = t != 0;
 		sbi->gc_urgent_high_remaining = t;
 		spin_unlock(&sbi->gc_urgent_high_lock);
 
@@ -531,9 +530,15 @@ out:
 	if (!strcmp(a->attr.name, "iostat_period_ms")) {
 		if (t < MIN_IOSTAT_PERIOD_MS || t > MAX_IOSTAT_PERIOD_MS)
 			return -EINVAL;
+#if IS_ENABLED(CONFIG_MTK_F2FS_DEBUG)
+		spin_lock_irq(&sbi->iostat_lock);
+		sbi->iostat_period_ms = (unsigned int)t;
+		spin_unlock_irq(&sbi->iostat_lock);
+#else
 		spin_lock(&sbi->iostat_lock);
 		sbi->iostat_period_ms = (unsigned int)t;
 		spin_unlock(&sbi->iostat_lock);
+#endif /* CONFIG_MTK_F2FS_DEBUG */
 		return count;
 	}
 #endif

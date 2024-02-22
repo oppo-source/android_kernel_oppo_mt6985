@@ -274,7 +274,7 @@ struct cmdq_command_buffer {
 };
 s32 cmdq_op_poll_ex(struct cmdqRecStruct *handle,
 	struct cmdq_command_buffer *cmd_buf, u32 addr,
-	CMDQ_VARIABLE value, u32 mask);
+	CMDQ_VARIABLE value, u32 mask, u32 gpr);
 s32 cmdq_op_assign_reg_idx_ex(struct cmdqRecStruct *handle,
 	struct cmdq_command_buffer *cmd_buf, u16 reg_idx, CMDQ_VARIABLE value);
 s32 cmdq_op_read_reg_to_mem_ex(struct cmdqRecStruct *handle,
@@ -457,7 +457,10 @@ s32 cmdqRecDumpCommand(struct cmdqRecStruct *handle);
  * Parameter:
  *     handle: the command queue recorder handle
  */
-s32 cmdq_task_destroy(struct cmdqRecStruct *handle);
+void cmdq_ref_init(struct cmdqRecStruct *handle);
+void cmdq_task_use(struct cmdqRecStruct *handle);
+void cmdq_task_destroy(struct cmdqRecStruct *handle);
+void cmdq_task_destroy_handle(struct kref *kref);
 void cmdqRecDestroy(struct cmdqRecStruct *handle);
 
 /* Change instruction of index to NOP instruction

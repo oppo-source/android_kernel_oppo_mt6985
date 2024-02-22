@@ -34,12 +34,14 @@
 #define trace_mtk_dsp_start(underflowed, id)
 #define trace_mtk_dsp_stop(id)
 #endif
-
 static DEFINE_MUTEX(adsp_wakelock_lock);
 
 #define IPIMSG_SHARE_MEM (1024)
 #define DSP_IRQ_LOOP_COUNT (3)
-static int adsp_wakelock_count;
+//#ifdef OPLUS_ARCH_EXTENDS
+/* 2023/01/17, add patch for ALPS07829227 */
+static int adsp_wakelock_count = 0;
+//#endif
 static struct wakeup_source *adsp_audio_wakelock;
 static int ktv_status;
 
@@ -170,6 +172,29 @@ static int dsp_wakelock_get(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
+//#ifdef OPLUS_ARCH_EXTENDS
+/* 2023/01/17, add patch for ALPS07829227 */
+static int reset_dsp_wakelock_set(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	mutex_lock(&adsp_wakelock_lock);
+	pr_info("%s reset wakelock for audiohal reboot %d", __func__, adsp_wakelock_count);
+	if (adsp_wakelock_count > 0)
+	{
+		aud_wake_unlock(adsp_audio_wakelock);
+		adsp_wakelock_count = 0;
+	}
+	mutex_unlock(&adsp_wakelock_lock);
+	return 0;
+}
+
+static int reset_dsp_wakelock_get(struct snd_kcontrol *kcontrol,
+				struct snd_ctl_elem_value *ucontrol)
+{
+	return 0;
+}
+//#endif
+
 static int audio_dsp_version_set(struct snd_kcontrol *kcontrol,
 				 struct snd_ctl_elem_value *ucontrol)
 {
@@ -280,6 +305,8 @@ static const struct snd_kcontrol_new dsp_platform_kcontrols[] = {
 		       dsp_task_attr_get, dsp_task_attr_set),
 	SOC_SINGLE_EXT("dsp_fast_default_en", SND_SOC_NOPM, 0, 0xff, 0,
 		       dsp_task_attr_get, dsp_task_attr_set),
+	SOC_SINGLE_EXT("dsp_spatializer_default_en", SND_SOC_NOPM, 0, 0xff, 0,
+		       dsp_task_attr_get, dsp_task_attr_set),
 	SOC_SINGLE_EXT("dsp_ktv_default_en", SND_SOC_NOPM, 0, 0x1, 0,
 		       dsp_task_attr_get, dsp_task_attr_set),
 	SOC_SINGLE_EXT("dsp_captureraw_default_en", SND_SOC_NOPM, 0, 0x1, 0,
@@ -328,6 +355,8 @@ static const struct snd_kcontrol_new dsp_platform_kcontrols[] = {
 		       dsp_task_attr_get, dsp_task_attr_set),
 	SOC_SINGLE_EXT("dsp_fast_runtime_en", SND_SOC_NOPM, 0, 0x1, 0,
 		       dsp_task_attr_get, dsp_task_attr_set),
+	SOC_SINGLE_EXT("dsp_spatializer_runtime_en", SND_SOC_NOPM, 0, 0x1, 0,
+		       dsp_task_attr_get, dsp_task_attr_set),
 	SOC_SINGLE_EXT("dsp_ktv_runtime_en", SND_SOC_NOPM, 0, 0x1, 0,
 		       dsp_task_attr_get, dsp_task_attr_set),
 	SOC_SINGLE_EXT("dsp_captureraw_runtime_en", SND_SOC_NOPM, 0, 0x1, 0,
@@ -370,6 +399,11 @@ static const struct snd_kcontrol_new dsp_platform_kcontrols[] = {
 		       ktv_status_get, ktv_status_set),
 	SOC_SINGLE_EXT("audio_dsp_wakelock", SND_SOC_NOPM, 0, 0x1, 0,
 		       dsp_wakelock_get, dsp_wakelock_set),
+//#ifdef OPLUS_ARCH_EXTENDS
+/* 2023/01/17, add patch for ALPS07829227 */
+	SOC_SINGLE_EXT("reset_audio_dsp_wakelock", SND_SOC_NOPM, 0, 0x1, 0,
+		       reset_dsp_wakelock_get, reset_dsp_wakelock_set),
+//#endif
 };
 
 static snd_pcm_uframes_t mtk_dsphw_pcm_pointer_ul
@@ -1395,6 +1429,7 @@ static int audio_send_reset_event(void)
 			(i == TASK_SCENE_VOIP) ||
 			(i == TASK_SCENE_PRIMARY) ||
 			(i == TASK_SCENE_FAST) ||
+			(i == TASK_SCENE_SPATIALIZER) ||
 			(i == TASK_SCENE_CAPTURE_RAW) ||
 			(i == TASK_SCENE_UL_PROCESS)) {
 			ret = mtk_scp_ipi_send(i, AUDIO_IPI_MSG_ONLY,
@@ -1469,6 +1504,7 @@ static int mtk_dsp_probe(struct snd_soc_component *component)
 #ifdef CFG_RECOVERY_SUPPORT
 	adsp_register_notify(&adsp_audio_notifier);
 #endif
+
 	return ret;
 }
 

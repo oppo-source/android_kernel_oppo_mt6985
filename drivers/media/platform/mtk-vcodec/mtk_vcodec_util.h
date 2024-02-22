@@ -26,7 +26,7 @@
 
 #define mem_slot_range (100*1024ULL) //100KB
 
-#define CODEC_ALLOCATE_MAX_BUFFER_SIZE 0x10000000UL /*256MB, sync with mtk_vcodec_mem.h*/
+#define CODEC_ALLOCATE_MAX_BUFFER_SIZE 0x20000000UL /*512MB, sync with mtk_vcodec_mem.h*/
 
 #define LOG_PARAM_INFO_SIZE 64
 #define LOG_PROPERTY_SIZE 1024
@@ -97,6 +97,7 @@ struct mtk_vcodec_msgq {
 	wait_queue_head_t wq;
 	spinlock_t lock;
 	atomic_t cnt;
+	struct list_head nodes; // free msg q nodes
 };
 
 struct mtk_vcodec_msg_node {
@@ -131,8 +132,9 @@ extern char *mtk_vdec_vcp_log;
 extern char mtk_vdec_vcp_log_prev[LOG_PROPERTY_SIZE];
 extern char *mtk_venc_vcp_log;
 extern char mtk_venc_vcp_log_prev[LOG_PROPERTY_SIZE];
-extern int mtk_vdec_sw_mem_sec;
 extern int mtk_vdec_align_limit;
+extern int support_svp_region;
+extern int support_wfd_region;
 
 struct VENC_SLB_CB_T {
 	atomic_t release_slbc;
@@ -174,12 +176,12 @@ enum mtk_vcodec_debug_level {
 #define mtk_v4l2_debug_enter()  mtk_v4l2_debug(8, "+")
 #define mtk_v4l2_debug_leave()  mtk_v4l2_debug(8, "-")
 
-#define mtk_vcodec_debug(h, fmt, args...)                               \
-	do {                                                            \
-		if (mtk_vcodec_dbg)                                  \
+#define mtk_vcodec_debug(h, fmt, args...)                     \
+	do {                                                      \
+		if (mtk_vcodec_dbg && h != NULL && h->ctx != NULL)    \
 			pr_notice("[MTK_VCODEC][%d]: %s() " fmt "\n",     \
-				((struct mtk_vcodec_ctx *)h->ctx)->id,  \
-				__func__, ##args);                      \
+				((struct mtk_vcodec_ctx *)h->ctx)->id,        \
+				__func__, ##args);                            \
 	} while (0)
 
 #define mtk_vcodec_perf_log(fmt, args...)                               \
@@ -188,10 +190,12 @@ enum mtk_vcodec_debug_level {
 			pr_info("[MTK_PERF] " fmt "\n", ##args);        \
 	} while (0)
 
-
-#define mtk_vcodec_err(h, fmt, args...)                                 \
-	pr_notice("[MTK_VCODEC][ERROR][%d]: %s() " fmt "\n",               \
-		   ((struct mtk_vcodec_ctx *)h->ctx)->id, __func__, ##args)
+#define mtk_vcodec_err(h, fmt, args...)                                      \
+	do {                                                                     \
+		if (h != NULL && h->ctx != NULL)                                     \
+			pr_notice("[MTK_VCODEC][ERROR][%d]: %s() " fmt "\n",               \
+				((struct mtk_vcodec_ctx *)h->ctx)->id, __func__, ##args);    \
+	} while (0)
 
 #define mtk_vcodec_debug_enter(h)  mtk_vcodec_debug(h, "+")
 #define mtk_vcodec_debug_leave(h)  mtk_vcodec_debug(h, "-")
@@ -283,6 +287,7 @@ extern phys_addr_t vcp_get_reserve_mem_virt(enum vcp_reserve_mem_id_t id);
 extern phys_addr_t vcp_get_reserve_mem_size(enum vcp_reserve_mem_id_t id);
 #endif
 
+bool mtk_vcodec_is_vcp(int type);
 void __iomem *mtk_vcodec_get_dec_reg_addr(struct mtk_vcodec_ctx *data,
 	unsigned int reg_idx);
 void __iomem *mtk_vcodec_get_enc_reg_addr(struct mtk_vcodec_ctx *data,
@@ -315,8 +320,13 @@ int mtk_vcodec_free_mem(struct vcodec_mem_obj *mem, struct device *dev,
 	struct dma_buf_attachment *attach, struct sg_table *sgt);
 #endif
 
-void mtk_vcodec_set_log(struct mtk_vcodec_dev *dev, const char *val,
-	enum mtk_vcodec_log_index log_index);
+void mtk_vcodec_set_log(struct mtk_vcodec_ctx *ctx, struct mtk_vcodec_dev *dev,
+	const char *val, enum mtk_vcodec_log_index log_index,
+	void (*set_vcu_vpud_log)(struct mtk_vcodec_ctx *ctx, void *in));
+void mtk_vcodec_get_log(struct mtk_vcodec_ctx *ctx, struct mtk_vcodec_dev *dev,
+	char *val, enum mtk_vcodec_log_index log_index,
+	void (*get_vcu_vpud_log)(struct mtk_vcodec_ctx *ctx, void *out));
 void mtk_vcodec_init_slice_info(struct mtk_vcodec_ctx *ctx, struct mtk_video_dec_buf *dst_buf_info);
+void mtk_vcodec_check_alive(struct timer_list *t);
 
 #endif /* _MTK_VCODEC_UTIL_H_ */

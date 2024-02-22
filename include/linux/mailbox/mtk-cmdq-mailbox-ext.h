@@ -208,6 +208,7 @@ struct cmdq_thread {
 	u32			irq_task;
 	u64			mbox_en;
 	u64			mbox_dis;
+	u64			user_cb_cost;
 };
 
 extern int mtk_cmdq_log;
@@ -349,4 +350,6 @@ void cmdq_chan_dump_dbg(void *chan);
 void cmdq_get_mminfra_cb(cmdq_mminfra_power cb);
 void cmdq_get_mminfra_gce_cg_cb(cmdq_mminfra_gce_cg cb);
 void cmdq_dump_usage(void);
+u8 cmdq_get_irq_long_times(void *chan);
+
 #endif /* __MTK_CMDQ_MAILBOX_H__ */

@@ -94,7 +94,8 @@ static void queue_msg(struct mml_pq_chan *chan,
 }
 
 static s32 dequeue_msg(struct mml_pq_chan *chan,
-			struct mml_pq_sub_task **out_sub_task)
+			struct mml_pq_sub_task **out_sub_task,
+			bool err_print)
 {
 	struct mml_pq_sub_task *temp = NULL;
 
@@ -107,11 +108,15 @@ static s32 dequeue_msg(struct mml_pq_chan *chan,
 	if (temp) {
 		atomic_dec(&chan->msg_cnt);
 		list_del(&temp->mbox_list);
+	} else if (!err_print) {
+		mml_pq_log("%s msg_cnt[%d]", __func__, atomic_read(&chan->msg_cnt));
+		atomic_dec_if_positive(&chan->msg_cnt);
 	}
 	mutex_unlock(&chan->msg_lock);
 
 	if (!temp) {
-		mml_pq_err("%s temp is null", __func__);
+		if (err_print)
+			mml_pq_err("%s temp is null", __func__);
 		mml_pq_trace_ex_end();
 		return -ENOENT;
 	}
@@ -264,7 +269,6 @@ static void release_comp_config_result(void *data)
 static void release_pq_task(struct kref *ref)
 {
 	struct mml_pq_task *pq_task = container_of(ref, struct mml_pq_task, ref);
-
 	mml_pq_trace_ex_begin("%s", __func__);
 
 	release_tile_init_result(pq_task->tile_init.result);
@@ -330,18 +334,21 @@ void mml_pq_comp_config_clear(struct mml_task *task)
 		kref_put(&pq_task->ref, release_pq_task);
 }
 
-static void remove_sub_task(struct mml_pq_task *pq_task, struct mml_pq_chan *chan,
+static int remove_sub_task(struct mml_pq_task *pq_task, struct mml_pq_chan *chan,
 			    struct mml_pq_sub_task *sub_task)
 {
+	int ret = 0;
 	mml_pq_trace_ex_begin("pq core %s", __func__);
 	mml_pq_msg("%s chan[%p] sub_task[%p]", __func__, chan, sub_task);
 
 	mutex_lock(&chan->job_lock);
 	list_del(&sub_task->mbox_list);
 	mutex_unlock(&chan->job_lock);
-	kref_put(&pq_task->ref, release_pq_task);
-
+	mml_pq_log("%s before put - ref[%d]", __func__, kref_read(&pq_task->ref));
+	// 1 => release success, 0 => just decrease ref count
+	ret = kref_put(&pq_task->ref, release_pq_task);
 	mml_pq_trace_ex_end();
+	return ret;
 }
 
 void mml_pq_get_vcp_buf_offset(struct mml_task *task, u32 engine,
@@ -449,7 +456,7 @@ void mml_pq_put_readback_buffer(struct mml_task *task, u8 pipe,
 void mml_pq_task_release(struct mml_task *task)
 {
 	struct mml_pq_task *pq_task = task->pq_task;
-
+	mml_pq_log("%s before put - ref[%d]", __func__, kref_read(&pq_task->ref));
 	kref_put(&pq_task->ref, release_pq_task);
 	task->pq_task = NULL;
 }
@@ -603,7 +610,6 @@ static int set_sub_task(struct mml_task *task,
 {
 	struct mml_pq_task *pq_task = task->pq_task;
 	u64 random_num = 0;
-
 	mml_pq_msg("%s called queued[%d] result_ref[%d] job_id[%d, %d] first_job[%d]",
 		__func__, atomic_read(&sub_task->queued),
 		atomic_read(&sub_task->result_ref),
@@ -629,7 +635,6 @@ static int set_sub_task(struct mml_task *task,
 
 		return 0;
 	}
-
 	if (!atomic_fetch_add_unless(&sub_task->queued, 1, 1)) {
 		//WARN_ON(atomic_read(&sub_task->result_ref));
 		if (atomic_read(&sub_task->result_ref) && !sub_task->aee_dump_done) {
@@ -644,6 +649,7 @@ static int set_sub_task(struct mml_task *task,
 			sub_task->aee_dump_done = true;
 		}
 		atomic_set(&sub_task->result_ref, 0);
+		mml_pq_log("%s before get - ref[%d]", __func__, kref_read(&pq_task->ref));
 		kref_get(&pq_task->ref);
 		memcpy(&sub_task->frame_data.pq_param, task->pq_param,
 			MML_MAX_OUTPUTS * sizeof(struct mml_pq_param));
@@ -679,6 +685,7 @@ static int get_sub_task_result(struct mml_pq_task *pq_task,
 		mml_pq_msg("%s already handled or not queued", __func__);
 
 	mml_pq_msg("begin wait for result");
+
 	ret = wait_event_timeout(sub_task->wq,
 				(!atomic_read(&sub_task->queued)) && (sub_task->result),
 				msecs_to_jiffies(timeout_ms));
@@ -1010,7 +1017,7 @@ static void handle_sub_task_result(struct mml_pq_sub_task *sub_task,
 		/* old result still in-use, abandon new result or else? */
 		release_result(result);
 	} else {
-		if (sub_task->result)	/* destroy old result */
+		if (sub_task->result) /* destroy old result */
 			release_result(sub_task->result);
 		sub_task->result = result;
 	}
@@ -1026,6 +1033,7 @@ static void wake_up_sub_task(struct mml_pq_sub_task *sub_task,
 	mutex_unlock(&sub_task->lock);
 
 	/* decrease pq_task ref after finish the result */
+	mml_pq_log("%s  before put - ref[%d]", __func__, kref_read(&pq_task->ref));
 	kref_put(&pq_task->ref, release_pq_task);
 }
 
@@ -1033,6 +1041,8 @@ static struct mml_pq_sub_task *wait_next_sub_task(struct mml_pq_chan *chan)
 {
 	struct mml_pq_sub_task *sub_task = NULL;
 	s32 ret;
+	u32 error_cnt = 0;
+	bool err_print = true;
 
 	mml_pq_trace_ex_begin("%s", __func__);
 	mml_pq_msg("%s called msg_cnt[%d]", __func__,
@@ -1052,15 +1062,26 @@ static struct mml_pq_sub_task *wait_next_sub_task(struct mml_pq_chan *chan)
 		mml_pq_msg("%s finish wait event! wait_result[%d], msg_cnt[%d]",
 			__func__, ret, atomic_read(&chan->msg_cnt));
 
-		ret = dequeue_msg(chan, &sub_task);
+		ret = dequeue_msg(chan, &sub_task, err_print);
 		if (unlikely(ret)) {
-			mml_pq_err("err: dequeue msg failed: %d", ret);
+			if (error_cnt < 5)
+				mml_pq_err("%s err: dequeue msg failed: %d msg_cnt[%d]",
+					__func__, ret, atomic_read(&chan->msg_cnt));
+			if (error_cnt <= 5)
+				error_cnt++;
+			else
+				err_print = false;
+			usleep_range(5000, 5100);
 			continue;
 		}
 
 		mml_pq_msg("after dequeue msg!");
 		break;
 	}
+
+	if (error_cnt)
+		mml_pq_err("%s err[%d] recover", __func__, error_cnt);
+
 	mml_pq_msg("%s end %d task=%p", __func__, ret, sub_task);
 	mml_pq_trace_ex_end();
 	return sub_task;
@@ -1083,7 +1104,7 @@ static void handle_tile_init_result(struct mml_pq_chan *chan,
 	s32 ret;
 
 	mml_pq_trace_ex_begin("%s", __func__);
-	mml_pq_log("%s called, %d", __func__, job->result_job_id);
+	mml_pq_msg("%s called, %d", __func__, job->result_job_id);
 	ret = find_sub_task(chan, job->result_job_id, &sub_task);
 	if (unlikely(ret)) {
 		mml_pq_err("finish tile sub_task failed!: %d id: %d", ret,
@@ -1144,7 +1165,6 @@ static void handle_tile_init_result(struct mml_pq_chan *chan,
 		}
 		result->rsz_regs[1] = rsz_regs[1];
 	}
-
 	handle_sub_task_result(sub_task, result, release_tile_init_result);
 	goto wake_up_prev_tile_init_task;
 free_rsz_regs_1:
@@ -1245,14 +1265,14 @@ static void handle_comp_config_result(struct mml_pq_chan *chan,
 				      struct mml_pq_comp_config_job *job)
 {
 	struct mml_pq_sub_task *sub_task = NULL;
-	struct mml_pq_comp_config_result *result;
-	struct mml_pq_aal_config_param *aal_param;
-	struct mml_pq_reg *aal_regs;
-	struct mml_pq_reg *hdr_regs;
-	struct mml_pq_reg *ds_regs;
-	struct mml_pq_reg *color_regs;
-	u32 *aal_curve;
-	u32 *hdr_curve;
+	struct mml_pq_comp_config_result *result = NULL;
+	struct mml_pq_aal_config_param *aal_param = NULL;
+	struct mml_pq_reg *aal_regs = NULL;
+	struct mml_pq_reg *hdr_regs = NULL;
+	struct mml_pq_reg *ds_regs = NULL;
+	struct mml_pq_reg *color_regs = NULL;
+	u32 *aal_curve = NULL;
+	u32 *hdr_curve = NULL;
 	s32 ret;
 
 	mml_pq_trace_ex_begin("%s", __func__);
@@ -1364,7 +1384,7 @@ static void handle_comp_config_result(struct mml_pq_chan *chan,
 	if (unlikely(!ds_regs)) {
 		mml_pq_err("err: create ds_regs failed, size:%d\n",
 			result->ds_reg_cnt);
-		goto free_aal_curve;
+		goto free_hdr_curve;
 	}
 
 	ret = copy_from_user(ds_regs, result->ds_regs,
@@ -1401,14 +1421,14 @@ static void handle_comp_config_result(struct mml_pq_chan *chan,
 	mml_pq_msg("%s result end, result_id[%d] sub_task[%p]",
 		__func__, job->result_job_id, sub_task);
 	goto wake_up_prev_comp_config_task;
+free_color_regs:
+	kfree(color_regs);
+free_ds_regs:
+	kfree(ds_regs);
 free_hdr_curve:
 	kfree(hdr_curve);
 free_hdr_regs:
 	kfree(hdr_regs);
-free_ds_regs:
-	kfree(ds_regs);
-free_color_regs:
-	kfree(color_regs);
 free_aal_curve:
 	kfree(aal_curve);
 free_aal_regs:
@@ -1620,8 +1640,8 @@ static int mml_pq_aal_readback_ioctl(unsigned long data)
 		mml_pq_msg("single pipe");
 	}
 
-	atomic_dec_if_positive(&new_sub_task->queued);
-	remove_sub_task(new_pq_task, chan, new_sub_task);
+	if (!remove_sub_task(new_pq_task, chan, new_sub_task))
+		atomic_dec_if_positive(&new_sub_task->queued);
 
 	dump_sub_task(new_sub_task, new_job_id, readback->is_dual, readback->cut_pos_x,
 		AAL_HIST_NUM + AAL_DUAL_INFO_NUM);
@@ -1631,8 +1651,9 @@ static int mml_pq_aal_readback_ioctl(unsigned long data)
 	return 0;
 
 wake_up_aal_readback_task:
-	atomic_dec_if_positive(&new_sub_task->queued);
-	remove_sub_task(new_pq_task, chan, new_sub_task);
+	if (!remove_sub_task(new_pq_task, chan, new_sub_task))
+		atomic_dec_if_positive(&new_sub_task->queued);
+
 	kfree(readback);
 	kfree(job);
 	cancel_sub_task(new_sub_task);
@@ -1752,8 +1773,8 @@ static int mml_pq_hdr_readback_ioctl(unsigned long data)
 		mml_pq_msg("single pipe");
 	}
 
-	atomic_dec_if_positive(&new_sub_task->queued);
-	remove_sub_task(new_pq_task, chan, new_sub_task);
+	if (!remove_sub_task(new_pq_task, chan, new_sub_task))
+		atomic_dec_if_positive(&new_sub_task->queued);
 
 	dump_sub_task(new_sub_task, new_job_id, readback->is_dual, readback->cut_pos_x,
 		HDR_HIST_NUM);
@@ -1763,8 +1784,9 @@ static int mml_pq_hdr_readback_ioctl(unsigned long data)
 	return 0;
 
 wake_up_hdr_readback_task:
-	atomic_dec_if_positive(&new_sub_task->queued);
-	remove_sub_task(new_pq_task, chan, new_sub_task);
+	if (!remove_sub_task(new_pq_task, chan, new_sub_task))
+		atomic_dec_if_positive(&new_sub_task->queued);
+
 	kfree(job);
 	kfree(readback);
 	cancel_sub_task(new_sub_task);
@@ -1827,16 +1849,17 @@ static int mml_pq_rsz_callback_ioctl(unsigned long data)
 		goto wake_up_rsz_callback_task;
 	}
 
-	atomic_dec_if_positive(&new_sub_task->queued);
-	remove_sub_task(new_pq_task, chan, new_sub_task);
+	if (!remove_sub_task(new_pq_task, chan, new_sub_task))
+		atomic_dec_if_positive(&new_sub_task->queued);
 
 	mml_pq_msg("%s end job_id[%d]\n", __func__, job->new_job_id);
 	kfree(job);
 	return 0;
 
 wake_up_rsz_callback_task:
-	atomic_dec_if_positive(&new_sub_task->queued);
-	remove_sub_task(new_pq_task, chan, new_sub_task);
+	if (!remove_sub_task(new_pq_task, chan, new_sub_task))
+		atomic_dec_if_positive(&new_sub_task->queued);
+
 	kfree(job);
 	cancel_sub_task(new_sub_task);
 	mml_pq_msg("%s end %d\n", __func__, ret);
@@ -1964,8 +1987,8 @@ static int mml_pq_clarity_readback_ioctl(unsigned long data)
 		mml_pq_msg("single pipe");
 	}
 
-	atomic_dec_if_positive(&new_sub_task->queued);
-	remove_sub_task(new_pq_task, chan, new_sub_task);
+	if (!remove_sub_task(new_pq_task, chan, new_sub_task))
+		atomic_dec_if_positive(&new_sub_task->queued);
 
 	dump_sub_task(new_sub_task, new_job_id, readback->is_dual, readback->cut_pos_x,
 		HDR_HIST_NUM);
@@ -1975,8 +1998,9 @@ static int mml_pq_clarity_readback_ioctl(unsigned long data)
 	return 0;
 
 wake_up_clarity_readback_task:
-	atomic_dec_if_positive(&new_sub_task->queued);
-	remove_sub_task(new_pq_task, chan, new_sub_task);
+	if (!remove_sub_task(new_pq_task, chan, new_sub_task))
+		atomic_dec_if_positive(&new_sub_task->queued);
+
 	kfree(job);
 	kfree(readback);
 	cancel_sub_task(new_sub_task);
@@ -2096,8 +2120,8 @@ static int mml_pq_dc_readback_ioctl(unsigned long data)
 		mml_pq_msg("single pipe");
 	}
 
-	atomic_dec_if_positive(&new_sub_task->queued);
-	remove_sub_task(new_pq_task, chan, new_sub_task);
+	if (!remove_sub_task(new_pq_task, chan, new_sub_task))
+		atomic_dec_if_positive(&new_sub_task->queued);
 
 	dump_sub_task(new_sub_task, new_job_id, readback->is_dual, readback->cut_pos_x,
 		HDR_HIST_NUM);
@@ -2107,8 +2131,9 @@ static int mml_pq_dc_readback_ioctl(unsigned long data)
 	return 0;
 
 wake_up_dc_readback_task:
-	atomic_dec_if_positive(&new_sub_task->queued);
-	remove_sub_task(new_pq_task, chan, new_sub_task);
+	if (!remove_sub_task(new_pq_task, chan, new_sub_task))
+		atomic_dec_if_positive(&new_sub_task->queued);
+
 	kfree(job);
 	kfree(readback);
 	cancel_sub_task(new_sub_task);

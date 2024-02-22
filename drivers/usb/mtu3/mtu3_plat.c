@@ -656,6 +656,7 @@ get_phy:
 		of_property_read_bool(node, "mediatek,noise-still-tr");
 	ssusb->gen1_txdeemph =
 		of_property_read_bool(node, "mediatek,gen1-txdeemph");
+	ssusb->u2_ip = of_property_read_bool(node, "mediatek,u2-ip");
 	if (of_property_read_u32(node, "mediatek,hwrscs-vers",
 			     &ssusb->hwrscs_vers)) {
 		/* compatible to devie tree setting */
@@ -763,6 +764,8 @@ static int mtu3_probe(struct platform_device *pdev)
 	pm_runtime_set_autosuspend_delay(dev, 4000);
 	pm_runtime_enable(dev);
 	pm_runtime_get_sync(dev);
+
+	device_init_wakeup(dev, true);
 
 	ret = ssusb_rscs_init(ssusb);
 	if (ret)
@@ -881,11 +884,20 @@ static void mtu3_shutdown(struct platform_device *pdev)
 {
 	struct ssusb_mtk *ssusb = platform_get_drvdata(pdev);
 	struct otg_switch_mtk *otg_sx = &ssusb->otg_switch;
-
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	unsigned long flags;
+	struct mtu3 *mtu = ssusb->u3d;
+#endif
 	dev_info(ssusb->dev, "%s role %d\n", __func__, otg_sx->current_role);
-
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	spin_lock_irqsave(&mtu->lock, flags);
+	if (mtu->is_active && otg_sx->current_role == USB_ROLE_DEVICE)
+		mtu3_stop(ssusb->u3d);
+	spin_unlock_irqrestore(&mtu->lock, flags);
+#else
 	if (ssusb->clk_mgr && otg_sx->current_role == USB_ROLE_DEVICE)
 		mtu3_stop(ssusb->u3d);
+#endif
 }
 
 static int resume_ip_and_ports(struct ssusb_mtk *ssusb, pm_message_t msg)

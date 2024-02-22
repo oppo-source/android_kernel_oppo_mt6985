@@ -1,0 +1,98 @@
+
+#include "mediatek/oplus-23661-tpfw.dtsi"
+&spi3 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	touchscreen@0 {
+		compatible = "oplus,tp_noflash";
+		reg = <0>;
+		chip-name = "NF_NT36672C";
+		status = "ok";
+
+		spi-max-frequency = <9600000>;    /*4800000,9600000,15000000,19200000*/
+		reset-gpio = <&pio 171 0x00>;
+		interrupt-parent = <&pio>;
+		interrupts = <9  0x0>;
+		irq-gpio = <&pio 9 0x2002>;
+
+		tp_type = <7>;	/*TM  DSJM*/
+		panel_type = <7>;  /*type:7 TIANMA type:9 DSJM*/
+		touchpanel,irq_need_dev_resume_time = <500>;
+		touchpanel,max-num-support = <10>;
+		touchpanel,tx-rx-num = <16 36>;			/*hd:18  32*/
+		touchpanel,panel-coords = <4320 9600>;
+		touchpanel,display-coords = <1080 2400>;	/*hd:720 1612*/
+		touchpanel,touchmajor-limit = <0 54>;
+
+		platform_support_project = <23604 23605 23606 23660 23661 23670 23671>;
+		platform_support_project_dir = <23661 23661 23661 23661 23661 23661 23661>;
+		platform_support_project_commandline = "default_commandline","default_commandline","default_commandline","default_commandline","default_commandline","default_commandline","default_commandline";		/* hd*/
+		firmware_name = "AB676_TM_NT_01";
+		pinctrl-names = "default", "pin_cs_high","pin_cs_low";
+		pinctrl-0 = <&ctp_oplus_pins_default>;
+		pinctrl-1 = <&ts_cs_active>;
+		pinctrl-2 = <&ts_cs_suspend &ctp_oplus_int_suspend>;
+
+		touchpanel,smooth-level = <255 0 96 192 223 254>;
+		touchpanel,sensitive-level = <255 40 38 35 20 10>;
+		touchpanel,single-optimized-time = <8>;
+
+		incell_screen;
+		irq_need_dev_resume_ok;
+		fw_edge_limit_support;
+		black_gesture_support;
+		charger_pump_support;
+		headset_pump_support;
+		esd_handle_support;
+		//spurious_fingerprint_support;
+		//lcd_trigger_fp_check;
+		black_gesture_test_support;
+		noflash_support;
+		smart_gesture_support;
+		pressure_report_support;
+		fw_update_app_support;
+		game_switch_support;
+		drlimit_remove_support;
+		lcd_trigger_load_tp_fw_support;
+		suspend_gesture_cfg;
+		//fw_update_in_probe_with_headfile;
+		health_monitor_support;
+		//auto_test_force_pass_support;
+		exception_upload_support;
+		report_rate_white_list_support;
+		touchpanel,button-type = <4>;
+	};
+};
+
+&pio {
+	ctp_oplus_pins_default: pins_default {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO68__FUNC_SPI3_CLK>,
+					<PINMUX_GPIO69__FUNC_SPI3_CSB>,
+					<PINMUX_GPIO70__FUNC_SPI3_MO>,
+					<PINMUX_GPIO71__FUNC_SPI3_MI>;
+			bias-disable;
+			drive-strength = <4>;
+		};
+	};
+	ts_cs_active: ts_cs_active {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO69__FUNC_SPI3_CSB>;
+		};
+	};
+	ts_cs_suspend: ts_cs_suspend {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO69__FUNC_SPI3_CSB>;
+			output-low;
+		};
+	};
+	ctp_oplus_int_suspend: int1_suspend {
+		pins_cmd_dat {
+			pinmux = <PINMUX_GPIO9__FUNC_IO_JTAG_TCK>;
+			bias-disable;
+			input-enable;
+		};
+	};
+};
+

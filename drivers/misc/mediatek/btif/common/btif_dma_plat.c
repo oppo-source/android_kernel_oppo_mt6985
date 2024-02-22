@@ -434,12 +434,10 @@ int hal_btif_dma_hw_init(struct _MTK_DMA_INFO_STR_ *p_dma_info)
 			count++;
 		} while (count < 10);
 
-		/* If soft reset is failed, do hard reset. */
-		if (count >= 10) {
-			BTIF_SET_BIT(RX_DMA_RST(base), DMA_HARD_RST);
-			BTIF_CLR_BIT(RX_DMA_RST(base), DMA_HARD_RST);
-			BTIF_INFO_FUNC("RX dma hard reset\n");
-		}
+		/* do hard reset in case some registers not reset. */
+		BTIF_SET_BIT(RX_DMA_RST(base), DMA_HARD_RST);
+		BTIF_CLR_BIT(RX_DMA_RST(base), DMA_HARD_RST);
+		BTIF_INFO_FUNC("RX dma hard reset\n");
 
 		/*write vfifo base address to VFF_ADDR*/
 		btif_reg_sync_writel(p_vfifo->phy_addr, RX_DMA_VFF_ADDR(base));
@@ -476,12 +474,10 @@ int hal_btif_dma_hw_init(struct _MTK_DMA_INFO_STR_ *p_dma_info)
 			count++;
 		} while (count < 10);
 
-		/* If soft reset is failed, do hard reset. */
-		if (count >= 10) {
-			BTIF_SET_BIT(TX_DMA_RST(base), DMA_HARD_RST);
-			BTIF_CLR_BIT(TX_DMA_RST(base), DMA_HARD_RST);
-			BTIF_INFO_FUNC("TX dma hard reset\n");
-		}
+		/* do hard reset in case some registers not reset. */
+		BTIF_SET_BIT(TX_DMA_RST(base), DMA_HARD_RST);
+		BTIF_CLR_BIT(TX_DMA_RST(base), DMA_HARD_RST);
+		BTIF_INFO_FUNC("TX dma hard reset\n");
 
 /*write vfifo base address to VFF_ADDR*/
 		btif_reg_sync_writel(p_vfifo->phy_addr, TX_DMA_VFF_ADDR(base));
@@ -816,7 +812,7 @@ int hal_tx_dma_irq_handler(struct _MTK_DMA_INFO_STR_ *p_dma_info)
 /*vFIFO data has been read by DMA controller, just disable tx dma's irq*/
 		i_ret = hal_btif_dma_ier_ctrl(p_dma_info, false);
 	} else {
-		BTIF_DBG_FUNC
+		BTIF_INFO_FUNC
 		    ("superious IRQ:vff_len(%d),valid_size(%d),left_len(%d)\n",
 		     vff_len, valid_size, left_len);
 	}

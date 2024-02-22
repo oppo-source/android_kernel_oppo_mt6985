@@ -18,6 +18,10 @@
 #include "mtk-hcp-aee.h"
 #include "mtk-img-ipi.h"
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 //#include "scp_ipi.h"
 
 /**
@@ -193,6 +197,7 @@ int mtk_hcp_release_working_buffer(struct platform_device *pdev);
 
 void *mtk_hcp_get_gce_mem_virt(struct platform_device *pdev);
 void *mtk_hcp_get_hwid_mem_virt(struct platform_device *pdev);
+phys_addr_t mtk_hcp_get_gce_mem_size(struct platform_device *pdev);
 int mtk_hcp_get_init_info(struct platform_device *pdev, struct img_init_info *info);
 
 int mtk_hcp_get_gce_buffer(struct platform_device *pdev);
@@ -339,6 +344,7 @@ struct mtk_hcp {
 	struct task_struct *current_task;
 	struct workqueue_struct *daemon_notify_wq[MODULE_MAX_ID];
 	struct hcp_aee_info aee_info;
+	bool is_mem_alloc;
 };
 
 struct mtk_hcp_data {
@@ -352,6 +358,7 @@ struct mtk_hcp_data {
 	int (*get_gce)(void);
 	int (*put_gce)(void);
 	void* (*get_hwid_virt)(void);
+	phys_addr_t (*get_gce_mem_size)(void);
 };
 
 #define HCP_RESERVED_MEM  (1)

@@ -22,6 +22,10 @@ enum sensor_comm_ctrl_cmd {
 	SENS_COMM_CTRL_TIMESYNC_CMD,
 	SENS_COMM_CTRL_SHARE_MEMORY_CMD,
 	SENS_COMM_CTRL_DEBUG_CMD,
+	OPLUS_ACTION_SET_FACTORY_MODE,
+	OPLUS_ACTION_SELF_TEST,
+	OPLUS_ACTION_SCP_SYNC_UTC,
+	OPLUS_ACTION_SET_LCD_INFO,
 	MAX_SENS_COMM_CTRL_CMD,
 };
 
@@ -46,6 +50,13 @@ struct sensor_comm_batch {
 struct sensor_comm_timesync {
 	int64_t host_timestamp;
 	int64_t host_archcounter;
+	int64_t sched_clock;
+	int32_t usecond;
+	int32_t second;
+	int32_t minute;
+	int32_t hour;
+	int32_t day;
+	int32_t month;
 } __packed __aligned(4);
 
 struct sensor_comm_share_mem {

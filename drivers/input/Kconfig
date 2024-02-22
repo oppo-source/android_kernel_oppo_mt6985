@@ -195,6 +195,12 @@ source "drivers/input/serio/Kconfig"
 
 source "drivers/input/gameport/Kconfig"
 
+source "drivers/input/uff_fp_drivers/Kconfig"
+
+# #ifdef OPLUS_FEATURE_SECURITY_COMMON
+source "drivers/input/oplus_secure_drivers/Kconfig"
+# #endif /* OPLUS_FEATURE_SECURITY_COMMON */
+
 endmenu
 
 endmenu

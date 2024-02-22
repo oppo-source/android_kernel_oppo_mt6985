@@ -134,6 +134,7 @@ config SND_SOC_ALL_CODECS
 	imply SND_SOC_MT6359
 	imply SND_SOC_MT6359P
 	imply SND_SOC_MT6368
+	imply SND_SOC_MT6377
 	imply SND_SOC_MT6660
 	imply SND_SOC_NAU8315
 	imply SND_SOC_NAU8540
@@ -904,7 +905,6 @@ config SND_SOC_MAX98095
 
 config SND_SOC_MAX98357A
 	tristate "Maxim MAX98357A CODEC"
-	depends on GPIOLIB
 
 config SND_SOC_MAX98371
 	tristate
@@ -1153,7 +1153,6 @@ config SND_SOC_RT1015
 
 config SND_SOC_RT1015P
 	tristate
-	depends on GPIOLIB
 
 config SND_SOC_RT1019
 	tristate
@@ -1854,7 +1853,7 @@ config SND_SOC_WSA881X
 config SND_SOC_ZL38060
 	tristate "Microsemi ZL38060 Connected Home Audio Processor"
 	depends on SPI_MASTER
-	select GPIOLIB
+	depends on GPIOLIB
 	select REGMAP
 	help
 	  Support for ZL38060 Connected Home Audio Processor from Microsemi,
@@ -1898,6 +1897,15 @@ config SND_SOC_MT6338
 config SND_SOC_MT6338_ACCDET
 	tristate "MediaTek MT6338 ACCDET driver"
 	depends on MFD_MT6338
+	help
+	  ACCDET means Accessory Detection technology,
+	  MediaTek develop it for ASoC codec soc-jack
+	  detection mechanism. Select N if you don't
+	  have jack on board.
+
+config SND_SOC_MT6377_ACCDET
+	tristate "MediaTek MT6377 ACCDET driver"
+	depends on MFD_MTK_SPMI_PMIC
 	help
 	  ACCDET means Accessory Detection technology,
 	  MediaTek develop it for ASoC codec soc-jack
@@ -1970,6 +1978,14 @@ config SND_SOC_MT6368
 	  three DAC for downlink path(handset,
 	  headset, lineout).
 
+config SND_SOC_MT6377
+	tristate "MediaTek MT6377 Codec driver"
+	help
+	  MediaTek MT6377 is a audio codec which contain
+	  three ADC for uplink path(MICs), and
+	  three DAC for downlink path(handset,
+	  headset, lineout).
+
 config SND_SOC_NAU8315
 	tristate "Nuvoton Technology Corporation NAU8315 CODEC"
 	depends on GPIOLIB
@@ -2017,5 +2033,24 @@ config SND_SOC_LPASS_TX_MACRO
 	depends on COMMON_CLK
 	select REGMAP_MMIO
 	tristate "Qualcomm TX Macro in LPASS(Low Power Audio SubSystem)"
+
+#ifdef OPLUS_ARCH_EXTENDS
+config SND_SOC_FSA
+	tristate "usb type-c switch"
+	help
+	  This adds fsa driver for Mediatek boards
+	  that can be used with other platforms
+	  Select Y if you have such device.
+	  If unsure select "N".
+#endif /* OPLUS_ARCH_EXTENDS */
+
+config HSKEY_BLOCK
+	bool "Block hskey for 1s"
+	default n
+
+#ifdef OPLUS_ARCH_EXTENDS
+# Add for audio extern
+source "sound/soc/codecs/audio/Kconfig"
+#endif /* OPLUS_ARCH_EXTENDS */
 
 endmenu

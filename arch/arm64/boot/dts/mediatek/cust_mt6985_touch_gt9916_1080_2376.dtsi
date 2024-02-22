@@ -32,7 +32,7 @@
 		goodix,avdd-name = "avdd";
 		avdd-supply = <&mt6373_vcn33_3>;	/*3V PMIC*/
 		goodix,iovdd-name = "iovdd";
-		iovdd-supply = <&mt6373_vrfio18_aif>; //1V8 connect INT, need power enable
+		/* iovdd-supply = <&mt6373_vrfio18_aif>; */ //1V8 connect INT, need power enable
 		goodix,reset-gpio = <&pio 220 0x00>;
 		goodix,irq-gpio = <&pio 106 0x00>;
 		goodix,irq-flags = <2>; /* 1:rising, 2:falling;*/

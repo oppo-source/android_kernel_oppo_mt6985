@@ -1,0 +1,20 @@
+&i2c5 {
+	aw35616_typec: usb_type_c_aw35616@60 {
+		compatible = "awinic,usb_type_c_aw35616";
+		reg = <0x60>;
+		aw35616,irq-gpio = <&pio 12 0x0>;
+		mt-dual,supported_modes = <0>; /* 0: dfp/ufp, 1: dfp, 2: ufp */
+		aw35616-tcpc,name = "type_c_port0";
+		/* 0: SNK Only, 1: SRC Only, 2: DRP, 3: Try.SRC, 4: Try.SNK */
+		aw35616-tcpc,role_def = <0>;
+		aw35616,rp_level = <0>; /* 0: Default, 1: 1.5, 2: 3.0 */
+		/* 0: Never, 1: Always, 2: EMarkOnly, 3: StartOnly */
+		aw35616_acc_support = <0>; /* 0:support, 1:No support */
+		aw35616_toggle_cycle = <0>; /* 0:Disable, 1:40ms, 2:80ms, 3:160ms */
+		// /* the number of notifier supply */
+		// aw35616-tcpc,notifier_supply_num = <3>;
+		aw35616_st_support = <1>;/* 0:No support, 1:support */
+        status = "okay";
+	};
+};
+

@@ -101,6 +101,7 @@ unsigned int __gpufreq_get_core_num(void);
 void __gpufreq_pdca_config(enum gpufreq_power_state power);
 void __gpufreq_update_debug_opp_info(void);
 void __gpufreq_set_shared_status(struct gpufreq_shared_status *shared_status);
+void __gpufreq_update_temperature(unsigned int instant_dvfs);
 int __gpufreq_mssv_commit(unsigned int target, unsigned int val);
 /* GPU */
 unsigned int __gpufreq_get_cur_fgpu(void);
@@ -108,6 +109,7 @@ unsigned int __gpufreq_get_cur_vgpu(void);
 unsigned int __gpufreq_get_cur_pgpu(void);
 unsigned int __gpufreq_get_max_pgpu(void);
 unsigned int __gpufreq_get_min_pgpu(void);
+unsigned int __gpufreq_get_cur_vcore(void);
 int __gpufreq_get_cur_idx_gpu(void);
 int __gpufreq_get_opp_num_gpu(void);
 int __gpufreq_get_signed_opp_num_gpu(void);

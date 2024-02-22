@@ -31,6 +31,7 @@
 #include <mt-plat/aee.h>
 #endif
 #include <linux/clk.h>
+#include <linux/suspend.h>
 
 #include "modem_secure_base.h"
 #include "ccci_dpmaif_com.h"
@@ -63,6 +64,7 @@ unsigned int ccci_debug_enable = CCCI_LOG_LEVEL;
 
 unsigned int            g_dpmf_ver;
 unsigned int            g_plat_inf;
+int            g_skb_gfp_mask;
 
 struct dpmaif_ctrl     *g_dpmaif_ctl;
 
@@ -981,6 +983,24 @@ static inline int dpmaifq_rxq_notify_hw_pit_cnt(struct dpmaif_rx_queue *rxq,
 	return 0;
 }
 
+static inline int dpmaif_rxq_check_pit_seq(struct dpmaif_rx_queue *rxq, unsigned int pit_seq)
+{
+	if (rxq->pit_seq != pit_seq) {
+		CCCI_ERROR_LOG(0, TAG,
+			"[%s] error: pit_seq is invalid: (%u/%u)\n",
+			__func__, rxq->pit_seq, pit_seq);
+
+		return DATA_CHECK_FAIL;
+	}
+
+	if (rxq->pit_seq == 0xFE)
+		rxq->pit_seq = 0;
+	else
+		rxq->pit_seq++;
+
+	return 0;
+}
+
 #define NOTIFY_RX_PUSH(rxq)  wake_up_all(&rxq->rxq_wq)
 
 static int dpmaif_rxq_start_read_from_pit(struct dpmaif_rx_queue *rxq,
@@ -1019,6 +1039,13 @@ static int dpmaif_rxq_start_read_from_pit(struct dpmaif_rx_queue *rxq,
 
 		nml_pit_v2 = (struct dpmaif_normal_pit_v2 *)(rxq->pit_base +
 				(pit_rd_idx * pit_size));
+
+		if (g_dpmf_ver == 3) {
+			ret = dpmaif_rxq_check_pit_seq(rxq,
+				((struct dpmaif_normal_pit_v3 *)nml_pit_v2)->pit_seq);
+			if (ret)
+				goto occur_err;
+		}
 
 		if (nml_pit_v2->packet_type == DES_PT_MSG) {  //is message pit
 			dpmaif_rxq_handle_msg_pit(rxq, (struct dpmaif_msg_pit_base *)nml_pit_v2);
@@ -1100,6 +1127,9 @@ static inline void dpmaif_updata_max_bat_skb_cnt(struct dpmaif_rx_queue *rxq)
 		if ((max_bat_skb_cnt >= MIN_ALLOC_SKB_CNT) &&
 				(g_max_bat_skb_cnt_for_md != max_bat_skb_cnt)) {
 			g_max_bat_skb_cnt_for_md = max_bat_skb_cnt;
+
+			if (g_max_bat_skb_cnt_for_md == 0xFFFF)  //need alloc max skb
+				ccci_dpmaif_bat_wakeup_thread(0);
 
 			if (g_debug_flags & DEBUG_MAX_SKB_CNT) {
 				struct debug_max_skb_cnt_hdr hdr = {0};
@@ -1595,6 +1625,7 @@ static int dpmaif_rxqs_start(void)
 	for (i = 0; i < dpmaif_ctl->real_rxq_num; i++) {
 		rxq = &dpmaif_ctl->rxq[i];
 		rxq->started = true;
+		rxq->pit_seq = 0;
 		rxq->budget  = dpmaif_ctl->dl_bat_entry_size - 1;
 
 		if (dpmaif_rxq_hw_init(rxq))
@@ -1614,6 +1645,7 @@ static inline int dpmaif_wait_resume_done(void)
 			CCCI_NORMAL_LOG(-1, TAG,
 				"[%s] warning: suspend_flag = 1; (cnt: %d)\n",
 				__func__, cnt);
+			pm_system_wakeup();
 			return -1;
 		}
 	}
@@ -2020,6 +2052,12 @@ static inline int dpmaif_txq_set_skb_data_to_drb(struct dpmaif_tx_queue *txq,
 
 	ccci_h = *(struct ccci_header *)skb->data;
 	skb_pull(skb, sizeof(struct ccci_header));
+	if (skb->len == 0) {
+		CCCI_NORMAL_LOG(0, TAG, "[%s] error: txq%d; skb->len=0; skb=0x%lX\n",
+			__func__, txq->index, (unsigned long)skb);
+		dev_kfree_skb_any(skb);
+		return 0;
+	}
 
 	skb_check_type = get_skb_checksum_type(skb);
 	if (skb_check_type == 1) {
@@ -2580,11 +2618,23 @@ static void dpmaif_total_spd_cb(u64 total_ul_speed, u64 total_dl_speed)
 #ifdef DPMAIF_REDUCE_RX_FLUSH
 		g_rx_flush_pkt_cnt = 5;
 #endif
-	} else {  // dl tput < 300M
+	} else if (total_dl_speed > 150000000LL) {  // dl tput > 150M
 		g_alloc_skb_threshold = MAX_ALLOC_BAT_CNT;
 		g_alloc_frg_threshold = MAX_ALLOC_BAT_CNT;
 		g_alloc_skb_tbl_threshold = MAX_ALLOC_BAT_CNT;
 		g_alloc_frg_tbl_threshold = MAX_ALLOC_BAT_CNT;
+
+		if (dpmaif_ctl->support_lro == 1)
+			ccmni_set_tcp_is_need_gro(1);
+
+#ifdef DPMAIF_REDUCE_RX_FLUSH
+		g_rx_flush_pkt_cnt = 5;
+#endif
+	} else {  // dl tput < 150M
+		g_alloc_skb_threshold = MIN_ALLOC_SKB_CNT;
+		g_alloc_frg_threshold = MIN_ALLOC_FRG_CNT;
+		g_alloc_skb_tbl_threshold = MIN_ALLOC_SKB_TBL_CNT;
+		g_alloc_frg_tbl_threshold = MIN_ALLOC_FRG_TBL_CNT;
 
 		if (dpmaif_ctl->support_lro == 1)
 			ccmni_set_tcp_is_need_gro(1);
@@ -3036,9 +3086,13 @@ static int dpmaif_probe(struct platform_device *pdev)
 			"mediatek,plat-info", &g_plat_inf))
 		g_plat_inf = DEFAULT_PLAT_INF;
 
+	if (of_property_read_u32(pdev->dev.of_node,
+			"mediatek,skb-gfp-mask", &g_skb_gfp_mask))
+		g_skb_gfp_mask = 0;
+
 	CCCI_NORMAL_LOG(0, TAG,
-		"[%s] g_dpmf_ver: %u; g_plat_inf: %u\n",
-		__func__, g_dpmf_ver, g_plat_inf);
+		"[%s] g_dpmf_ver: %u; g_plat_inf: %u; g_skb_gfp_mask=%x\n",
+		__func__, g_dpmf_ver, g_plat_inf, g_skb_gfp_mask);
 
 	if (dpmaif_init_com(&pdev->dev))
 		return -1;

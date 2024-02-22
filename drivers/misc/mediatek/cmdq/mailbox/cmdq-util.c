@@ -161,6 +161,19 @@ void cmdq_util_set_fp(struct cmdq_util_platform_fp *cust_cmdq_platform)
 }
 EXPORT_SYMBOL(cmdq_util_set_fp);
 
+bool cmdq_util_check_hw_trace_work(u8 hwid)
+{
+
+	if (hwid >= util.mbox_cnt) {
+		cmdq_err("hwid:%d mbox_cnt:%u",
+			hwid, util.mbox_cnt);
+		return false;
+	}
+
+	return (&util.hw_trace[hwid])->clt ? true : false;
+}
+EXPORT_SYMBOL(cmdq_util_check_hw_trace_work);
+
 const char *cmdq_util_event_module_dispatch(phys_addr_t gce_pa, const u16 event, s32 thread)
 {
 	const char *mod = NULL;
@@ -458,6 +471,7 @@ enum cmdq_smc_request {
 	CMDQ_PREBUILT_DISABLE,
 	CMDQ_PREBUILT_DUMP,
 	CMDQ_MMINFRA_CMD,
+	CMDQ_DISP_CMD,
 };
 
 static atomic_t cmdq_dbg_ctrl[CMDQ_HW_MAX] = {ATOMIC_INIT(0)};
@@ -501,6 +515,16 @@ void cmdq_util_enable_disp_va(void)
 		0, 0, 0, 0, 0, 0, &res);
 }
 EXPORT_SYMBOL(cmdq_util_enable_disp_va);
+
+void cmdq_util_disp_smc_cmd(u32 crtc_idx, u32 cmd)
+{
+	struct arm_smccc_res res;
+
+	cmdq_log("%s: crtc %u, cmd %u", __func__, crtc_idx, cmd);
+	arm_smccc_smc(MTK_SIP_CMDQ_CONTROL, CMDQ_DISP_CMD,
+		crtc_idx, cmd, 0, 0, 0, 0, &res);
+}
+EXPORT_SYMBOL(cmdq_util_disp_smc_cmd);
 
 void cmdq_util_prebuilt_init(const u16 mod)
 {
@@ -683,7 +707,10 @@ void cmdq_util_hw_trace_dump(const u16 hwid, const bool dram)
 	}
 
 	trace = &util.hw_trace[hwid];
-	if (trace->clt && trace->pkt)
+	if (!trace->clt) {
+		cmdq_err("hw trace disable");
+		return;
+	} else if (trace->clt && trace->pkt)
 		cmdq_dump_summary(trace->clt, trace->pkt);
 
 	// SRAM

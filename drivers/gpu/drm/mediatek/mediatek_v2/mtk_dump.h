@@ -10,6 +10,7 @@
 
 int mtk_ovl_dump(struct mtk_ddp_comp *comp);
 int mtk_rdma_dump(struct mtk_ddp_comp *comp);
+void mtk_mdp_rdma_dump(struct mtk_ddp_comp *comp);
 int mtk_wdma_dump(struct mtk_ddp_comp *comp);
 int mtk_rsz_dump(struct mtk_ddp_comp *comp);
 int mtk_mdp_rsz_dump(struct mtk_ddp_comp *comp);
@@ -38,6 +39,7 @@ void mtk_oddmr_dump(struct mtk_ddp_comp *comp);
 
 int mtk_ovl_analysis(struct mtk_ddp_comp *comp);
 int mtk_rdma_analysis(struct mtk_ddp_comp *comp);
+int mtk_mdp_rdma_analysis(struct mtk_ddp_comp *comp);
 int mtk_wdma_analysis(struct mtk_ddp_comp *comp);
 int mtk_rsz_analysis(struct mtk_ddp_comp *comp);
 int mtk_mdp_rsz_analysis(struct mtk_ddp_comp *comp);
@@ -58,6 +60,9 @@ int mtk_oddmr_analysis(struct mtk_ddp_comp *comp);
 
 int mtk_dump_reg(struct mtk_ddp_comp *comp);
 int mtk_dump_analysis(struct mtk_ddp_comp *comp);
+void mtk_dump_cur_pos(struct mtk_ddp_comp *comp);
+void mtk_ovl_cur_pos_dump(struct mtk_ddp_comp *comp);
+void mtk_dsi_cur_pos_dump(struct mtk_ddp_comp *comp);
 
 const char *mtk_dump_comp_str(struct mtk_ddp_comp *comp);
 const char *mtk_dump_comp_str_id(unsigned int id);

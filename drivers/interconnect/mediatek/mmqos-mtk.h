@@ -28,6 +28,8 @@ enum mmqos_state_level {
 	BWL_ENABLE = BIT(1),
 	DVFSRC_ENABLE = BIT(2),
 	COMM_OSTDL_ENABLE = BIT(3),
+	BWL_MIN_ENABLE = BIT(4),
+	BWL_NO_QOSBOUND = BIT(5),
 	MMQOS_ENABLE = BIT(0) | BIT(1) | BIT(2),
 };
 
@@ -152,6 +154,7 @@ void mtk_mmqos_unregister_hrt_sysfs(struct device *dev);
 enum MMQOS_PROFILE_LEVEL {
 	MMQOS_PROFILE_MET = 0,
 	MMQOS_PROFILE_SYSTRACE = 1,
+	MMQOS_PROFILE_DETAIL_SYSTRACE = 2,
 	MMQOS_PROFILE_MAX /* Always keep at the end */
 };
 
@@ -160,6 +163,7 @@ bool mmqos_met_enabled(void);
 
 /* For systrace */
 bool mmqos_systrace_enabled(void);
+bool mmqos_detail_systrace_enabled(void);
 int tracing_mark_write(char *fmt, ...);
 
 #define TRACE_MSG_LEN	1024
@@ -181,6 +185,18 @@ int tracing_mark_write(char *fmt, ...);
 
 #define MMQOS_SYSTRACE_END() do { \
 	if (mmqos_systrace_enabled()) { \
+		MMQOS_TRACE_FORCE_END(); \
+	} \
+} while (0)
+
+#define MMQOS_DETAIL_SYSTRACE_BEGIN(fmt, args...) do { \
+	if (mmqos_detail_systrace_enabled()) { \
+		MMQOS_TRACE_FORCE_BEGIN(fmt, ##args); \
+	} \
+} while (0)
+
+#define MMQOS_DETAIL_SYSTRACE_END() do { \
+	if (mmqos_detail_systrace_enabled()) { \
 		MMQOS_TRACE_FORCE_END(); \
 	} \
 } while (0)

@@ -162,8 +162,9 @@ static int mtk_aie_resume(struct device *dev)
 			__func__);
 		return 0;
 	}
-
+#ifdef AIE_AOV
 	mtk_aov_notify(gaov_dev, AOV_NOTIFY_AIE_AVAIL, 0); //unavailable: 0 available: 1
+#endif
 	ret = pm_runtime_get_sync(dev);
 	if (ret) {
 		dev_info(dev, "%s: pm_runtime_get_sync failed:(%d)\n",
@@ -506,8 +507,9 @@ static int mtk_aie_ccf_disable(struct device *dev)
 static int mtk_aie_hw_connect(struct mtk_aie_dev *fd)
 {
 	int ret = 0;
-
+#ifdef AIE_AOV
 	mtk_aov_notify(gaov_dev, AOV_NOTIFY_AIE_AVAIL, 0); //unavailable: 0 available: 1
+#endif
 	pm_runtime_get_sync((fd->dev));
 
 	fd->fd_stream_count++;
@@ -732,9 +734,9 @@ static void mtk_aie_job_timeout_work(struct work_struct *work)
 	wake_up(&fd->flushing_waitq);
 }
 
-static void mtk_aie_job_wait_finish(struct mtk_aie_dev *fd)
+static int mtk_aie_job_wait_finish(struct mtk_aie_dev *fd)
 {
-	wait_for_completion_timeout(&fd->fd_job_finished, msecs_to_jiffies(3000));
+	return wait_for_completion_timeout(&fd->fd_job_finished, msecs_to_jiffies(1000));
 }
 
 static void mtk_aie_vb2_stop_streaming(struct vb2_queue *vq)
@@ -744,10 +746,14 @@ static void mtk_aie_vb2_stop_streaming(struct vb2_queue *vq)
 	struct vb2_v4l2_buffer *vb;
 	struct v4l2_m2m_ctx *m2m_ctx = ctx->fh.m2m_ctx;
 	struct v4l2_m2m_queue_ctx *queue_ctx;
+	int ret;
 
 	dev_info(fd->dev, "STREAM STOP\n");
 
-	mtk_aie_job_wait_finish(fd);
+	ret = mtk_aie_job_wait_finish(fd);
+	if (!ret)
+		dev_info(fd->dev, "wait job finish timeout\n");
+
 	queue_ctx = V4L2_TYPE_IS_OUTPUT(vq->type) ? &m2m_ctx->out_q_ctx
 						  : &m2m_ctx->cap_q_ctx;
 	while ((vb = v4l2_m2m_buf_remove(queue_ctx)))
@@ -910,8 +916,11 @@ int mtk_aie_vidioc_qbuf(struct file *file, void *priv,
 
 	if (buf->type == V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE) { /*IMG & data*/
 		if (!fd->map_count) {
-
 			fd->dmabuf = dma_buf_get(buf->m.planes[buf->length-1].m.fd);
+			if (IS_ERR(fd->dmabuf)) {
+				dev_info(fd->dev, "%s, dma buf get failed\n", __func__);
+				return -ENOMEM;
+			}
 			dma_buf_begin_cpu_access(fd->dmabuf, DMA_BIDIRECTIONAL);
 
 			ret = (u64)dma_buf_vmap(fd->dmabuf, &fd->map);
@@ -1102,11 +1111,26 @@ static int mtk_vfd_release(struct file *filp)
 	return 0;
 }
 
+static __poll_t mtk_vfd_fop_poll(struct file *file, poll_table *wait)
+{
+	struct mtk_aie_ctx *ctx =
+		container_of(file->private_data, struct mtk_aie_ctx, fh);
+	int ret;
+
+	ret = mtk_aie_job_wait_finish(ctx->fd_dev);
+	if (!ret) {
+		dev_info(ctx->dev, "wait job finish timeout\n");
+		return EPOLLERR;
+	}
+
+	return v4l2_m2m_fop_poll(file, wait);
+}
+
 static const struct v4l2_file_operations fd_video_fops = {
 	.owner = THIS_MODULE,
 	.open = mtk_vfd_open,
 	.release = mtk_vfd_release,
-	.poll = v4l2_m2m_fop_poll,
+	.poll = mtk_vfd_fop_poll,
 	.unlocked_ioctl = video_ioctl2,
 	.mmap = v4l2_m2m_fop_mmap,
 #ifdef CONFIG_COMPAT
@@ -1356,23 +1380,25 @@ static void mtk_aie_frame_done_worker(struct work_struct *work)
 	struct mtk_aie_req_work *req_work = (struct mtk_aie_req_work *)work;
 	struct mtk_aie_dev *fd = (struct mtk_aie_dev *)req_work->fd_dev;
 
-	switch (fd->aie_cfg->sel_mode) {
-	case FDMODE:
-		fd->reg_cfg.hw_result = readl(fd->fd_base + AIE_RESULT_0_REG);
-		fd->reg_cfg.hw_result1 = readl(fd->fd_base + AIE_RESULT_1_REG);
-		fd->drv_ops->get_fd_result(fd, fd->aie_cfg);
-	break;
-	case ATTRIBUTEMODE:
-		fd->drv_ops->get_attr_result(fd, fd->aie_cfg);
-	break;
-	case FLDMODE:
-		fd->drv_ops->get_fld_result(fd, fd->aie_cfg);
-	break;
-	default:
-	break;
-	}
+	if (fd->fd_stream_count > 0) {
+		switch (fd->aie_cfg->sel_mode) {
+		case FDMODE:
+			fd->reg_cfg.hw_result = readl(fd->fd_base + AIE_RESULT_0_REG);
+			fd->reg_cfg.hw_result1 = readl(fd->fd_base + AIE_RESULT_1_REG);
+			fd->drv_ops->get_fd_result(fd, fd->aie_cfg);
+		break;
+		case ATTRIBUTEMODE:
+			fd->drv_ops->get_attr_result(fd, fd->aie_cfg);
+		break;
+		case FLDMODE:
+			fd->drv_ops->get_fld_result(fd, fd->aie_cfg);
+		break;
+		default:
+		break;
+		}
 
-	mtk_aie_hw_done(fd, VB2_BUF_STATE_DONE);
+		mtk_aie_hw_done(fd, VB2_BUF_STATE_DONE);
+	}
 }
 
 static int mtk_aie_probe(struct platform_device *pdev)
@@ -1559,7 +1585,9 @@ static int mtk_aie_runtime_suspend(struct device *dev)
 
 	dev_info(dev, "%s: runtime suspend aie job)\n", __func__);
 	mtk_aie_ccf_disable(dev);
+#ifdef AIE_AOV
 	mtk_aov_notify(gaov_dev, AOV_NOTIFY_AIE_AVAIL, 1); //unavailable: 0 available: 1
+#endif
 	return 0;
 }
 

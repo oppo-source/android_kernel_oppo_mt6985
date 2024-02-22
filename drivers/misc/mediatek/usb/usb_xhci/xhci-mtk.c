@@ -21,6 +21,18 @@
 #include <linux/regulator/consumer.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
+#include <linux/usb.h>
+
+#include <sound/pcm.h>
+#include <sound/core.h>
+#include <sound/asound.h>
+
+#include <trace/hooks/audio_usboffload.h>
+
+#include "usbaudio.h"
+#include "card.h"
+#include "helper.h"
+#include "pcm.h"
 
 #include "xhci.h"
 #include "xhci-mtk.h"
@@ -674,6 +686,13 @@ static const struct xhci_driver_overrides xhci_mtk_overrides __initconst = {
 
 static struct hc_driver __read_mostly xhci_mtk_hc_driver;
 
+void usb_offload_synctype(void *data, void *arg, int attr, bool *need_ignore)
+{
+	struct snd_usb_substream *subs = (struct snd_usb_substream *) arg;
+
+	subs->pcm_substream->wait_time = msecs_to_jiffies(2 * 1000);
+}
+
 static int xhci_mtk_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -1071,6 +1090,7 @@ static int __init xhci_mtk_init(void)
 {
 	int ret;
 
+	WARN_ON(register_trace_android_vh_audio_usb_offload_synctype(usb_offload_synctype, NULL));
 	xhci_init_driver_(&xhci_mtk_hc_driver, &xhci_mtk_overrides);
 	ret = platform_driver_register(&mtk_xhci_p1_driver);
 	if (ret < 0)
@@ -1081,6 +1101,7 @@ module_init(xhci_mtk_init);
 
 static void __exit xhci_mtk_exit(void)
 {
+	WARN_ON(unregister_trace_android_vh_audio_usb_offload_synctype(usb_offload_synctype, NULL));
 	platform_driver_unregister(&mtk_xhci_p1_driver);
 	platform_driver_unregister(&mtk_xhci_driver);
 }

@@ -66,7 +66,9 @@ struct afe_offload_service_t {
 	bool write_blocked;
 	bool enable;
 	bool drain;
+	bool draindone;
 	bool tswait;
+	bool pause_in_drain;
 	struct mutex ts_lock;
 	wait_queue_head_t ts_wq;
 	bool needdata;
@@ -86,6 +88,7 @@ enum ipi_send_offload {
 	OFFLOAD_RESUME = 0x300,
 	OFFLOAD_PAUSE,
 	OFFLOAD_SETWRITEBLOCK,
+	OFFLOAD_EARLY_DRAIN,
 	OFFLOAD_DRAIN,
 	OFFLOAD_VOLUME,
 	OFFLOAD_WRITEIDX,

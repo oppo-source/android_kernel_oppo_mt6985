@@ -122,10 +122,12 @@ def main(**args):
     file_text.append("  MAKE_GOALS=\"${MAKE_GOALS} Image.lz4\"")
     file_text.append("fi")
     file_text.append("TRIM_NONLISTED_KMI=")
-    file_text.append("if [ \"x${GKI_BUILD_CONFIG}\" != \"x\" ] || [ \"x${GKI_PREBUILTS_DIR}\" != \"x\" ]; then")
-    file_text.append("  GKI_TRIM_NONLISTED_KMI=0")
-    file_text.append("  GKI_KMI_SYMBOL_LIST_STRICT_MODE=0")
-    file_text.append("fi")
+#ifdef OPLUS_FEATURE_BUILD
+    # file_text.append("if [ \"x${GKI_BUILD_CONFIG}\" != \"x\" ] || [ \"x${GKI_PREBUILTS_DIR}\" != \"x\" ]; then")
+    # file_text.append("  GKI_TRIM_NONLISTED_KMI=0")
+    # file_text.append("  GKI_KMI_SYMBOL_LIST_STRICT_MODE=0")
+    # file_text.append("fi")
+#endif OPLUS_FEATURE_BUILD
     file_text.append("KMI_SYMBOL_LIST_STRICT_MODE=")
     file_text.append("MODULES_ORDER=")
     file_text.append("KMI_ENFORCED=1")

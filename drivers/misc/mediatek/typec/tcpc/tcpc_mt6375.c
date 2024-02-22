@@ -247,6 +247,24 @@
 #define MT6375_MSK_WD0_TDET	GENMASK(2, 0)
 #define MT6375_SFT_WD0_TDET	(0)
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+
+enum mt6375_debug_msg_type {
+	DEBUG_MSG_VCONN_RVP,
+	DEBUG_MSG_VCONN_OCP,
+	DEBUG_MSG_VCONN_OVP,
+	DEBUG_MSG_VCONN_UVP,
+	DEBUG_MSG_VCONN_OPEN,
+	DEBUG_MSG_VCONN_CLOSE,
+	DEBUG_MSG_POWER_STATUS_CHANGE,
+};
+
+struct mt6375_debug_data {
+	void *priv_data;
+	void (*msg_handler)(void *data, int msg_type);
+};
+#endif /* OPLUS_FEATURE_CHG_BASIC */
+
 struct mt6375_tcpc_data {
 	struct device *dev;
 	struct regmap *rmap;
@@ -258,6 +276,9 @@ struct mt6375_tcpc_data {
 	struct iio_channel *adc_iio;
 	int irq;
 	u16 did;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	struct mt6375_debug_data debug_data;
+#endif /* OPLUS_FEATURE_CHG_BASIC */
 	u16 curr_irq_mask;
 	bool wd0_state;
 	bool wd0_enable;
@@ -426,7 +447,12 @@ static const u8 mt6375_wd_volcmp_reg[MT6375_WD_CHAN_NUM] = {
 
 struct tcpc_desc def_tcpc_desc = {
 	.role_def = TYPEC_ROLE_DRP,
+#ifndef OPLUS_FEATURE_CHG_BASIC
+/* oplus add for pd svooc flow */
 	.rp_lvl = TYPEC_CC_RP_DFT,
+#else
+	.rp_lvl = TYPEC_RP_DFT,
+#endif
 	.vconn_supply = TCPC_VCONN_SUPPLY_ALWAYS,
 	.name = "type_c_port0",
 	.en_wd = false,
@@ -1353,6 +1379,9 @@ static int mt6375_set_cc_toggling(struct mt6375_tcpc_data *ddata, int rp_lvl)
 	ret = mt6375_write8(ddata, MT6375_REG_LPWRCTRL3, 0xD8);
 	if (ret < 0)
 		return ret;
+	ret = tcpci_update_local_cc(ddata->tcpc, TYPEC_CC_DRP); 
+	if (ret < 0)
+		return ret;
 #if CONFIG_TCPC_LOW_POWER_MODE
 	tcpci_set_low_power_mode(ddata->tcpc, true, TYPEC_CC_DRP);
 #else
@@ -1634,14 +1663,33 @@ static int mt6375_get_power_status(struct tcpc_device *tcpc, u16 *status)
 		goto out;
 	tcpc->vbus_safe0v = ret ? true : false;
 out:
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	if (ddata->debug_data.msg_handler)
+		ddata->debug_data.msg_handler(ddata->debug_data.priv_data,
+					      DEBUG_MSG_POWER_STATUS_CHANGE);
+#endif /* OPLUS_FEATURE_CHG_BASIC */
 	return 0;
 }
 
 static int mt6375_get_fault_status(struct tcpc_device *tcpc, u8 *status)
 {
 	struct mt6375_tcpc_data *ddata = tcpc_get_dev_data(tcpc);
+	int ret;
 
-	return mt6375_read8(ddata, TCPC_V10_REG_FAULT_STATUS, status);
+	ret = mt6375_read8(ddata, TCPC_V10_REG_FAULT_STATUS, status);
+	if (ret < 0)
+		return ret;
+	if (*status & TCPC_V10_REG_FAULT_STATUS_VCONN_OC) {
+		TCPC_INFO("%s: vconn oc fault\n", __func__);
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	if (ddata->debug_data.msg_handler)
+		ddata->debug_data.msg_handler(
+			ddata->debug_data.priv_data,
+			DEBUG_MSG_VCONN_OCP);
+#endif /* OPLUS_FEATURE_CHG_BASIC */
+	}
+
+	return ret;
 }
 
 static int mt6375_get_cc(struct tcpc_device *tcpc, int *cc1, int *cc2)
@@ -1781,7 +1829,12 @@ static int mt6375_set_vconn(struct tcpc_device *tcpc, int en)
 	mdelay(1);
 	ret = (en ? mt6375_set_bits : mt6375_clr_bits)
 		(ddata, MT6375_REG_I2CTORSTCTRL, MT6375_MSK_VCONN_UVP_OCP_CPEN);
-
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	if (ddata->debug_data.msg_handler)
+		ddata->debug_data.msg_handler(ddata->debug_data.priv_data,
+					      en ? DEBUG_MSG_VCONN_OPEN :
+						   DEBUG_MSG_VCONN_CLOSE);
+#endif /* OPLUS_FEATURE_CHG_BASIC */
 	return ret;
 }
 
@@ -2713,6 +2766,38 @@ static int tcpc_mt6375_prepare(struct device *dev)
 static const struct dev_pm_ops tcpc_mt6375_pm_ops = {
 	.prepare = tcpc_mt6375_prepare,
 };
+
+#ifdef OPLUS_FEATURE_CHG_BASIC
+int tcpc_mt6375_reg_debug_msg_handler(struct tcpc_device *tcpc,
+				      void (*msg_handler)(void *, int),
+				      void *priv_data)
+{
+	struct mt6375_tcpc_data *ddata;
+
+	if (tcpc == NULL || msg_handler == NULL)
+		return -EINVAL;
+
+	ddata = tcpc_get_dev_data(tcpc);
+	ddata->debug_data.priv_data = priv_data;
+	ddata->debug_data.msg_handler = msg_handler;
+
+	return 0;
+}
+EXPORT_SYMBOL(tcpc_mt6375_reg_debug_msg_handler);
+
+void tcpc_mt6375_unreg_debug_msg_handler(struct tcpc_device *tcpc)
+{
+	struct mt6375_tcpc_data *ddata;
+
+	if (tcpc == NULL)
+		return;
+
+	ddata = tcpc_get_dev_data(tcpc);
+	ddata->debug_data.priv_data = NULL;
+	ddata->debug_data.msg_handler = NULL;
+}
+EXPORT_SYMBOL(tcpc_mt6375_unreg_debug_msg_handler);
+#endif /* OPLUS_FEATURE_CHG_BASIC */
 
 static const struct of_device_id __maybe_unused mt6375_tcpc_of_match[] = {
 	{ .compatible = "mediatek,mt6375-tcpc", },

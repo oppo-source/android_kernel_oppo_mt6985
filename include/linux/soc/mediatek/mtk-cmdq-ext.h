@@ -103,6 +103,7 @@ extern int gce_shift_bit;
 extern int gce_mminfra;
 extern bool gce_in_vcp;
 extern bool cpr_not_support_cookie;
+extern bool error_irq_no_reboot;
 extern bool skip_poll_sleep;
 extern bool append_by_event;
 
@@ -318,6 +319,8 @@ s32 cmdq_pkt_readback(struct cmdq_pkt *pkt, enum CMDQ_VCP_ENG_ENUM engine,
 	u32 buf_offset, u16 size, u16 reg_gpr,
 	struct cmdq_reuse *reuse,
 	struct cmdq_poll_reuse *poll_reuse);
+
+bool cmdq_pkt_is_exec(struct cmdq_pkt *pkt);
 
 void cmdq_mbox_pool_set_limit(struct cmdq_client *cl, u32 limit);
 void cmdq_mbox_pool_create(struct cmdq_client *cl);

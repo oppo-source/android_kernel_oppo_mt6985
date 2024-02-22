@@ -51,12 +51,15 @@
 #define PIN_IN_SIZE_SENSOR_NOTIFY        7
 #define PIN_OUT_SIZE_SCP_CONNSYS         3
 #define PIN_OUT_SIZE_SCP_HWVOTER_DEBUG   2
+#define PIN_OUT_SIZE_DEBUG_CMD           2
 #define PIN_OUT_SIZE_AOV_SCP             4
 #define PIN_IN_SIZE_SCP_AOV              4
 #define IPI_OUT_SIZE_SCP_PM_NOTIFY_0     1
 #define IPI_OUT_SIZE_SCP_PM_NOTIFY_1     1
 #define PIN_IN_SIZE_NPU_SCP		 4
 #define PIN_OUT_SIZE_SCP_NPU		 4
+#define PIN_IN_SIZE_ELLIPTIC_ULTRA_0     10
+#define PIN_OUT_SIZE_ELLIPTIC_ULTRA_0    10
 
 /* scp Core ID definition */
 enum scp_core_id {
@@ -107,10 +110,14 @@ enum {
 	IPI_IN_SCP_AOD            = 38,
 	IPI_OUT_AOV_SCP           = 39,
 	IPI_IN_SCP_AOV            = 40,
+	IPI_OUT_DEBUG_CMD         = 41,
+	IPI_IN_RV_SPK_PROCESS     = 42,
 	IPI_OUT_NPU_SCP		  = 43,
 	IPI_IN_SCP_NPU		  = 44,
 	IPI_OUT_SCP_PM_NOTIFY_0	  = 45,
 	IPI_OUT_SCP_PM_NOTIFY_1   = 46,
+	IPI_OUT_ELLIPTIC_ULTRA_0   = 47,
+	IPI_IN_ELLIPTIC_ULTRA_0    = 48,
 	SCP_IPI_COUNT
 };
 
@@ -153,6 +160,12 @@ enum scp_reserve_mem_id_t {
 	SENS_CUSTOM_W_MEM_ID,
 	SENS_CUSTOM_R_MEM_ID,
 	SCP_AOV_MEM_ID,
+//#ifdef OPLUS_FEATURE_SENSOR
+	SENS_FB_MEM_ID,
+//#endif
+	SCP_SPK_MEM_ID,
+	SCP_AOD_MEM_ID,
+	SCP_ELLIPTIC_DEBUG_MEM,
 	NUMS_MEM_ID,
 };
 
@@ -172,7 +185,15 @@ enum feature_id {
 	VOW_DUAL_MIC_FEATURE_ID = 11,
 	VOW_DUAL_MIC_BARGE_IN_FEATURE_ID = 12,
 	ULTRA_FEATURE_ID = 13,
-	NUM_FEATURE_ID = 14,
+	RVSPKPROCESS_FEATURE_ID = 14,
+	RVVOICE_CALL_FEATURE_ID = 15,
+	NUM_FEATURE_ID = 16,
+};
+
+enum SCP_THERMAL_TYPE {
+	SCP_THERMAL_TYPE_HOT = 0,
+	SCP_THERMAL_TYPE_COLD = 1,
+	NUM_SCP_THERMAL_TYPE,
 };
 
 extern struct mtk_mbox_device scp_mboxdev;
@@ -224,6 +245,7 @@ extern void scp_wdt_reset(int cpu_id);
 
 /* APIs for get status of scp dram_region_manage */
 extern int get_scp_dram_region_manage(void);
+extern void scp_send_thermal_wq(enum SCP_THERMAL_TYPE type);
 
 #endif
 

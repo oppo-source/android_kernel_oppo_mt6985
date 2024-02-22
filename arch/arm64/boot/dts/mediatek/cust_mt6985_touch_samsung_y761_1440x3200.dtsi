@@ -62,7 +62,7 @@
 		vts-type=<0>;
 		sec,max_coords = <4095 4095>;
 		sec,mis_cal_check = <1>;
-		vcc_i2c-supply = <&mt6373_vrfio18_aif>;
+		/* vcc_i2c-supply = <&mt6373_vrfio18_aif>; for lcd */
 		avdd_pwr-supply = <&mt6373_vcn33_3>;
 		sec,regulator_boot_on;
 		sec,always_lpmode = <1>;

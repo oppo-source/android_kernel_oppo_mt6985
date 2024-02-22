@@ -31,6 +31,7 @@
 atomic_t pw_off_disable_dapc_ke;
 atomic_t md_dapc_ke_occurred;
 atomic_t en_flight_timeout;
+atomic_t md_ee_occurred;
 struct ccci_fsm_ctl *ccci_fsm_entries;
 
 static void fsm_finish_command(struct ccci_fsm_ctl *ctl,
@@ -232,6 +233,7 @@ static void fsm_routine_exception(struct ccci_fsm_ctl *ctl,
 	}
 	ctl->last_state = ctl->curr_state;
 	ctl->curr_state = CCCI_FSM_EXCEPTION;
+	atomic_set(&md_ee_occurred, 1);
 	if (reason == EXCEPTION_WDT
 		|| reason == EXCEPTION_HS1_TIMEOUT
 		|| reason == EXCEPTION_HS2_TIMEOUT)
@@ -1165,6 +1167,7 @@ static void fsm_routine_start(struct ccci_fsm_ctl *ctl,
 	atomic_set(&pw_off_disable_dapc_ke, 0);
 	atomic_set(&md_dapc_ke_occurred, 0);
 	atomic_set(&en_flight_timeout, 0);
+	atomic_set(&md_ee_occurred, 0);
 	/* 2. poll for critical users exit */
 	while (count < BOOT_TIMEOUT/EVENT_POLL_INTEVAL && !needforcestop) {
 		if (ccci_port_check_critical_user() == 0 ||
@@ -1196,6 +1199,11 @@ static void fsm_routine_start(struct ccci_fsm_ctl *ctl,
 	/* 3. action and poll event queue */
 	ccci_md_pre_start();
 	fsm_broadcast_state(ctl, BOOT_WAITING_FOR_HS1);
+	/* clear md emi mpu violation */
+#if IS_ENABLED(CONFIG_MTK_EMI)
+	CCCI_NORMAL_LOG(0, FSM, "mtk_clear_md_violation\n");
+	mtk_clear_md_violation();
+#endif
 	ret = ccci_md_start();
 	if (ret)
 		goto fail;
@@ -1298,7 +1306,9 @@ static void fsm_routine_stop(struct ccci_fsm_ctl *ctl,
 	struct ccci_fsm_command *ee_cmd = NULL;
 	struct port_t *port = NULL;
 	struct sk_buff *skb = NULL;
+	struct ccci_modem *md = ccci_get_modem();
 	unsigned long flags;
+	int ret;
 
 	/* 1. state sanity check */
 	if (ctl->curr_state == CCCI_FSM_GATED)
@@ -1366,6 +1376,17 @@ success:
 			ccci_free_skb(skb);
 		spin_unlock_irqrestore(&port->rx_skb_list.lock, flags);
 	}
+
+	/* Cleare MD WDT pending bit */
+	ret = irq_set_irqchip_state(md->md_wdt_irq_id,
+			IRQCHIP_STATE_PENDING, false);
+	if (ret)
+		CCCI_ERROR_LOG(0, FSM,
+			"clear md wdt pending irq fail %d\n", ret);
+	else
+		CCCI_NORMAL_LOG(0, FSM,
+			"clear md wdt irq(%d) success\n", md->md_wdt_irq_id);
+
 	ctl->last_state = ctl->curr_state;
 	ctl->curr_state = CCCI_FSM_GATED;
 	fsm_broadcast_state(ctl, GATED);
@@ -1419,8 +1440,12 @@ static void fsm_routine_wdt(struct ccci_fsm_ctl *ctl,
 			fsm_routine_exception(ctl, NULL, EXCEPTION_WDT);
 		}
 	}
-	if (reset_md)
+	if (reset_md) {
 		fsm_monitor_send_message(CCCI_MD_MSG_RESET_REQUEST, 0);
+	//#ifdef OPLUS_FEATURE_MDRST
+		inject_md_status_event(MD_STA_EV_RESET_REQUEST, "WDT_RESET");
+	//#endif
+	}
 
 	fsm_finish_command(ctl, cmd, 1);
 }

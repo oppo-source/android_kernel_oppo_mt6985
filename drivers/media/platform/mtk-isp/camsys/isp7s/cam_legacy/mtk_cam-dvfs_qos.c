@@ -10,6 +10,10 @@
 #include "mtk_cam-dvfs_qos.h"
 #include "soc/mediatek/mmqos.h"
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 static unsigned int debug_mmqos;
 module_param(debug_mmqos, uint, 0644);
 MODULE_PARM_DESC(debug_mmqos, "activates debug mmqos");
@@ -915,9 +919,21 @@ static void __mtk_cam_qos_bw_calc(struct mtk_cam_ctx *ctx, struct mtk_raw_device
 			PBW_MB_s = vdev->active_fmt.fmt.pix_mp.width * fps *
 						(vblank + height) * pixel_bits *
 						plane_factor / 8 / 100;
-			ABW_MB_s = vdev->active_fmt.fmt.pix_mp.width * fps *
-						vdev->active_fmt.fmt.pix_mp.height * pixel_bits *
-						plane_factor / 8 / 100;
+			if (is_raw_ufo(vdev->active_fmt.fmt.pix_mp.pixelformat)) {
+				//bitstream: apply compression ratio 0.7
+				ABW_MB_s = (vdev->active_fmt.fmt.pix_mp.width * fps *
+					vdev->active_fmt.fmt.pix_mp.height * pixel_bits *
+					plane_factor / 8 / 100) * 7 / 10;
+				//table
+				ABW_MB_s += DIV_ROUND_UP(vdev->active_fmt.fmt.pix_mp.width, 64) *
+					fps * vdev->active_fmt.fmt.pix_mp.height *
+					plane_factor / 100;
+			} else {
+				ABW_MB_s = vdev->active_fmt.fmt.pix_mp.width * fps *
+					vdev->active_fmt.fmt.pix_mp.height * pixel_bits *
+					plane_factor / 8 / 100;
+			}
+
 			for (j = 0; j < ctx->cam->num_raw_drivers; j++) {
 				if (!(enabled_raw & 1 << j))
 					continue;
@@ -958,17 +974,14 @@ static void __mtk_cam_qos_bw_calc(struct mtk_cam_ctx *ctx, struct mtk_raw_device
 				dev_info(cam->dev, "[%s] port idx/name:%2d/%16s BW(kB/s)(avg:%lu,peak:%lu)\n",
 				  __func__, qos_port_id, raw_qos->port[i],
 				  BW_B2KB_WITH_RATIO(dvfs_info->qos_bw_avg[qos_port_id]),
-				  (is_raw_srt ?
-				   BW_B2KB(dvfs_info->qos_bw_avg[qos_port_id]) :
+				  (is_raw_srt ? 0 :
 				   BW_B2KB(dvfs_info->qos_bw_peak[qos_port_id])));
 #ifdef DVFS_QOS_READY
 			if (dvfs_info->qos_req[qos_port_id]) {
 				mtk_icc_set_bw(dvfs_info->qos_req[qos_port_id],
 					kBps_to_icc(BW_B2KB_WITH_RATIO(
 						dvfs_info->qos_bw_avg[qos_port_id])),
-					(is_raw_srt ?
-					 kBps_to_icc(BW_B2KB(
-					    dvfs_info->qos_bw_avg[qos_port_id])) :
+					(is_raw_srt ? 0 :
 					 kBps_to_icc(BW_B2KB(
 					    dvfs_info->qos_bw_peak[qos_port_id]))));
 			}
@@ -989,9 +1002,6 @@ void mtk_cam_qos_bw_calc(struct mtk_cam_ctx *ctx,
 	struct mtk_raw_device *slave_raw = get_slave_raw_dev(cam, pipe);
 	unsigned long slave_raw_dmas = 0;
 	unsigned int i = 0;
-
-	mtk_cam_qos_sv_bw_calc(ctx, s_data, force);
-	mtk_cam_qos_mraw_bw_calc(ctx, force);
 
 	__mtk_cam_qos_bw_calc(ctx, master_raw, s_data->raw_dmas, force);
 
@@ -1040,7 +1050,8 @@ void mtk_cam_qos_sv_bw_calc(struct mtk_cam_ctx *ctx,
 	unsigned int qos_port_id;
 	unsigned int ipi_fmt;
 	int i, pixel_bits, plane_factor;
-	unsigned long vblank = 0, fps = 0, width = 0, height = 0, PBW_MB_s, ABW_MB_s;
+	unsigned long vblank = 0, fps = 0, PBW_MB_s, ABW_MB_s;
+	unsigned long height_frm = 0, height_active = 0;
 	unsigned long sv_qos_bw_peak[MTK_CAM_SV_PORT_NUM];
 	unsigned long sv_qos_bw_avg[MTK_CAM_SV_PORT_NUM];
 	struct mtkcam_ipi_input_param *cfg_in_param;
@@ -1079,16 +1090,37 @@ void mtk_cam_qos_sv_bw_calc(struct mtk_cam_ctx *ctx,
 		if (ctx->pure_raw_sv_tag_idx == i &&
 			s_data->pure_raw_sv_tag_idx == -1)
 			continue;
+		if (mtk_cam_scen_get_max_exp_num(s_data->feature.scen) == 2 &&
+			mtk_cam_scen_get_exp_num(s_data->feature.scen) == 1) {
+			if (get_first_sv_tag_idx(ctx, 2, true) == i ||
+				get_first_sv_tag_idx(ctx, 2, false) == i)
+				continue;
+			if (i >= SVTAG_META_START && i < SVTAG_META_END) {
+				if (!(s_data->req->pipe_used &
+					(1 << ctx->sv_dev->tag_info[i].sv_pipe->id)))
+					continue;
+			}
+		}
+		if (mtk_cam_scen_get_max_exp_num(s_data->feature.scen) == 3 &&
+			mtk_cam_scen_get_exp_num(s_data->feature.scen) == 1) {
+			if (get_first_sv_tag_idx(ctx, 3, false) == i)
+				continue;
+			if (get_second_sv_tag_idx(ctx, 3, false) == i)
+				continue;
+			if (i >= SVTAG_META_START && i < SVTAG_META_END) {
+				if (!(s_data->req->pipe_used &
+					(1 << ctx->sv_dev->tag_info[i].sv_pipe->id)))
+					continue;
+			}
+		}
 
 		if (ctx->sensor) {
 			sd_fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
-			sd_fmt.pad = ctx->sv_dev->tag_info[i].seninf_padidx;
+			sd_fmt.pad = PAD_SRC_RAW0;
 			v4l2_subdev_call(ctx->seninf, pad, get_fmt, NULL, &sd_fmt);
-			width = sd_fmt.format.width;
-			height = sd_fmt.format.height;
 			dev_dbg(cam->dev, "[%s] FPS:%lu/%lu:%lu, W:%lu, H:%lu, VB:%lu\n",
 				__func__, fi.interval.denominator, fi.interval.numerator,
-				fps, width, height, vblank);
+				fps, sd_fmt.format.width, sd_fmt.format.height, vblank);
 		}
 
 		cfg_in_param = &ctx->sv_dev->tag_info[i].cfg_in_param;
@@ -1099,12 +1131,33 @@ void mtk_cam_qos_sv_bw_calc(struct mtk_cam_ctx *ctx,
 			ctx->sv_dev->tag_info[i].img_fmt.fmt.pix_mp.pixelformat);
 		pixel_bits = mtk_cam_get_pixel_bits(ipi_fmt);
 		plane_factor = mtk_cam_get_fmt_size_factor(ipi_fmt);
-		PBW_MB_s = cfg_in_param->in_crop.s.w * fps *
-					(vblank + height) * pixel_bits *
-					plane_factor / 8 / 100;
-		ABW_MB_s = cfg_in_param->in_crop.s.w * fps *
-					cfg_in_param->in_crop.s.h * pixel_bits *
-					plane_factor / 8 / 100;
+		if (i >= SVTAG_META_START && i < SVTAG_META_END) {
+			height_frm = sd_fmt.format.height +
+				cfg_in_param->in_crop.s.h + vblank;
+			height_active = sd_fmt.format.height +
+				cfg_in_param->in_crop.s.h;
+			height_active = (height_active) ? height_active : 1;
+			PBW_MB_s = cfg_in_param->in_crop.s.w * fps * cfg_in_param->in_crop.s.h *
+				pixel_bits * plane_factor * height_frm / height_active / 8 / 100;
+		} else {
+			PBW_MB_s = cfg_in_param->in_crop.s.w * fps *
+				(vblank + cfg_in_param->in_crop.s.h) * pixel_bits *
+				plane_factor / 8 / 100;
+		}
+		if (is_raw_ufo(ctx->sv_dev->tag_info[i].img_fmt.fmt.pix_mp.pixelformat)) {
+			/* bitstream: apply compression ratio 0.7 */
+			ABW_MB_s = cfg_in_param->in_crop.s.w * fps *
+						cfg_in_param->in_crop.s.h * pixel_bits *
+						plane_factor / 8 / 100 * 7 / 10;
+			/* table */
+			ABW_MB_s += DIV_ROUND_UP(cfg_in_param->in_crop.s.w, 64) *
+						fps * cfg_in_param->in_crop.s.h *
+						plane_factor / 100;
+		} else {
+			ABW_MB_s = cfg_in_param->in_crop.s.w * fps *
+						cfg_in_param->in_crop.s.h * pixel_bits *
+						plane_factor / 8 / 100;
+		}
 		sv_qos_bw_peak[qos_port_id] += PBW_MB_s;
 		sv_qos_bw_avg[qos_port_id] += ABW_MB_s;
 		if (unlikely(debug_mmqos))
@@ -1131,7 +1184,7 @@ void mtk_cam_qos_sv_bw_calc(struct mtk_cam_ctx *ctx,
 
 	/* by engine update */
 	for (i = 0; i < MTK_CAM_SV_PORT_NUM; i++) {
-		if (sv_qos_bw_avg[i] != 0) {
+		if (sv_qos_bw_avg[i] != 0 || force) {
 			if (force) {
 				dvfs_info->sv_qos_bw_avg[i] = sv_qos_bw_avg[i];
 				dvfs_info->sv_qos_bw_peak[i] = sv_qos_bw_peak[i];
@@ -1165,11 +1218,13 @@ void mtk_cam_qos_sv_bw_calc(struct mtk_cam_ctx *ctx,
 #endif
 }
 
-void mtk_cam_qos_mraw_bw_calc(struct mtk_cam_ctx *ctx, bool force)
+void mtk_cam_qos_mraw_bw_calc(struct mtk_cam_ctx *ctx,
+	struct mtk_cam_request_stream_data *s_data, bool force)
 {
 	struct mtk_cam_device *cam = ctx->cam;
 	struct mtk_camsys_dvfs *dvfs_info = &cam->camsys_ctrl.dvfs_info;
 	struct v4l2_subdev_frame_interval fi;
+	struct v4l2_subdev_format sd_fmt;
 	struct v4l2_ctrl *ctrl;
 	struct mraw_mmqos *mraw_mmqos;
 	unsigned int ipi_mraw_video_id;
@@ -1177,6 +1232,7 @@ void mtk_cam_qos_mraw_bw_calc(struct mtk_cam_ctx *ctx, bool force)
 	unsigned int ipi_fmt;
 	int i, j, pixel_bits, plane_factor;
 	unsigned long vblank = 0, fps = 0, PBW_MB_s = 0, ABW_MB_s = 0;
+	unsigned long height_frm = 0, height_active = 0;
 	unsigned int width_mbn = 0, height_mbn = 0;
 	unsigned int width_cpi = 0, height_cpi = 0;
 	unsigned long mraw_qos_bw_peak[MTK_CAM_MRAW_PORT_NUM];
@@ -1186,6 +1242,7 @@ void mtk_cam_qos_mraw_bw_calc(struct mtk_cam_ctx *ctx, bool force)
 #endif
 
 	memset(&fi, 0, sizeof(fi));
+	memset(&sd_fmt, 0, sizeof(sd_fmt));
 	/* reset all bandwidth info. */
 	for (i = 0; i < MTK_CAM_MRAW_PORT_NUM; i++) {
 		mraw_qos_bw_peak[i] = 0;
@@ -1205,6 +1262,22 @@ void mtk_cam_qos_mraw_bw_calc(struct mtk_cam_ctx *ctx, bool force)
 	}
 
 	for (i = 0; i < ctx->used_mraw_num; i++) {
+		if ((mtk_cam_scen_get_max_exp_num(s_data->feature.scen) == 3 ||
+			mtk_cam_scen_get_max_exp_num(s_data->feature.scen) == 2) &&
+			mtk_cam_scen_get_exp_num(s_data->feature.scen) == 1) {
+			if (!(s_data->req->pipe_used &
+				(1 << ctx->mraw_pipe[i]->id)))
+				continue;
+		}
+		if (ctx->sensor) {
+			sd_fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+			sd_fmt.pad = PAD_SRC_RAW0;
+			v4l2_subdev_call(ctx->seninf, pad, get_fmt, NULL, &sd_fmt);
+			if (unlikely(debug_mmqos))
+				dev_info(cam->dev, "[%s] FPS:%lu/%lu:%lu, W/H:%lu/%lu, VB:%lu\n",
+				  __func__, fi.interval.denominator, fi.interval.numerator,
+				  fps, sd_fmt.format.width, sd_fmt.format.height, vblank);
+		}
 		for (j = MTKCAM_IPI_MRAW_META_STATS_CFG; j < MTKCAM_IPI_MRAW_ID_MAX; j++) {
 			if (ctx->mraw_pipe[i]->enabled_dmas & (1 << j))
 				ipi_mraw_video_id = j;
@@ -1223,13 +1296,18 @@ void mtk_cam_qos_mraw_bw_calc(struct mtk_cam_ctx *ctx, bool force)
 					cam, ctx->mraw_pipe[i]->id, &width_mbn, &height_mbn);
 				mtk_cam_mraw_get_cpi_size(
 					cam, ctx->mraw_pipe[i]->id, &width_cpi, &height_cpi);
+				height_frm = sd_fmt.format.height +
+					ctx->mraw_pipe[i]->res_config.tg_crop.s.h + vblank;
+				height_active = sd_fmt.format.height +
+					ctx->mraw_pipe[i]->res_config.tg_crop.s.h;
+				height_active = (height_active) ? height_active : 1;
 
 				/* imgo */
 				qos_port_id = ((ctx->mraw_pipe[i]->id - MTKCAM_SUBDEV_MRAW_START)
 								* mraw_qos_port_num)
 								+ mraw_imgo;
-				PBW_MB_s = width_mbn * fps *
-					(vblank + height_mbn) * pixel_bits * plane_factor / 8 / 100;
+				PBW_MB_s = width_mbn * fps * height_mbn * pixel_bits *
+					plane_factor * height_frm / height_active / 8 / 100;
 				ABW_MB_s = width_mbn * fps *
 					height_mbn * pixel_bits * plane_factor / 8 / 100;
 				mraw_qos_bw_peak[qos_port_id] = PBW_MB_s;
@@ -1242,13 +1320,13 @@ void mtk_cam_qos_mraw_bw_calc(struct mtk_cam_ctx *ctx, bool force)
 				qos_port_id = ((ctx->mraw_pipe[i]->id - MTKCAM_SUBDEV_MRAW_START)
 								* mraw_qos_port_num)
 								+ mraw_imgbo;
-				PBW_MB_s = width_mbn * fps *
-					(vblank + height_mbn) * pixel_bits * plane_factor / 8 / 100;
+				PBW_MB_s = width_mbn * fps * height_mbn * pixel_bits *
+					plane_factor * height_frm / height_active / 8 / 100;
 				ABW_MB_s = width_mbn * fps *
 					height_mbn * pixel_bits * plane_factor / 8 / 100;
 				/* cpio */
-				PBW_MB_s += ((width_cpi + 7) / 8) * fps *
-					(vblank + height_cpi) * plane_factor / 8 / 100;
+				PBW_MB_s += ((width_cpi + 7) / 8) * fps * height_cpi *
+					plane_factor * height_frm / height_active / 8 / 100;
 				ABW_MB_s += ((width_cpi + 7) / 8) * fps *
 					height_cpi * plane_factor / 8 / 100;
 				mraw_qos_bw_peak[qos_port_id] = PBW_MB_s;
@@ -1277,7 +1355,7 @@ void mtk_cam_qos_mraw_bw_calc(struct mtk_cam_ctx *ctx, bool force)
 	}
 
 	for (i = 0; i < MTK_CAM_MRAW_PORT_NUM; i++) {
-		if (mraw_qos_bw_avg[i] != 0) {
+		if (mraw_qos_bw_avg[i] != 0 || force) {
 			if (force) {
 				dvfs_info->mraw_qos_bw_avg[i] = mraw_qos_bw_avg[i];
 				dvfs_info->mraw_qos_bw_peak[i] = mraw_qos_bw_peak[i];

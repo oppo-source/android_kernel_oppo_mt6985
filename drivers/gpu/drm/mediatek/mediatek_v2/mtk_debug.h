@@ -31,9 +31,21 @@ extern void disp_aal_set_bypass(struct drm_crtc *crtc, int bypass);
 extern void disp_dither_set_color_detect(struct drm_crtc *crtc, int enable);
 extern void mtk_trans_gain_to_gamma(struct drm_crtc *crtc,
 	unsigned int gain[3], unsigned int bl, void *param);
+extern void mtk_aal_regdump(void);
+extern void mtk_c3d_regdump(void);
+extern void mtk_ccorr_regdump(void);
+extern void mtk_color_regdump(void);
+extern void mtk_dither_regdump(void);
+extern void mtk_disp_tdshp_regdump(void);
+extern void mtk_dmdp_aal_regdump(void);
+extern void mtk_gamma_regdump(void);
 
 extern unsigned int m_new_pq_persist_property[32];
 extern unsigned int g_gamma_data_mode;
+#ifdef OPLUS_FEATURE_DISPLAY
+extern unsigned int merge_trigger_offset;
+extern unsigned int prefetch_te_offset;
+#endif /* OPLUS_FEATURE_DISPLAY */
 enum mtk_pq_persist_property {
 	DISP_PQ_COLOR_BYPASS,
 	DISP_PQ_CCORR_BYPASS,
@@ -67,7 +79,7 @@ struct disp_rect {
 void disp_dbg_probe(void);
 void disp_dbg_init(struct drm_device *drm_dev);
 void disp_dbg_deinit(void);
-void mtk_wakeup_pf_wq(void);
+void mtk_wakeup_pf_wq(unsigned int m_id);
 void mtk_drm_cwb_backup_copy_size(void);
 int mtk_dprec_mmp_dump_ovl_layer(struct mtk_plane_state *plane_state);
 int mtk_dprec_mmp_dump_wdma_layer(struct drm_crtc *crtc,
@@ -87,7 +99,6 @@ int mtk_drm_add_cb_data(struct cb_data_store *cb_data, unsigned int crtc_id);
 struct cb_data_store *mtk_drm_get_cb_data(unsigned int crtc_id);
 void mtk_drm_del_cb_data(struct cmdq_cb_data data, unsigned int crtc_id);
 int hrt_lp_switch_get(void);
-void debug_dsi(struct drm_crtc *crtc, unsigned int offset, unsigned int mask);
 #endif
 
 enum mtk_drm_mml_dbg {

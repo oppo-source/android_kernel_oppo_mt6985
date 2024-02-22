@@ -16,6 +16,8 @@ struct adsp_sem_info {
 };
 
 struct adsp_sem_info sem_info;
+/* spm semaphore spm_sem_info*/
+struct adsp_sem_info spm_sem_info;
 
 int adsp_semaphore_init(unsigned int way_bits,
 			unsigned int ctrl_bit,
@@ -30,6 +32,9 @@ int adsp_semaphore_init(unsigned int way_bits,
 		timeout = 1;
 	sem_info.timeout = timeout;
 	spin_lock_init(&sem_info.lock);
+	/* spm semaphore info */
+	spm_sem_info.timeout = 5000;
+	spin_lock_init(&spm_sem_info.lock);
 
 	return ADSP_OK;
 }
@@ -98,4 +103,28 @@ int release_adsp_semaphore(unsigned int sem_id)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(release_adsp_semaphore);
+
+/*
+ * acquire a hardware semaphore
+ * @param flag: semaphore id
+ * return ADSP_OK: get sema success
+ *        ADSP_ERROR: get sema fail
+ */
+int get_adsp_clock_semaphore(void)
+{
+	return ADSP_OK;
+}
+EXPORT_SYMBOL_GPL(get_adsp_clock_semaphore);
+
+/*
+ * release a hardware semaphore
+ * @param flag: semaphore id
+ * return ADSP_OK: release sema success
+ *        ADSP_ERROR: release sema fail
+ */
+int release_adsp_clock_semaphore(void)
+{
+	return ADSP_OK;
+}
+EXPORT_SYMBOL_GPL(release_adsp_clock_semaphore);
 

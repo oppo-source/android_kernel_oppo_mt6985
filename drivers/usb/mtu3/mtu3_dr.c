@@ -468,6 +468,7 @@ static int ssusb_role_sw_register(struct otg_switch_mtk *otg_sx)
 	role_sx_desc.get = ssusb_role_sw_get;
 	role_sx_desc.fwnode = dev_fwnode(dev);
 	role_sx_desc.driver_data = ssusb;
+	role_sx_desc.allow_userspace_control = true;
 	otg_sx->role_sw = usb_role_switch_register(dev, &role_sx_desc);
 	if (IS_ERR(otg_sx->role_sw))
 		return PTR_ERR(otg_sx->role_sw);
@@ -564,6 +565,11 @@ static ssize_t max_speed_store(struct device *dev,
 		return -EFAULT;
 
 	dev_info(dev, "store speed %s\n", buf);
+
+	if ((!mtu->is_u3_ip || mtu->ssusb->u2_ip) && (speed > USB_SPEED_HIGH)) {
+		dev_info(dev, "not u3 ip, set max_speed to high speed\n");
+		speed = USB_SPEED_HIGH;
+	}
 
 	mtu->max_speed = speed;
 	mtu->g.max_speed = speed;

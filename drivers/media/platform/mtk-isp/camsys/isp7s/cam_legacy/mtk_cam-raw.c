@@ -50,6 +50,13 @@
 #include <aee.h>
 #endif
 
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
+#define OPLUS_FEATURE_CAMERA_COMMON
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+#define USING_CUSTOM_PRATE 1
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 static unsigned int debug_raw;
 module_param(debug_raw, uint, 0644);
 MODULE_PARM_DESC(debug_raw, "activates debug info");
@@ -77,6 +84,10 @@ MODULE_PARM_DESC(debug_user_raws, "debug: user raws");
 static int debug_user_must_raws;
 module_param(debug_user_must_raws, int, 0644);
 MODULE_PARM_DESC(debug_user_must_raws, "debug: user must raws");
+
+static int debug_working_buf_fmt_sel = 1;
+module_param(debug_working_buf_fmt_sel, int, 0644);
+MODULE_PARM_DESC(debug_working_buf_fmt_sel, "debug: default working buf fmt: 1=UFO, 0=bayer");
 
 static int debug_cam_raw;
 module_param(debug_cam_raw, int, 0644);
@@ -568,7 +579,7 @@ mtk_cam_raw_try_res_ctrl(struct mtk_raw_pipeline *pipeline,
 
 	// currently only support normal & stagger 2-exp
 	if (res_cfg->hw_mode != 0) {
-		if (!mtk_cam_scen_is_stagger_2_exp(&res_cfg->scen) &&
+		if (!mtk_cam_scen_is_sensor_stagger(&res_cfg->scen) &&
 			!mtk_cam_scen_is_sensor_normal(&res_cfg->scen)) {
 			dev_info(dev, "scen(%d) not support hw_mode(%d)",
 				 res_cfg->scen.id, res_cfg->hw_mode);
@@ -648,7 +659,10 @@ mtk_cam_raw_try_res_ctrl(struct mtk_raw_pipeline *pipeline,
 		mtk_raw_set_dcif_rawi_fmt(dev, &img_fmt,
 					  res_user->sensor_res.width,
 					  res_user->sensor_res.height,
-					  res_user->sensor_res.code);
+					  res_user->sensor_res.code,
+					  &pipeline->vdev_nodes
+					  [MTK_RAW_MAIN_STREAM_OUT - MTK_RAW_SINK_NUM]
+					  .pending_fmt);
 		res_user->raw_res.img_wbuf_size = img_fmt.fmt.pix_mp.plane_fmt[0].sizeimage;
 	} else {
 		img_fmt.fmt.pix_mp.width = 0;
@@ -831,71 +845,118 @@ static int mtk_raw_set_res_ctrl(struct device *dev, struct v4l2_ctrl *ctrl,
 	return ret;
 }
 
-static int set_pd_info(struct mtk_raw_pipeline *pipeline,
-					   enum mtk_cam_ctrl_type ctrl_type,
-					   int node_id, int pd_sz,
-					   int *pd_info_meta_sz, int *pd_table_offset)
+static void update_pd_meta_info(struct mtk_raw_pipeline *pipeline,
+				enum mtk_cam_ctrl_type ctrl_type, int node_id)
 {
-	int ret = 0;
 	struct device *dev;
 	struct mtk_cam_video_device *node;
 	struct mtk_cam_pde_info *pde_info_pipe;
 	const struct v4l2_format *fmt;
-	int fmt_sz, active_sz;
+	int fmt_sz;
 
 	dev = pipeline->raw->devs[pipeline->id];
 	node = &pipeline->vdev_nodes[node_id - MTK_RAW_SINK_NUM];
 	fmt = mtk_cam_dev_find_fmt(&node->desc,
-					node->active_fmt.fmt.meta.dataformat);
-
+				   node->active_fmt.fmt.meta.dataformat);
 	pde_info_pipe = &pipeline->pde_config.pde_info[ctrl_type];
-
 	fmt_sz = fmt->fmt.meta.buffersize;
-	active_sz = node->active_fmt.fmt.meta.buffersize;
+
+	if (node_id == MTK_RAW_META_IN) {
+		pde_info_pipe->meta_cfg_size = fmt_sz +
+			pde_info_pipe->pdi_max_size;
+		pde_info_pipe->pd_table_offset = fmt_sz;
+	} else if (node_id == MTK_RAW_META_OUT_0) {
+		pde_info_pipe->meta_0_size = fmt_sz +
+			pde_info_pipe->pdo_max_size;
+	}
+}
+
+bool mtk_cam_pde_is_enabled(struct mtk_raw_pipeline *pipeline)
+{
+	struct mtk_cam_pde_info *pde_info_pipe;
+
+	if (!pipeline)
+		return false;
+
+	pde_info_pipe = &pipeline->pde_config.pde_info[CAM_SET_CTRL];
+	if (pde_info_pipe->pdo_max_size && pde_info_pipe->pdi_max_size)
+		return true;
+
+	return false;
+}
+
+int mtk_cam_pde_try_meta_size(struct mtk_raw_pipeline *pipeline, int node_id,
+			      unsigned int base_sz)
+{
+	struct device *dev;
+	struct mtk_cam_pde_info *pde_info_pipe;
+	unsigned int extra_pd_sz = 0;
+
+	if (!pipeline ||
+	    (node_id != MTK_RAW_META_IN && node_id != MTK_RAW_META_OUT_0))
+		return 0;
+
+	dev = pipeline->raw->devs[pipeline->id];
+	pde_info_pipe = &pipeline->pde_config.pde_info[CAM_SET_CTRL];
+
+	if (node_id == MTK_RAW_META_IN)
+		extra_pd_sz = pde_info_pipe->pdi_max_size;
+	else if (node_id == MTK_RAW_META_OUT_0)
+		extra_pd_sz = pde_info_pipe->pdo_max_size;
+
+	dev_dbg(dev, "%s: node:%d, final sz:%d", __func__,
+		node_id, base_sz + extra_pd_sz);
+	return base_sz + extra_pd_sz;
+}
+
+int mtk_cam_pde_set_meta_size(struct mtk_raw_pipeline *pipeline, int node_id,
+			      unsigned int base_sz, unsigned int act_sz)
+{
+	struct device *dev;
+	struct mtk_cam_pde_info *pde_info_pipe;
+	unsigned int extra_pd_sz = 0;
+	int *pd_info_meta_sz;
+	int *pd_table_offset;
+
+	if (!pipeline ||
+	    (node_id != MTK_RAW_META_IN && node_id != MTK_RAW_META_OUT_0))
+		return 0;
+
+	dev = pipeline->raw->devs[pipeline->id];
+	pde_info_pipe = &pipeline->pde_config.pde_info[CAM_SET_CTRL];
+
+	if (node_id == MTK_RAW_META_IN) {
+		extra_pd_sz = pde_info_pipe->pdi_max_size;
+		pd_info_meta_sz = &pde_info_pipe->meta_cfg_size;
+		pd_table_offset = &pde_info_pipe->pd_table_offset;
+	} else if (node_id == MTK_RAW_META_OUT_0) {
+		extra_pd_sz = pde_info_pipe->pdo_max_size;
+		pd_info_meta_sz = &pde_info_pipe->meta_0_size;
+		pd_table_offset = NULL;
+	}
+
+	/* check size */
+	if (act_sz < base_sz + extra_pd_sz) {
+		dev_info(dev, "%s: failed, actual/required:%d/%d", __func__,
+			act_sz, base_sz + extra_pd_sz);
+		return -EINVAL;
+	}
+
+	/* update info */
+	if (pd_table_offset)
+		*pd_table_offset = base_sz;
+
+	*pd_info_meta_sz = base_sz + extra_pd_sz;
 
 	if (pd_table_offset)
-		*pd_table_offset = fmt_sz;
+		dev_info(dev, "%s, base/extra_pd_sz:%d/%d, final sz/offset: %d/%d",
+			__func__, base_sz, extra_pd_sz,
+			*pd_info_meta_sz, *pd_table_offset);
+	else
+		dev_info(dev, "%s, base/extra_pd_sz:%d/%d, final sz %d",
+			__func__, base_sz, extra_pd_sz, *pd_info_meta_sz);
 
-	*pd_info_meta_sz = active_sz;
-
-	if (!ret && active_sz < fmt_sz + pd_sz)
-		ret = -EINVAL;
-
-	dev_dbg(dev, "%s: meta (node %d): fmt size %d, pdi size %d; active size %d",
-			__func__, node, fmt_sz, pd_sz, active_sz);
-
-	return ret;
-}
-
-int mtk_cam_update_pd_meta_cfg_info(struct mtk_raw_pipeline *pipeline,
-							enum mtk_cam_ctrl_type ctrl_type)
-{
-	struct mtk_cam_pde_info *pde_info_pipe;
-
-	pde_info_pipe = &pipeline->pde_config.pde_info[ctrl_type];
-
-	if (!pde_info_pipe->pd_table_offset)
-		return 0;
-
-	return set_pd_info(pipeline, ctrl_type, MTK_RAW_META_IN,
-				pde_info_pipe->pdi_max_size,
-				&(pde_info_pipe->meta_cfg_size),
-				&(pde_info_pipe->pd_table_offset));
-}
-
-int mtk_cam_update_pd_meta_out_info(struct mtk_raw_pipeline *pipeline,
-							enum mtk_cam_ctrl_type ctrl_type)
-{
-	struct mtk_cam_pde_info *pde_info_pipe;
-
-	pde_info_pipe = &pipeline->pde_config.pde_info[ctrl_type];
-
-	if (!pde_info_pipe->pd_table_offset)
-		return 0;
-
-	return set_pd_info(pipeline, ctrl_type, MTK_RAW_META_OUT_0,
-				pde_info_pipe->pdo_max_size,
-				&(pde_info_pipe->meta_0_size), NULL);
+	return 0;
 }
 
 static int mtk_raw_pde_try_set_ctrl(struct v4l2_ctrl *ctrl,
@@ -920,11 +981,10 @@ static int mtk_raw_pde_try_set_ctrl(struct v4l2_ctrl *ctrl,
 	is_reset = (!pde_info_user->pdo_max_size || !pde_info_user->pdi_max_size);
 
 	if (!is_reset) {
-		// pde info may be set before set format
-		// active format buf size may be insufficient
-		// ignore return val
-		mtk_cam_update_pd_meta_cfg_info(pipeline, ctrl_type);
-		mtk_cam_update_pd_meta_out_info(pipeline, ctrl_type);
+		if (ctrl_type != CAM_SET_CTRL) {
+			update_pd_meta_info(pipeline, CAM_TRY_CTRL, MTK_RAW_META_IN);
+			update_pd_meta_info(pipeline, CAM_TRY_CTRL, MTK_RAW_META_OUT_0);
+		}
 
 		dev_dbg(dev,
 			"%s:type[%s] pdo/pdi/offset/cfg_sz/0_sz:%d/%d/%d/%d/%d\n",
@@ -1130,24 +1190,17 @@ static const struct v4l2_ctrl_ops cam_ctrl_ops = {
 static int mtk_raw_hdr_timestamp_get_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct mtk_raw_pipeline *pipeline;
-	struct mtk_cam_hdr_timestamp_info *hdr_ts_info;
 	struct mtk_cam_hdr_timestamp_info *hdr_ts_info_p;
 	struct device *dev;
 	int ret = 0;
 
 	pipeline = mtk_cam_ctrl_handler_to_raw_pipeline(ctrl->handler);
-	hdr_ts_info = &pipeline->hdr_timestamp;
 	hdr_ts_info_p = ctrl->p_new.p;
 	dev = pipeline->raw->devs[pipeline->id];
 
 	switch (ctrl->id) {
 	case V4L2_CID_MTK_CAM_CAMSYS_HDR_TIMESTAMP:
-		hdr_ts_info_p->le = hdr_ts_info->le;
-		hdr_ts_info_p->le_mono = hdr_ts_info->le_mono;
-		hdr_ts_info_p->ne = hdr_ts_info->ne;
-		hdr_ts_info_p->ne_mono = hdr_ts_info->ne_mono;
-		hdr_ts_info_p->se = hdr_ts_info->se;
-		hdr_ts_info_p->se_mono = hdr_ts_info->se_mono;
+		mtk_cam_pop_hdr_tsfifo(pipeline, hdr_ts_info_p);
 		dev_dbg(dev, "%s [le:%lld,%lld][ne:%lld,%lld][se:%lld,%lld]\n",
 			 __func__,
 			 hdr_ts_info_p->le, hdr_ts_info_p->le_mono,
@@ -1593,7 +1646,7 @@ bool is_dma_idle(struct mtk_raw_device *dev)
 	if (raw_rst_stat2 != RAW_RST_STAT2_CHECK || yuv_rst_stat != YUV_RST_STAT_CHECK)
 		return false;
 
-	/* check beside rawi_r2/r3/r5*/
+	/* check beside rawi_r2/r3/r5 ufdi_r2/r3/r5 */
 	if (~raw_rst_stat & RAW_RST_STAT_CHECK)
 		return false;
 
@@ -1603,6 +1656,16 @@ bool is_dma_idle(struct mtk_raw_device *dev)
 		 (readl(dev->base + REG_RAWI_R2_BASE + DMA_OFFSET_SPECIAL_DCIF)
 			& DC_CAMSV_STAGER_EN) &&
 		 (readl(dev->base + REG_CTL_MOD6_EN) & CAMCTL_RAWI_R2_EN))
+			? true:false;
+		dev_info(dev->dev, "%s: chasing_stat: 0x%llx ret=%d\n",
+				__func__, chasing_stat, ret);
+	}
+	if (~raw_rst_stat & RST_STAT_UFDI_R2) { /* UFDI_R2 */
+		chasing_stat = readl(dev->base + REG_DMA_DBG_CHASING_STATUS);
+		ret = ((chasing_stat & UFDI_R2_SMI_REQ_ST) == 0 &&
+		 (readl(dev->base + REG_UFDI_R2_BASE + DMA_OFFSET_SPECIAL_DCIF)
+			& DC_CAMSV_STAGER_EN) &&
+		 (readl(dev->base + REG_CTL_MOD6_EN) & CAMCTL_UFDI_R2_EN))
 			? true:false;
 		dev_info(dev->dev, "%s: chasing_stat: 0x%llx ret=%d\n",
 				__func__, chasing_stat, ret);
@@ -1617,6 +1680,16 @@ bool is_dma_idle(struct mtk_raw_device *dev)
 		dev_info(dev->dev, "%s: chasing_stat: 0x%llx, ret=%d\n",
 				__func__, chasing_stat, ret);
 	}
+	if (~raw_rst_stat & RST_STAT_UFDI_R3) { /* UFDI_R3 */
+		chasing_stat = readl(dev->base + REG_DMA_DBG_CHASING_STATUS);
+		ret = ((chasing_stat & UFDI_R3_SMI_REQ_ST) == 0 &&
+		 (readl(dev->base + REG_UFDI_R3_BASE + DMA_OFFSET_SPECIAL_DCIF)
+			& DC_CAMSV_STAGER_EN) &&
+		 (readl(dev->base + REG_CTL_MOD6_EN) & CAMCTL_UFDI_R3_EN))
+			? true:false;
+		dev_info(dev->dev, "%s: chasing_stat: 0x%llx ret=%d\n",
+				__func__, chasing_stat, ret);
+	}
 	if (~raw_rst_stat & RST_STAT_RAWI_R5) {
 		chasing_stat = readl(dev->base + REG_DMA_DBG_CHASING_STATUS2);
 		ret = ((chasing_stat & RAWI_R5_SMI_REQ_ST) == 0 &&
@@ -1625,6 +1698,16 @@ bool is_dma_idle(struct mtk_raw_device *dev)
 		 (readl(dev->base + REG_CTL_MOD6_EN) & CAMCTL_RAWI_R5_EN))
 			? true:false;
 		dev_info(dev->dev, "%s: chasing_stat: 0x%llx, ret=%d\n",
+				__func__, chasing_stat, ret);
+	}
+	if (~raw_rst_stat & RST_STAT_UFDI_R5) { /* UFDI_R5 */
+		chasing_stat = readl(dev->base + REG_DMA_DBG_CHASING_STATUS2);
+		ret = ((chasing_stat & UFDI_R5_SMI_REQ_ST) == 0 &&
+		 (readl(dev->base + REG_UFDI_R5_BASE + DMA_OFFSET_SPECIAL_DCIF)
+			& DC_CAMSV_STAGER_EN) &&
+		 (readl(dev->base + REG_CTL_MOD6_EN) & CAMCTL_UFDI_R5_EN))
+			? true:false;
+		dev_info(dev->dev, "%s: chasing_stat: 0x%llx ret=%d\n",
 				__func__, chasing_stat, ret);
 	}
 
@@ -1642,9 +1725,8 @@ void reset(struct mtk_raw_device *dev)
 	writel(0xffffffff, dev->yuv_base + REG_CTL_RAW_MOD5_DCM_DIS);
 
 	/* enable CQI_R1 ~ R4 before reset and make sure loaded to inner */
-	writel(readl(dev->base + REG_CTL_MOD6_EN) | CQI_ALL_EN,
-	    dev->base + REG_CTL_MOD6_EN);
-	toggle_db(dev);
+	writel(readl(dev->base_inner + REG_CTL_MOD6_EN) | CQI_ALL_EN,
+	    dev->base_inner + REG_CTL_MOD6_EN);
 
 	writel(0, dev->base + REG_CTL_SW_CTL);
 	writel(1, dev->base + REG_CTL_SW_CTL);
@@ -1681,9 +1763,25 @@ void reset(struct mtk_raw_device *dev)
 		goto RESET_FAILURE;
 	}
 
+	if (!dev->cam) {
+		dev_dbg(dev->dev, "%s: get cam failed\n", __func__);
+
+		goto RESET_FAILURE;
+	}
+
+	if (dev->pipeline && dev->pipeline->enabled_sv_tags) {
+		struct mtk_cam_ctx *ctx;
+
+		ctx = mtk_cam_find_ctx(dev->cam, &dev->pipeline->subdev.entity);
+		mtk_cam_disable_sv_vf(ctx);
+	}
+
 	/* do hw rst */
 	writel(4, dev->base + REG_CTL_SW_CTL);
 	writel(0, dev->base + REG_CTL_SW_CTL);
+
+	/* CAM_MAIN_ADLRD_MUX_SEL forcely use raw C */
+	writel(0x2 << 1 | 0x1, dev->cam->base + 0x32c);
 
 RESET_FAILURE:
 	/* Enable all DMA DCM back */
@@ -1698,6 +1796,8 @@ static void reset_reg(struct mtk_raw_device *dev)
 {
 	int cq_en, sw_done, sw_sub_ctl;
 
+	if (!dev)
+		return;
 	dev_dbg(dev->dev,
 			 "[%s++] CQ_EN/SW_SUB_CTL/SW_DONE [in] 0x%x/0x%x/0x%x [out] 0x%x/0x%x/0x%x\n",
 			 __func__,
@@ -1917,6 +2017,68 @@ static int push_msgfifo(struct mtk_raw_device *dev,
 	return 0;
 }
 
+/* vhdr timesatamp fifo control */
+int mtk_cam_init_hdr_tsfifo(struct mtk_raw *raw, struct v4l2_device *v4l2_dev)
+{
+	struct device *dev = raw->cam_dev;
+	struct mtk_cam_device *cam_dev = dev_get_drvdata(dev);
+	unsigned int i;
+
+	for (i = 0; i < cam_dev->num_raw_drivers; i++) {
+		struct mtk_raw_pipeline *pipe = raw->pipelines + i;
+
+		pipe->hdr_ts_fifo_size =
+			roundup_pow_of_two(4 * sizeof(struct mtk_cam_hdr_timestamp_info));
+
+		pipe->hdr_ts_buffer =
+			devm_kzalloc(dev, pipe->hdr_ts_fifo_size, GFP_KERNEL);
+		if (!pipe->hdr_ts_buffer)
+			return -ENOMEM;
+	}
+
+	return 0;
+}
+
+int mtk_cam_reset_hdr_tsfifo(struct mtk_raw_pipeline *pipe)
+{
+	atomic_set(&pipe->is_hdr_ts_fifo_overflow, 0);
+	return kfifo_init(&pipe->hdr_ts_fifo,
+			pipe->hdr_ts_buffer, pipe->hdr_ts_fifo_size);
+}
+
+void mtk_cam_push_hdr_tsfifo(struct mtk_raw_pipeline *pipe,
+			struct mtk_cam_hdr_timestamp_info *ts_info)
+{
+	struct device *dev = pipe->raw->devs[pipe->id];
+	int len;
+
+	if (unlikely(kfifo_avail(&pipe->hdr_ts_fifo) < sizeof(*ts_info)))
+		atomic_set(&pipe->is_hdr_ts_fifo_overflow, 1);
+
+	len = kfifo_in(&pipe->hdr_ts_fifo, ts_info, sizeof(*ts_info));
+	if (len != sizeof(*ts_info))
+		dev_info(dev, " %s: (pipe:%d) push fail\n",
+				__func__, pipe->id);
+}
+
+void mtk_cam_pop_hdr_tsfifo(struct mtk_raw_pipeline *pipe,
+		struct mtk_cam_hdr_timestamp_info *ts_info)
+{
+	struct device *dev = pipe->raw->devs[pipe->id];
+	int len;
+
+	if (unlikely(atomic_cmpxchg(&pipe->is_hdr_ts_fifo_overflow, 1, 0)))
+		dev_info(dev, "hdr ts fifo overflow\n");
+
+	if (kfifo_len(&pipe->hdr_ts_fifo) >= sizeof(*ts_info)) {
+		len = kfifo_out(&pipe->hdr_ts_fifo, ts_info, sizeof(*ts_info));
+
+		if (len != sizeof(*ts_info))
+			dev_info(dev, " %s: (pipe:%d) pop fail\n",
+				__func__, pipe->id);
+	}
+}
+
 void toggle_db(struct mtk_raw_device *dev)
 {
 	int value;
@@ -1938,6 +2100,30 @@ void toggle_db(struct mtk_raw_device *dev)
 			readl_relaxed(dev->base_inner + REG_TG_DCIF_CTL),
 			val_sen,
 			readl_relaxed(dev->base_inner + REG_TG_SEN_MODE));
+}
+
+static void toggle_db_all_raw(struct mtk_cam_ctx *ctx)
+{
+	struct mtk_raw_device *raw;
+
+	raw = get_master_raw_dev(ctx->cam, ctx->pipe);
+
+	if (raw)
+		toggle_db(raw);
+
+	if (ctx->pipe->res_config.raw_num_used >= 2) {
+		raw = get_slave_raw_dev(ctx->cam, ctx->pipe);
+
+		if (raw)
+			toggle_db(raw);
+	}
+
+	if (ctx->pipe->res_config.raw_num_used >= 3) {
+		raw = get_slave2_raw_dev(ctx->cam, ctx->pipe);
+
+		if (raw)
+			toggle_db(raw);
+	}
 }
 
 void enable_tg_db(struct mtk_raw_device *dev, int en)
@@ -2324,7 +2510,8 @@ void immediate_stream_off(struct mtk_raw_device *dev)
 				 offset, cur_val, cfg_val);
 }
 
-void stream_on(struct mtk_raw_device *dev, int on)
+void stream_on(struct mtk_cam_ctx *ctx,
+		struct mtk_raw_device *dev, int on)
 {
 	u32 val;
 	u32 cfg_val;
@@ -2343,7 +2530,9 @@ void stream_on(struct mtk_raw_device *dev, int on)
 			fps_ratio = get_fps_ratio(dev);
 			dev_info(dev->dev, "VF on - REG_TG_TIME_STAMP_CNT val:%d fps(30x):%d\n",
 			val, fps_ratio);
-			if (mtk_cam_scen_is_sensor_stagger(scen_active))
+
+			if (mtk_cam_scen_is_sensor_stagger(scen_active) ||
+				mtk_cam_scen_is_ext_isp(scen_active))
 				writel_relaxed(0xffffffff, dev->base + REG_SCQ_START_PERIOD);
 			else
 				writel_relaxed(SCQ_DEADLINE_MS * 1000 * SCQ_DEFAULT_CLK_RATE /
@@ -2362,7 +2551,7 @@ void stream_on(struct mtk_raw_device *dev, int on)
 			dev->grab_err_cnt = 0;
 			enable_tg_db(dev, 0);
 			enable_tg_db(dev, 1);
-			toggle_db(dev);
+			toggle_db_all_raw(ctx);
 			if (mtk_cam_scen_is_time_shared(scen_active) ||
 				mtk_cam_scen_is_odt(scen_active)) {
 				dev_info(dev->dev, "[%s] M2M view finder disable\n", __func__);
@@ -2453,6 +2642,7 @@ static void mtk_raw_update_debug_param(struct mtk_cam_device *cam,
 		dev_info(cam->dev, "DEBUG: force debug_clk_idx: %d\n",
 			 debug_clk_idx);
 		res->clk_target = clk->clklv[debug_clk_idx];
+		res->opp_idx = debug_clk_idx;
 	}
 
 	dev_dbg(cam->dev,
@@ -2492,7 +2682,11 @@ bool mtk_raw_resource_calc(struct mtk_cam_device *cam,
 	calc.mipi_pixel_rate = (s64)(in_w + res->hblank) * (in_h + res->vblank)
 		* res->interval.denominator / res->interval.numerator;
 	/* fake preisp line time from customized prate */
+#ifndef OPLUS_FEATURE_CAMERA_COMMON
 	if (mtk_cam_scen_is_ext_isp(&res->scen) && pixel_rate > 0) {
+#else /* OPLUS_FEATURE_CAMERA_COMMON */
+	if ((mtk_cam_scen_is_ext_isp(&res->scen) || USING_CUSTOM_PRATE) && pixel_rate > 0) {
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
 		calc.line_time = 1000000000L * in_w / pixel_rate;
 		dev_info(cam->dev, "preisp:res linetime:%lld, prate:%lld, w:%d\n",
 			calc.line_time, pixel_rate, in_w);
@@ -2547,7 +2741,7 @@ bool mtk_raw_resource_calc(struct mtk_cam_device *cam,
 	mtk_raw_update_debug_param(cam, res);
 
 	dev_info(cam->dev,
-		 "Res-end bin/raw_num/tg_pxlmode/before_raw/opp(%d/%d/%d/%d/%d), vb/hb(%d,%d), clk(%d), out(%dx%d)\n",
+		 "Res-end bin/raw_num/tg_pxlmode/before_raw/opp(%d/%d/%d/%d/%d), clk(%d), vb/hb(%d,%d), out(%dx%d)\n",
 		 res->bin_enable, res->raw_num_used, res->tgo_pxl_mode,
 		 res->tgo_pxl_mode_before_raw, res->opp_idx, res->clk_target,
 		 res->vblank, res->hblank, *out_w, *out_h);
@@ -2605,10 +2799,11 @@ static void raw_handle_error(struct mtk_raw_device *raw_dev,
 	}
 
 	if (err_status & INT_ST_MASK_CAM_DBG) {
-		dev_info(raw_dev->dev, "%s: err_status:0x%x statx:0x%x cq period:0x%x\n",
+		dev_info(raw_dev->dev, "%s: err_status:0x%x statx:0x%x cq period:0x%x trig time:0x%x\n",
 			__func__, err_status,
 			readl_relaxed(raw_dev->base + REG_CTL_RAW_INT_STATX),
-			readl_relaxed(raw_dev->base + REG_SCQ_START_PERIOD));
+			readl_relaxed(raw_dev->base + REG_SCQ_START_PERIOD),
+			readl_relaxed(raw_dev->base + REG_CAMCQ_SCQ_TRIG_TIME));
 	}
 
 }
@@ -2702,6 +2897,7 @@ static irqreturn_t mtk_irq_raw(int irq, void *data)
 		else
 			raw_dev->tg_count = tg_cnt;
 		raw_dev->last_sof_time_ns = irq_info.ts_ns;
+		irq_info.tg_cnt = raw_dev->tg_count;
 		irq_info.write_cnt = ((fbc_fho_ctl2 & WCNT_BIT_MASK) >> 8) - 1;
 		irq_info.fbc_cnt = (fbc_fho_ctl2 & CNT_BIT_MASK) >> 16;
 	}
@@ -3231,21 +3427,24 @@ static int mtk_raw_sd_subscribe_event(struct v4l2_subdev *subdev,
 				      struct v4l2_fh *fh,
 				      struct v4l2_event_subscription *sub)
 {
+#define EVENT_DEPTH 4
 	switch (sub->type) {
 	case V4L2_EVENT_FRAME_SYNC:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_REQUEST_DRAINED:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_EOS:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_REQUEST_DUMPED:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_ESD_RECOVERY:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_REQUEST_SENSOR_TRIGGER:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 	case V4L2_EVENT_ERROR:
-		return v4l2_event_subscribe(fh, sub, 0, NULL);
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
+	case V4L2_EVENT_EXTISP_CAMSYS_READY:
+		return v4l2_event_subscribe(fh, sub, EVENT_DEPTH, NULL);
 
 	default:
 		return -EINVAL;
@@ -3546,7 +3745,6 @@ int mtk_cam_raw_select(struct mtk_cam_ctx *ctx,
 
 	return 0;
 }
-
 void mtk_cam_raw_vf_reset(struct mtk_cam_ctx *ctx,
 	struct mtk_raw_device *dev)
 {
@@ -3565,6 +3763,7 @@ void mtk_cam_raw_vf_reset(struct mtk_cam_ctx *ctx,
 		dev_info(dev->dev, "%s: wait vf off timeout: TG_VF_CON 0x%x\n",
 				 __func__, chk_val);
 	}
+	reset_dma_fbc(dev->dev, dev->base, dev->yuv_base);
 	enable_tg_db(dev, 1);
 	dev_info(dev->dev, "preisp raw_vf_reset vf_en off");
 
@@ -4136,7 +4335,7 @@ int mtk_raw_try_pad_fmt(struct v4l2_subdev *sd,
 	return 0;
 }
 
-unsigned int mtk_cam_get_rawi_sensor_pixel_fmt(unsigned int fmt)
+static unsigned int mtk_cam_get_rawi_sensor_pixel_fmt(unsigned int fmt, bool select_ufo)
 {
 	// return V4L2_PIX_FMT_MTISP for matching
 	// length returned by mtk_cam_get_pixel_bits()
@@ -4144,65 +4343,97 @@ unsigned int mtk_cam_get_rawi_sensor_pixel_fmt(unsigned int fmt)
 
 	switch (fmt & SENSOR_FMT_MASK) {
 	case MEDIA_BUS_FMT_SBGGR8_1X8:
-		return V4L2_PIX_FMT_SBGGR8;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER8_UFBC : V4L2_PIX_FMT_SBGGR8;
 	case MEDIA_BUS_FMT_SGBRG8_1X8:
-		return V4L2_PIX_FMT_SGBRG8;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER8_UFBC : V4L2_PIX_FMT_SGBRG8;
 	case MEDIA_BUS_FMT_SGRBG8_1X8:
-		return V4L2_PIX_FMT_SGRBG8;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER8_UFBC : V4L2_PIX_FMT_SGRBG8;
 	case MEDIA_BUS_FMT_SRGGB8_1X8:
-		return V4L2_PIX_FMT_SRGGB8;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER8_UFBC : V4L2_PIX_FMT_SRGGB8;
 	case MEDIA_BUS_FMT_SBGGR10_1X10:
-		return V4L2_PIX_FMT_MTISP_SBGGR10;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER10_UFBC : V4L2_PIX_FMT_MTISP_SBGGR10;
 	case MEDIA_BUS_FMT_SGBRG10_1X10:
-		return V4L2_PIX_FMT_MTISP_SGBRG10;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER10_UFBC : V4L2_PIX_FMT_MTISP_SGBRG10;
 	case MEDIA_BUS_FMT_SGRBG10_1X10:
-		return V4L2_PIX_FMT_MTISP_SGRBG10;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER10_UFBC : V4L2_PIX_FMT_MTISP_SGRBG10;
 	case MEDIA_BUS_FMT_SRGGB10_1X10:
-		return V4L2_PIX_FMT_MTISP_SGRBG10;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER10_UFBC : V4L2_PIX_FMT_MTISP_SGRBG10;
 	case MEDIA_BUS_FMT_SBGGR12_1X12:
-		return V4L2_PIX_FMT_MTISP_SBGGR12;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER12_UFBC : V4L2_PIX_FMT_MTISP_SBGGR12;
 	case MEDIA_BUS_FMT_SGBRG12_1X12:
-		return V4L2_PIX_FMT_MTISP_SGBRG12;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER12_UFBC : V4L2_PIX_FMT_MTISP_SGBRG12;
 	case MEDIA_BUS_FMT_SGRBG12_1X12:
-		return V4L2_PIX_FMT_MTISP_SGRBG12;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER12_UFBC : V4L2_PIX_FMT_MTISP_SGRBG12;
 	case MEDIA_BUS_FMT_SRGGB12_1X12:
-		return V4L2_PIX_FMT_MTISP_SRGGB12;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER12_UFBC : V4L2_PIX_FMT_MTISP_SRGGB12;
 	case MEDIA_BUS_FMT_SBGGR14_1X14:
-		return V4L2_PIX_FMT_MTISP_SBGGR14;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER14_UFBC : V4L2_PIX_FMT_MTISP_SBGGR14;
 	case MEDIA_BUS_FMT_SGBRG14_1X14:
-		return V4L2_PIX_FMT_MTISP_SGBRG14;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER14_UFBC : V4L2_PIX_FMT_MTISP_SGBRG14;
 	case MEDIA_BUS_FMT_SGRBG14_1X14:
-		return V4L2_PIX_FMT_MTISP_SGRBG14;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER14_UFBC : V4L2_PIX_FMT_MTISP_SGRBG14;
 	case MEDIA_BUS_FMT_SRGGB14_1X14:
-		return V4L2_PIX_FMT_MTISP_SRGGB14;
+		return (select_ufo) ?
+			V4L2_PIX_FMT_MTISP_BAYER14_UFBC : V4L2_PIX_FMT_MTISP_SRGGB14;
 	default:
 		break;
 	}
-	return V4L2_PIX_FMT_MTISP_SBGGR14;
+	return (select_ufo) ?
+		V4L2_PIX_FMT_MTISP_BAYER14_UFBC : V4L2_PIX_FMT_MTISP_SRGGB14;
 }
 
 void mtk_raw_set_dcif_rawi_fmt(struct device *dev, struct v4l2_format *img_fmt,
-			       int width, int height, unsigned int code)
+				   int width, int height, unsigned int code,
+				   const struct v4l2_format *imgo_fmt)
 {
 	unsigned int sink_ipi_fmt;
+	bool is_bayer = (imgo_fmt->fmt.pix_mp.pixelformat != 0) &&
+		(!is_raw_ufo(imgo_fmt->fmt.pix_mp.pixelformat));
 
 	img_fmt->fmt.pix_mp.width = width;
 	img_fmt->fmt.pix_mp.height = height;
-	sink_ipi_fmt = mtk_cam_get_sensor_fmt(code);
-	if (sink_ipi_fmt == MTKCAM_IPI_IMG_FMT_UNKNOWN) {
-		dev_info(dev, "%s: sink_ipi_fmt not found\n");
+	img_fmt->fmt.pix_mp.pixelformat =
+		mtk_cam_get_rawi_sensor_pixel_fmt(code, !is_bayer && debug_working_buf_fmt_sel);
+	dev_dbg(dev, "%s: sink pixelformat %x (is_bayer:%d, wbuf fmt sel %d)\n",
+			 __func__, img_fmt->fmt.pix_mp.pixelformat,
+			is_bayer, debug_working_buf_fmt_sel);
 
-		sink_ipi_fmt = MTKCAM_IPI_IMG_FMT_BAYER14;
+	if (is_raw_ufo(img_fmt->fmt.pix_mp.pixelformat)) {
+		cal_image_pix_mp(MTK_RAW_MAIN_STREAM_OUT, &img_fmt->fmt.pix_mp, 3);
+
+		img_fmt->fmt.pix_mp.plane_fmt[0].bytesperline =
+			mtk_cam_get_rawi_stride(img_fmt);
+	} else {
+		sink_ipi_fmt = mtk_cam_get_sensor_fmt(code);
+		if (sink_ipi_fmt == MTKCAM_IPI_IMG_FMT_UNKNOWN) {
+			dev_info(dev, "%s: sink_ipi_fmt not found\n");
+
+			sink_ipi_fmt = MTKCAM_IPI_IMG_FMT_BAYER14;
+		}
+
+		img_fmt->fmt.pix_mp.plane_fmt[0].bytesperline =
+			mtk_cam_dmao_xsize(width, sink_ipi_fmt, 3);
+
+		img_fmt->fmt.pix_mp.plane_fmt[0].sizeimage =
+			img_fmt->fmt.pix_mp.plane_fmt[0].bytesperline *
+			img_fmt->fmt.pix_mp.height;
 	}
 
-	img_fmt->fmt.pix_mp.pixelformat =
-		mtk_cam_get_rawi_sensor_pixel_fmt(code);
-
-	img_fmt->fmt.pix_mp.plane_fmt[0].bytesperline =
-		mtk_cam_dmao_xsize(width, sink_ipi_fmt, 3);
-	img_fmt->fmt.pix_mp.plane_fmt[0].sizeimage =
-		img_fmt->fmt.pix_mp.plane_fmt[0].bytesperline *
-		img_fmt->fmt.pix_mp.height;
 }
 
 static int mtk_raw_call_set_fmt(struct v4l2_subdev *sd,
@@ -4249,16 +4480,32 @@ static int mtk_raw_call_set_fmt(struct v4l2_subdev *sd,
 		struct v4l2_format *img_fmt;
 
 		if (fmt->which == V4L2_SUBDEV_FORMAT_ACTIVE) {
+			struct v4l2_format empty_fmt;
+			struct v4l2_format *imgo_fmt;
+
+			if (pipe->vdev_nodes[MTK_RAW_MAIN_STREAM_OUT - MTK_RAW_SINK_NUM].enabled)
+				imgo_fmt = &pipe->vdev_nodes
+					[MTK_RAW_MAIN_STREAM_OUT - MTK_RAW_SINK_NUM]
+					.pending_fmt;
+			else
+				imgo_fmt = &empty_fmt;
+
 			img_fmt = &pipe->img_fmt_sink_pad;
 			mtk_raw_set_dcif_rawi_fmt(raw->cam_dev,
-						  img_fmt, mf->width,
-						  mf->height, mf->code);
+					  img_fmt, mf->width,
+					  mf->height, mf->code,
+					  imgo_fmt);
 			dev_dbg(raw->cam_dev,
 				"%s: sd:%s update sink pad format %dx%d code 0x%x\n",
 				__func__, sd->name,
 				img_fmt->fmt.pix_mp.width,
 				img_fmt->fmt.pix_mp.height,
 				mf->code);
+			dev_dbg(raw->cam_dev,
+				"%s: sd:%s is_imgo_enabled %d\n",
+				__func__, sd->name,
+				pipe->vdev_nodes
+					[MTK_RAW_MAIN_STREAM_OUT - MTK_RAW_SINK_NUM].enabled);
 		}
 
 		source_mf = mtk_raw_pipeline_get_fmt(pipe, state,
@@ -4653,7 +4900,7 @@ static struct mtk_cam_format_desc meta_ext_fmts[] = {
 	{
 		.vfmt.fmt.meta = {
 			.dataformat = V4L2_META_FMT_MTISP_3A,
-			.buffersize = 0,
+			.buffersize = 4,
 		},
 	},
 };

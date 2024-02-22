@@ -316,25 +316,38 @@ int drm_show_dal(struct drm_crtc *crtc, bool enable)
 	return 0;
 #else
 	struct mtk_drm_crtc *mtk_crtc = to_mtk_crtc(crtc);
+	struct mtk_drm_private *priv = (crtc && crtc->dev) ? crtc->dev->dev_private : NULL;
 	struct mtk_plane_state *plane_state;
-	struct mtk_ddp_comp *ovl_comp = _handle_phy_top_plane(mtk_crtc);
+	struct mtk_ddp_comp *ovl_comp;
 	struct cmdq_pkt *cmdq_handle;
 	int layer_id;
 	int ret = 0;
 
+	if (unlikely(crtc == NULL || mtk_crtc == NULL)) {
+		DDPPR_ERR("%s: can't find crtc or mtk_crtc\n", __func__);
+		return 0;
+	}
+	ovl_comp = _handle_phy_top_plane(mtk_crtc);
 	if (ovl_comp == NULL) {
 		DDPPR_ERR("%s: can't find ovl comp\n", __func__);
 		return 0;
 	}
+	if (IS_ERR_OR_NULL(priv)) {
+		DDPPR_ERR("%s: cant' find priv\n", __func__);
+		return 0;
+	}
+
 	layer_id = mtk_ovl_layer_num(ovl_comp) - 1;
 	if (layer_id < 0) {
 		DDPPR_ERR("%s invalid layer id:%d\n", __func__, layer_id);
 		return 0;
 	}
 
+	DDP_MUTEX_LOCK(&priv->commit.lock, __func__, __LINE__);
 	DDP_MUTEX_LOCK(&mtk_crtc->lock, __func__, __LINE__);
 	if (!mtk_crtc->enabled) {
 		DDP_MUTEX_UNLOCK(&mtk_crtc->lock, __func__, __LINE__);
+		DDP_MUTEX_UNLOCK(&priv->commit.lock, __func__, __LINE__);
 		return 0;
 	}
 
@@ -342,6 +355,7 @@ int drm_show_dal(struct drm_crtc *crtc, bool enable)
 	if (!plane_state) {
 		DDPPR_ERR("%s: can't set dal plane_state\n", __func__);
 		DDP_MUTEX_UNLOCK(&mtk_crtc->lock, __func__, __LINE__);
+		DDP_MUTEX_UNLOCK(&priv->commit.lock, __func__, __LINE__);
 		return 0;
 	}
 
@@ -371,6 +385,7 @@ int drm_show_dal(struct drm_crtc *crtc, bool enable)
 	mtk_crtc_gce_flush(crtc, mtk_drm_cmdq_done, cmdq_handle, cmdq_handle);
 #endif
 	DDP_MUTEX_UNLOCK(&mtk_crtc->lock, __func__, __LINE__);
+	DDP_MUTEX_UNLOCK(&priv->commit.lock, __func__, __LINE__);
 	return 0;
 #endif
 }
@@ -410,19 +425,28 @@ void drm_set_dal(struct drm_crtc *crtc, struct cmdq_pkt *cmdq_handle)
 
 void drm_update_dal(struct drm_crtc *crtc, struct cmdq_pkt *cmdq_handle)
 {
+	struct MFC_CONTEXT *ctxt = (struct MFC_CONTEXT *)mfc_handle;
+	unsigned int width, height;
+
 	if (!mfc_handle)
 		return;
 
 	DAL_LOCK();
-	MFC_SetWH(mfc_handle, crtc->state->mode.hdisplay,
-		     crtc->state->mode.vdisplay);
+	width = crtc->state->mode.hdisplay;
+	height = crtc->state->mode.vdisplay;
+	/* check DAL buffer size is available after width/height change */
+	if (ctxt->buffer_size < width * height * DAL_BPP) {
+		height = ctxt->buffer_size;
+		do_div(height, (DAL_BPP * width));
+	}
+	MFC_SetWH(mfc_handle, width, height);
 	DAL_SetScreenColor(DAL_COLOR_RED);
 
 	if (drm_dal_enable)
 		MFC_Print(mfc_handle, "Resolution switch, clean dal!\n");
 	DAL_UNLOCK();
 
-	if (drm_dal_enable)
+	if (drm_dal_enable && cmdq_handle)
 		drm_set_dal(crtc, cmdq_handle);
 }
 

@@ -1,0 +1,223 @@
+&mtk_leds {
+	compatible = "mediatek,disp-leds";
+
+	backlight {
+		label = "lcd-backlight";
+		max-brightness = <4095>;
+		max-hw-brightness = <4095>;
+		led_mode = <4>;
+		led-bits = <12>;
+		trans-bits = <12>;
+		default-state = "on";
+	};
+};
+
+&pio {
+    mtkfb_pins_lcm_rst_out1_gpio: lcm_rst_out1_gpio {
+        pins_cmd_dat {
+            pinmux = <PINMUX_GPIO86__FUNC_GPIO86>;
+            slew-rate = <1>;
+            output-high;
+        };
+    };
+
+    mtkfb_pins_lcm_rst_out0_gpio: lcm_rst_out0_gpio {
+        pins_cmd_dat {
+            pinmux = <PINMUX_GPIO86__FUNC_GPIO86>;
+            slew-rate = <1>;
+            output-low;
+        };
+    };
+
+    mtkfb_pins_lcm_dsi_te: lcm_dsi_te {
+        pins_cmd_dat {
+            pinmux = <PINMUX_GPIO85__FUNC_GPIO85>;
+            slew-rate = <0>;
+        };
+    };
+
+    mtkfb_pins_6382_rst_out1_gpio: 6382-rst-out1-gpio {
+        pins_cmd_dat {
+            pinmux = <PINMUX_GPIO92__FUNC_GPIO92>;
+            slew-rate = <1>;
+            output-high;
+        };
+    };
+    mtkfb_pins_6382_rst_out0_gpio: 6382-rst-out0-gpio {
+        pins_cmd_dat {
+            pinmux = <PINMUX_GPIO92__FUNC_GPIO92>;
+            slew-rate = <1>;
+            output-low;
+        };
+    };
+    mtkfb_pins_6382_pmic_26m_ctl0: 6382-pmic-26m-gpio-ctl0 {
+            pins_cmd_dat {
+            pinmux = <PINMUX_GPIO2__FUNC_SRCLKENAI0>;
+            input-enable;
+            slew-rate = <0>;
+            bias-pull-down;
+        };
+    };
+    mtkfb_pins_6382_pmic_26m_ctl1: 6382-pmic-26m-gpio-ctl1 {
+            pins_cmd_dat {
+            pinmux = <PINMUX_GPIO2__FUNC_SRCLKENAI0>;
+            input-enable;
+            slew-rate = <0>;
+            bias-pull-up;
+        };
+    };
+
+    mtkfb_pins_lcm_bias_enp1_gpio: lcm_bias_enp1_gpio {
+        pins_cmd_dat {
+            pinmux = <PINMUX_GPIO150__FUNC_GPIO150>;
+            slew-rate = <1>;
+            output-high;
+        };
+    };
+
+    mtkfb_pins_lcm_bias_enp0_gpio: lcm_bias_enp0_gpio {
+        pins_cmd_dat {
+            pinmux = <PINMUX_GPIO150__FUNC_GPIO150>;
+            slew-rate = <1>;
+            output-low;
+        };
+    };
+
+    mtkfb_pins_lcm_bias_enn1_gpio: lcm_bias_enn1_gpio {
+        pins_cmd_dat {
+            pinmux = <PINMUX_GPIO151__FUNC_GPIO151>;
+            slew-rate = <1>;
+            output-high;
+        };
+    };
+
+    mtkfb_pins_lcm_bias_enn0_gpio: lcm_bias_enn0_gpio {
+        pins_cmd_dat {
+            pinmux = <PINMUX_GPIO151__FUNC_GPIO151>;
+            slew-rate = <1>;
+            output-low;
+        };
+    };
+
+};
+
+&mtkfb {
+    pinctrl-names = "lcm_rst_out1_gpio", "lcm_rst_out0_gpio",
+        "mode_te_te", "6382-rst-out1-gpio",
+        "6382-rst-out0-gpio", "6382-pmic-26m-gpio-ctl0",
+        "lcm_bias_enp1_gpio", "lcm_bias_enp0_gpio",
+        "lcm_bias_enn1_gpio", "lcm_bias_enn0_gpio";
+    pinctrl-0 = <&mtkfb_pins_lcm_rst_out1_gpio>;
+    pinctrl-1 = <&mtkfb_pins_lcm_rst_out0_gpio>;
+    pinctrl-2 = <&mtkfb_pins_lcm_dsi_te>;
+    pinctrl-3 = <&mtkfb_pins_6382_rst_out1_gpio>;
+    pinctrl-4 = <&mtkfb_pins_6382_rst_out0_gpio>;
+    pinctrl-5 = <&mtkfb_pins_6382_pmic_26m_ctl0>;
+    pinctrl-6 = <&mtkfb_pins_lcm_bias_enp1_gpio>;
+    pinctrl-7 = <&mtkfb_pins_lcm_bias_enp0_gpio>;
+    pinctrl-8 = <&mtkfb_pins_lcm_bias_enn1_gpio>;
+    pinctrl-9 = <&mtkfb_pins_lcm_bias_enn0_gpio>;
+    status = "okay";
+};
+
+&dispsys_config {
+    pinctrl-names =
+        "lcm_rst_out1_gpio", "lcm_rst_out0_gpio",
+        "mode_te_te",
+        "6382-rst-out1-gpio", "6382-rst-out0-gpio",
+        "6382-pmic-26m-gpio-ctl0",
+        "lcm_bias_enp1_gpio", "lcm_bias_enp0_gpio",
+        "lcm_bias_enn1_gpio", "lcm_bias_enn0_gpio";
+    pinctrl-0 = <&mtkfb_pins_lcm_rst_out1_gpio>;
+    pinctrl-1 = <&mtkfb_pins_lcm_rst_out0_gpio>;
+    pinctrl-2 = <&mtkfb_pins_lcm_dsi_te>;
+    pinctrl-3 = <&mtkfb_pins_6382_rst_out1_gpio>;
+    pinctrl-4 = <&mtkfb_pins_6382_rst_out0_gpio>;
+    pinctrl-5 = <&mtkfb_pins_6382_pmic_26m_ctl0>;
+    pinctrl-6 = <&mtkfb_pins_lcm_bias_enp1_gpio>;
+    pinctrl-7 = <&mtkfb_pins_lcm_bias_enp0_gpio>;
+    pinctrl-8 = <&mtkfb_pins_lcm_bias_enn1_gpio>;
+    pinctrl-9 = <&mtkfb_pins_lcm_bias_enn0_gpio>;
+    status = "okay";
+};
+&dsi0 {
+    status = "okay";
+    #address-cells = <1>;
+    #size-cells = <0>;
+    bdg-gpios = <&pio 92 0>;
+    pinctrl-names = "6382-pmic-26m-gpio-ctl0", "6382-pmic-26m-gpio-ctl1";
+    pinctrl-0 = <&mtkfb_pins_6382_pmic_26m_ctl0>;
+    pinctrl-1 = <&mtkfb_pins_6382_pmic_26m_ctl1>;
+    panel1@0 {
+        compatible = "oplus23661,tm,nt36672c,fhd,dsi,vdo";
+        reg = <0>;
+        bdg-support=<1>;
+        reset-gpios = <&pio 86 0>;
+        bias-gpios = <&pio 150 0>, <&pio 151 0>;
+        esd-te-gpios = <&pio 85 0>;
+        pinctrl-names = "default";
+        port {
+            panel_in1: endpoint {
+                remote-endpoint = <&dsi_out>;
+            };
+        };
+    };
+    ports {
+        port {
+            dsi_out: endpoint {
+                remote-endpoint = <&panel_in1>;
+            };
+        };
+    };
+};
+
+&spi0 {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&spislv_pins_default>;
+	mediatek,autosuspend-delay = <10>;
+	mediatek,fifo-polling = <1>;
+	spislv@0 {
+		compatible = "mediatek,spi_slave";
+		reg = <0>;
+		spi-max-frequency = <55000000>;
+		spi-tx-bus-width = <1>;
+		spi-rx-bus-width = <1>;
+		slave-drive-strength = /bits/ 8 <3>;
+	};
+};
+&pio {
+    spislv_pins_default: spislv-mode-default {
+        pins-cmd-dat {
+            pinmux = <PINMUX_GPIO56__FUNC_SPI0_CLK>,
+                <PINMUX_GPIO57__FUNC_SPI0_CSB>,
+                <PINMUX_GPIO58__FUNC_SPI0_MO>,
+                <PINMUX_GPIO59__FUNC_SPI0_MI>;
+            drive-strength = <3>;
+        };
+    };
+};
+
+&bdgsupport {
+    bdg: bridge {
+        compatible = "mediatek,disp,bdg_enabled";
+    };
+};
+
+&i2c6 {
+    aw37501_main_bias: aw37501@0x3e {
+        compatible = "awinic,aw37501";
+        reg = <0x3e>;
+        status = "okay";
+    };
+};
+
+&disp_ccorr0 {
+	ccorr_linear_per_pipe = <0x1>;
+	ccorr_prim_force_linear = <0x1>;
+	set_ccorr_force_linear = <1>;
+};
+
+#include "mediatek/cust_evb6835.dtsi"

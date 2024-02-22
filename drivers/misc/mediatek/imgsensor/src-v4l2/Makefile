@@ -33,6 +33,12 @@ imgsensor-objs += \
 	adaptor-fsync-ctrls.o \
 	adaptor-trace.o \
 
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+ifeq ($(CONFIG_OPLUS_CAM_EVENT_REPORT),m)
+	imgsensor-objs += oplus_cam_olc_exception.o
+endif
+#endif /* OPLUS_FEATURE_CAMERA_COMMON */
+
 define FILTER_DRV
 ifeq ($(wildcard $(IMGSENSOR_DRIVER_PATH)/camera_project/$(IMGSENSOR_PROJECT)/$(1)),)
 ifeq ($(wildcard $(IMGSENSOR_DRIVER_PATH)/common/$(1)),)

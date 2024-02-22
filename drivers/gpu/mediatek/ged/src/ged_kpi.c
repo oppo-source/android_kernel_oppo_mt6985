@@ -15,6 +15,7 @@
 #include <ged_hashtable.h>
 #include <ged_dvfs.h>
 #include <ged_log.h>
+#include <ged_tracepoint.h>
 #include <ged.h>
 #include "ged_thread.h"
 /* #include <ged_vsync.h> */
@@ -63,16 +64,17 @@
 /* set default margin to be distinct from FPSGO(0 or 3) */
 #define GED_KPI_DEFAULT_FPS_MARGIN 4
 #define GED_KPI_CPU_MAX_OPP 0
-#define GED_KPI_FPS_LIMIT 120
+#define GED_KPI_FPS_LIMIT 165
 
-#define GED_TIMESTAMP_TYPE_D    0x1
-#define GED_TIMESTAMP_TYPE_1    0x2
-#define GED_TIMESTAMP_TYPE_2    0x4
-#define GED_TIMESTAMP_TYPE_S    0x8
-#define GED_TIMESTAMP_TYPE_P    0x10
-#define GED_TIMESTAMP_TYPE_H    0x20
-#define GED_SET_TARGET_FPS      0x40
-#define GED_TIMESTAMP_TYPE      int
+#define GED_TIMESTAMP_TYPE_D       0x1
+#define GED_TIMESTAMP_TYPE_1       0x2
+#define GED_TIMESTAMP_TYPE_2       0x4
+#define GED_TIMESTAMP_TYPE_S       0x8
+#define GED_TIMESTAMP_TYPE_P       0x10
+#define GED_TIMESTAMP_TYPE_H       0x20
+#define GED_SET_TARGET_FPS         0x40
+#define GED_SET_PANEL_REFRESH_RATE 0x80
+#define GED_TIMESTAMP_TYPE         int
 
 /* No frame control is applied */
 #define GED_KPI_FRC_DEFAULT_MODE    0
@@ -105,7 +107,7 @@ struct GED_KPI_HEAD {
 	int isFRR_enabled;
 	int isARR_enabled;
 
-	int target_fps;
+	int target_fps;   // -1 means target FPS via FPSGO is invalid or unprovided
 	int target_fps_margin;
 	int eara_fps_margin;
 
@@ -232,7 +234,6 @@ struct GED_KPI_MEOW_DVFS_FREQ_PRED {
 static struct GED_KPI_MEOW_DVFS_FREQ_PRED *g_psGIFT;
 
 int g_target_fps_default = GED_KPI_MAX_FPS;
-int g_target_time_default = GED_KPI_SEC_DIVIDER / GED_KPI_MAX_FPS;
 
 #define GED_KPI_TOTAL_ITEMS 32
 #define GED_KPI_UID(pid, wnd) (pid | ((unsigned long)wnd))
@@ -252,9 +253,6 @@ static spinlock_t gs_hashtableLock;
 static struct GED_KPI g_asKPI[GED_KPI_TOTAL_ITEMS];
 static int g_i32Pos;
 static GED_THREAD_HANDLE ghThread;
-// static unsigned int gx_dfps; /* variable to fix FPS*/
-
-static unsigned int enable_gpu_boost = 1;
 
 #if !defined(CONFIG_MTK_GPU_COMMON_DVFS_SUPPORT)
 /* Disable for bring-up stage unexpected exception */
@@ -264,20 +262,33 @@ static unsigned int is_GED_KPI_enabled = 1;
 #endif
 
 static unsigned int g_force_gpu_dvfs_fallback;
-static int g_fb_dvfs_threshold = 80;
 
-#define FW_IDLE_TIMER_DEFAULT 5
+#if defined(MTK_GPU_FW_IDLE)
+#define FW_IDLE_TIMER_0_MS    0
+#define FW_IDLE_TIMER_5_MS    5
+#define FW_IDLE_TIMER_10_MS   10
+
+#define FW_IDLE_MODE_DEFAULT  0
+#define FW_IDLE_MODE_FIX_10   2
+#define FW_IDLE_MODE_FIX_5    1
+#define FW_IDLE_MODE_Fix_0    3
+
 #define FW_IDLE_FPS_THRESHOLD 60
-static int g_is_idle_fw_enable;
+
+/* -1:default flavor
+ *  0:disable
+ *  1:enable
+ */
+static int g_is_fw_idle_enable = -1;
+
+static int g_fw_idle_mode;
 static int g_fw_idle_timer;
 static int g_is_panel_hz_change;
+#endif /* MTK_GPU_FW_IDLE */
 
 u64 fb_timeout = 100000000;/*100 ms*/
 u64 lb_timeout = 100000000;
-module_param(g_fb_dvfs_threshold, int, 0644);
 
-// module_param(gx_dfps, uint, 0644);
-module_param(enable_gpu_boost, uint, 0644);
 module_param(is_GED_KPI_enabled, uint, 0644);
 
 /* for calculating remained time budgets of CPU and GPU:
@@ -710,7 +721,9 @@ static GED_BOOL ged_kpi_update_TargetTimeAndTargetFps(
 	int client)
 {
 	GED_BOOL ret = GED_FALSE;
+#if defined(MTK_GPU_FW_IDLE)
 	int idle_timer_ms = g_fw_idle_timer;
+#endif /* MTK_GPU_FW_IDLE */
 
 	if (!psHead)
 		return ret;
@@ -725,33 +738,57 @@ static GED_BOOL ged_kpi_update_TargetTimeAndTargetFps(
 		vsync_period = GED_KPI_SEC_DIVIDER / GED_KPI_MAX_FPS;
 		GED_LOGD("[Exception]: no invalid",
 			"FRC mode is specified, use default mode");
+		break;
 	}
+#if defined(MTK_GPU_FW_IDLE)
+	if (g_is_fw_idle_enable > 0) {
+		/* update fw idle timer value */
+		switch (g_fw_idle_mode) {
+		case FW_IDLE_MODE_DEFAULT:
+			if (psHead == main_head) {
+				if (target_fps > 0 && target_fps <= FW_IDLE_FPS_THRESHOLD)
+					idle_timer_ms = FW_IDLE_TIMER_0_MS;
+				else if (target_fps > FW_IDLE_FPS_THRESHOLD
+						&& target_fps <= GED_KPI_FPS_LIMIT)
+					idle_timer_ms = FW_IDLE_TIMER_5_MS;
+				else if (g_target_fps_default > 0
+						&& g_target_fps_default <= FW_IDLE_FPS_THRESHOLD)
+					idle_timer_ms = FW_IDLE_TIMER_0_MS;
+				else
+					idle_timer_ms = FW_IDLE_TIMER_5_MS;
+			} else {
+				if (g_target_fps_default > 0
+						&& g_target_fps_default <= FW_IDLE_FPS_THRESHOLD)
+					idle_timer_ms = FW_IDLE_TIMER_0_MS;
+				else
+					idle_timer_ms = FW_IDLE_TIMER_5_MS;
+			}
+			break;
+		case FW_IDLE_MODE_FIX_5:
+			idle_timer_ms = FW_IDLE_TIMER_5_MS;
+			break;
+		case FW_IDLE_MODE_FIX_10:
+			idle_timer_ms = FW_IDLE_TIMER_10_MS;
+			break;
+		}
 
-	/* update fw idle timer value */
-	if (g_is_idle_fw_enable)
-		idle_timer_ms = FW_IDLE_TIMER_DEFAULT;
-	else {
-		if (psHead == main_head)
-			idle_timer_ms =
-				(target_fps <= FW_IDLE_FPS_THRESHOLD && target_fps > 0) ?
-				0 : FW_IDLE_TIMER_DEFAULT;
+		/* set fw idle timer if timer value ever changed*/
+		if (g_is_panel_hz_change || g_fw_idle_timer != idle_timer_ms) {
+			mtk_set_gpu_idle(idle_timer_ms);
+			g_fw_idle_timer = idle_timer_ms;
+			g_is_panel_hz_change = 0;
+		}
 	}
-
-	/* set fw idle timer if timer value change */
-	if (g_is_panel_hz_change || g_fw_idle_timer != idle_timer_ms) {
-		mtk_set_gpu_idle(idle_timer_ms);
-		g_fw_idle_timer = idle_timer_ms;
-		g_is_panel_hz_change = 0;
-	}
+#endif /* MTK_GPU_FW_IDLE */
 
 	psHead->target_fps = target_fps;
 	psHead->target_fps_margin = target_fps_margin;
 	psHead->eara_fps_margin = eara_fps_margin;
 	psHead->t_cpu_fpsgo = cpu_time;
-	if (target_fps > 0 && target_fps <= GED_KPI_FPS_LIMIT) {
+	if (target_fps > 0 && target_fps <= GED_KPI_FPS_LIMIT) {   // valid range
 		psHead->t_cpu_target = (int)((int)GED_KPI_SEC_DIVIDER/target_fps);
 		psHead->target_fps = target_fps;
-	} else {
+	} else {   // invalid range, use default value
 		psHead->t_cpu_target = (int)((int)GED_KPI_SEC_DIVIDER/g_target_fps_default);
 		psHead->target_fps = -1;
 	}
@@ -768,6 +805,25 @@ static GED_BOOL ged_kpi_update_TargetTimeAndTargetFps(
 
 	return ret;
 }
+
+static GED_BOOL ged_kpi_update_default_target_fps_fcn(unsigned long ulID,
+	void *pvoid, void *pvParam)
+{
+	struct GED_KPI_HEAD *psHead = (struct GED_KPI_HEAD *) pvoid;
+
+	if (psHead) {
+		if (psHead->target_fps == -1)
+			// only reset target FPS for those who use the default
+			ged_kpi_update_TargetTimeAndTargetFps(
+					psHead,
+					-1,
+					GED_KPI_DEFAULT_FPS_MARGIN, 0, 0,
+					GED_KPI_FRC_DEFAULT_MODE, -1);
+	}
+
+	return GED_TRUE;
+}
+
 /* ------------------------------------------------------------------- */
 struct GED_KPI_MISS_TAG {
 	u64 ulID;
@@ -935,9 +991,9 @@ static void ged_kpi_set_fallback_mode(struct GED_KPI_HEAD *psHead)
 	if (diff_times > GED_KPI_MAX_SWITCH_COUNT)
 		diff_times = GED_KPI_MAX_SWITCH_COUNT;
 
-	Policy__Common__Commit_Reason__TID(psHead->pid, (int)(psHead->ullWnd % 0xF)
-						, psHead->i32Count);
-	Policy__Common__Commit_Reason(same_times, diff_times);
+	trace_GPU_DVFS__Policy__Common__Commit_Reason__TID(psHead->pid,
+		(int)(psHead->ullWnd % 0xF), psHead->i32Count);
+	trace_GPU_DVFS__Policy__Common__Commit_Reason(same_times, diff_times);
 	/*check if LB or FB*/
 	if (same_times >= GED_KPI_SWITCH_FB_THRESHOLD) {
 		if (main_head->isSF == 1) //surfacefliger use LB only
@@ -985,6 +1041,11 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 		psKPI = &g_asKPI[g_i32Pos++];
 		if (g_i32Pos >= GED_KPI_TOTAL_ITEMS)
 			g_i32Pos = 0;
+#if defined(MTK_GPU_FW_IDLE)
+		/* enable fw idle policy after first dequeue event */
+		if (g_is_fw_idle_enable == -1)
+			g_is_fw_idle_enable = 1;
+#endif /* MTK_GPU_FW_IDLE */
 
 		/* remove */
 		ulID = psKPI->ullWnd;
@@ -1032,7 +1093,7 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 			spin_lock_init(&psHead->sListLock);
 			ged_kpi_update_TargetTimeAndTargetFps(
 				psHead,
-				g_target_fps_default,
+				-1,
 				GED_KPI_DEFAULT_FPS_MARGIN, 0, 0,
 				GED_KPI_FRC_DEFAULT_MODE, -1);
 			ged_kpi_set_gift_status(0);
@@ -1151,7 +1212,7 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 			psTimeStamp->i32QedBuffer_length,
 			psTimeStamp->ullTimeStamp,
 			psHead);
-	break;
+		break;
 
 	/* GPU done scope */
 	case GED_TIMESTAMP_TYPE_2:
@@ -1310,20 +1371,11 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 			ged_kpi_statistics_and_remove(psHead, psKPI);
 
 		/* hint JS0, JS1 info to EAT */
-		ged_log_perf_trace_counter("is_gift_on", g_psGIFT->gift_ratio,
-				psTimeStamp->pid, psTimeStamp->i32FrameID, ulID);
-		ged_log_perf_trace_counter("t_cpu", psKPI->t_cpu,
-			psTimeStamp->pid, psTimeStamp->i32FrameID, ulID);
-		ged_log_perf_trace_counter("t_gpu",	psKPI->t_gpu,
-			psTimeStamp->pid, psTimeStamp->i32FrameID, ulID);
-
-		if (main_head == psHead) {
-			ged_log_perf_trace_counter("fb_t_gpu",
-				(long long)psKPI->t_gpu, 5566, 0, 0);
-			ged_log_perf_trace_counter("fb_t_target",
-				(long long)psKPI->t_gpu_target, 5566, 0, 0);
-		}
-	break;
+		trace_tracing_mark_write(psTimeStamp->pid, "is_gift_on",
+			g_psGIFT->gift_ratio);
+		trace_tracing_mark_write(psTimeStamp->pid, "t_cpu", psKPI->t_cpu);
+		trace_tracing_mark_write(psTimeStamp->pid, "t_gpu",	psKPI->t_gpu);
+		break;
 
 	/* Prefence scope */
 	case GED_TIMESTAMP_TYPE_P:
@@ -1351,18 +1403,15 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 			long long pre_fence_delay;
 
 			pre_fence_delay = psTimeStamp->ullTimeStamp - psKPI->ullTimeStamp1;
-			ged_log_perf_trace_counter("t_pre_fence_delay",
-				pre_fence_delay, psTimeStamp->pid,
-				psTimeStamp->i32FrameID, ulID);
+			trace_tracing_mark_write(psTimeStamp->pid, "t_pre_fence_delay",
+				pre_fence_delay);
 			psKPI->ulMask |= GED_TIMESTAMP_TYPE_P;
 			psKPI->ullTimeStampP = psTimeStamp->ullTimeStamp;
 		} else {
-			ged_log_perf_trace_counter("t_pre_fence_delay",
-				0, psTimeStamp->pid, psTimeStamp->i32FrameID, ulID);
+			trace_tracing_mark_write(psTimeStamp->pid, "t_pre_fence_delay", 0);
 			GED_LOGD("[Exception] TYPE_P: psKPI NULL, frameID: %lu",
 				psTimeStamp->i32FrameID);
 			}
-
 		break;
 
 	/* acquire buffer scope (deprecated) */
@@ -1432,8 +1481,23 @@ static void ged_kpi_work_cb(struct work_struct *psWork)
 			eara_fps_margin,
 			GED_KPI_FRC_DEFAULT_MODE, -1);
 
-		ged_log_perf_trace_counter("target_fps_fpsgo",
-				(target_FPS&0x000000ff), 5566, 0, 0);
+		trace_tracing_mark_write(5566, "target_fps_fpsgo",
+			(target_FPS&0x000000ff));
+		break;
+
+	case GED_SET_PANEL_REFRESH_RATE:
+		target_FPS = psTimeStamp->i32FrameID;
+		if (target_FPS > 0 &&
+				target_FPS <= GED_KPI_FPS_LIMIT) {   // valid range
+			if (g_target_fps_default != target_FPS) {   // panel refresh rate change
+				g_target_fps_default = target_FPS;
+				ged_hashtable_iterator(gs_hashtable,
+					ged_kpi_update_default_target_fps_fcn, NULL);
+			}
+			trace_tracing_mark_write(5566, "target_fps_panel", target_FPS);
+		}
+		break;
+
 	default:
 		break;
 	}
@@ -1493,24 +1557,18 @@ static GED_ERROR ged_kpi_push_timestamp(
 		case GED_TIMESTAMP_TYPE_D:
 			break;
 		case GED_TIMESTAMP_TYPE_1:
-			ged_log_trace_counter("GED_KPI_QedBuffer_CNT",
-				atomic_inc_return(&event_QedBuffer_cnt));
-			ged_log_trace_counter("GED_KPI_3D_fence_CNT",
-				atomic_inc_return(&event_3d_fence_cnt));
+			atomic_inc_return(&event_QedBuffer_cnt);
+			atomic_inc_return(&event_3d_fence_cnt);
 			break;
 		case GED_TIMESTAMP_TYPE_2:
-			ged_log_trace_counter("GED_KPI_3D_fence_CNT",
-				atomic_dec_return(&event_3d_fence_cnt));
+			atomic_dec_return(&event_3d_fence_cnt);
 			break;
 		case GED_TIMESTAMP_TYPE_P:
 			break;
 		case GED_TIMESTAMP_TYPE_S:
-			ged_log_trace_counter("GED_KPI_QedBuffer_CNT",
-				atomic_dec_return(&event_QedBuffer_cnt));
+			atomic_dec_return(&event_QedBuffer_cnt);
 			break;
 		case GED_TIMESTAMP_TYPE_H:
-			ged_log_trace_counter("GED_KPI_HW_Vsync",
-				atomic_read(&event_hw_vsync));
 			atomic_set(&event_hw_vsync,
 				(atomic_inc_return(&event_hw_vsync)%2));
 			break;
@@ -1826,27 +1884,32 @@ unsigned int ged_kpi_get_cur_avg_gpu_freq(void)
 #endif /* MTK_GED_KPI */
 }
 /* ------------------------------------------------------------------- */
-unsigned int ged_kpi_get_fw_idle(void)
-{
-	return g_is_idle_fw_enable;
-}
-/* ------------------------------------------------------------------- */
 void ged_dfrc_fps_limit_cb(unsigned int target_fps)
 {
+#if defined(MTK_GPU_FW_IDLE)
 	/* update fw idle timer value */
-	if (g_is_idle_fw_enable)
-		g_fw_idle_timer = FW_IDLE_TIMER_DEFAULT;
-	else
-		g_fw_idle_timer =
-			(target_fps <= FW_IDLE_FPS_THRESHOLD) ? 0 : FW_IDLE_TIMER_DEFAULT;
+	switch (g_fw_idle_mode) {
+	case FW_IDLE_MODE_DEFAULT:
+		if (target_fps > 0 && target_fps <= FW_IDLE_FPS_THRESHOLD)
+			g_fw_idle_timer = FW_IDLE_TIMER_0_MS;
+		else
+			g_fw_idle_timer = FW_IDLE_TIMER_5_MS;
+		break;
+	case FW_IDLE_MODE_FIX_5:
+		g_fw_idle_timer = FW_IDLE_TIMER_5_MS;
+		break;
+	case FW_IDLE_MODE_FIX_10:
+		g_fw_idle_timer = FW_IDLE_TIMER_10_MS;
+		break;
+	}
+
 	g_is_panel_hz_change = 1;
+#endif /* MTK_GPU_FW_IDLE */
 
-	g_target_fps_default =
-		(target_fps > 0 && target_fps <= GED_KPI_FPS_LIMIT) ?
-		target_fps : g_target_fps_default;
-
-	GED_LOGD("dfrc_fps:%d, dfrc_time %u\n",
-		g_target_fps_default, g_target_time_default);
+#ifdef MTK_GED_KPI
+	ged_kpi_push_timestamp(GED_SET_PANEL_REFRESH_RATE, 0, -1, 0,
+		(int) target_fps, -1, -1, NULL);
+#endif /* MTK_GED_KPI */
 }
 /* ------------------------------------------------------------------- */
 GED_ERROR ged_kpi_system_init(void)
@@ -1964,14 +2027,38 @@ void ged_kpi_set_target_FPS_margin(u64 ulID, int target_FPS,
 }
 EXPORT_SYMBOL(ged_kpi_set_target_FPS_margin);
 /* ------------------------------------------------------------------- */
-void ged_kpi_set_fw_idle(unsigned int mode)
+#if defined(MTK_GPU_FW_IDLE)
+int ged_kpi_get_fw_idle_mode(void)
 {
+	return g_fw_idle_mode;
+}
+/* ------------------------------------------------------------------- */
+int ged_kpi_is_fw_idle_policy_enable(void)
+{
+	return g_is_fw_idle_enable;
+}
+/* ------------------------------------------------------------------- */
+void ged_kpi_set_fw_idle_mode(unsigned int mode)
+{
+	if (mode == FW_IDLE_MODE_DEFAULT || mode == FW_IDLE_MODE_Fix_0
+		|| mode == FW_IDLE_MODE_FIX_5 || mode == FW_IDLE_MODE_FIX_10)
+		g_fw_idle_mode = mode;
+
 	if (!mode)
 		mtk_set_gpu_idle(g_fw_idle_timer);
 
-	g_is_idle_fw_enable = mode;
 }
-EXPORT_SYMBOL(ged_kpi_set_fw_idle);
+EXPORT_SYMBOL(ged_kpi_set_fw_idle_mode);
+/* ------------------------------------------------------------------- */
+void ged_kpi_enable_fw_idle_policy(unsigned int enable)
+{
+	g_is_fw_idle_enable = enable;
+
+	if (enable)
+		g_fw_idle_mode = FW_IDLE_MODE_DEFAULT;
+}
+EXPORT_SYMBOL(ged_kpi_enable_fw_idle_policy);
+#endif /* MTK_GPU_FW_IDLE */
 /* ------------------------------------------------------------------- */
 
 static GED_BOOL ged_kpi_find_riskyBQ_func(unsigned long ulID,

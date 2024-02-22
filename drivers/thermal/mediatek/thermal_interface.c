@@ -24,6 +24,7 @@
 #include <linux/types.h>
 #include <linux/debugfs.h>
 #include <linux/thermal.h>
+#include <soc/mediatek/dramc.h>
 
 #include <linux/io.h>
 #if IS_ENABLED(CONFIG_MTK_GPUFREQ_V2)
@@ -145,6 +146,28 @@ int get_cpu_temp(int cpu_id)
 	return temp;
 }
 EXPORT_SYMBOL(get_cpu_temp);
+
+int set_reboot_temperature(int temp)
+{
+	if (!tm_data.sw_ready)
+		return -ENODEV;
+
+	therm_intf_write_csram(temp, REBOOT_TEMPERATURE_ADDR_OFFSET);
+
+	return 0;
+}
+EXPORT_SYMBOL(set_reboot_temperature);
+
+int set_cold_interrupt_enable_addr(int val)
+{
+	if (!tm_data.sw_ready)
+		return -ENODEV;
+
+	therm_intf_write_csram(val, COLD_INTERRUPT_ENABLE_OFFSET);
+
+	return 0;
+}
+EXPORT_SYMBOL(set_cold_interrupt_enable_addr);
 
 static ssize_t headroom_info_show(struct kobject *kobj,
 	struct kobj_attribute *attr, char *buf)
@@ -631,6 +654,22 @@ static ssize_t cpu_atc_show(struct kobject *kobj, struct kobj_attribute *attr,
 	return len;
 }
 
+static ssize_t cpu_atc20_show(struct kobject *kobj, struct kobj_attribute *attr,
+	char *buf)
+{
+	int i, len = 0, val;
+
+	for (i = 0; i < CPU_ATC20_NUM - 1; i++) {
+		val = therm_intf_read_csram_s32(CPU_ATC20_OFFSET + i * 0x4);
+		len += snprintf(buf + len, PAGE_SIZE - len, "%d,", val);
+	}
+
+	val = therm_intf_read_csram_s32(CPU_ATC20_OFFSET + i * 0x4);
+	len += snprintf(buf + len, PAGE_SIZE - len, "%d\n", val);
+
+	return len;
+}
+
 static ssize_t gpu_atc_show(struct kobject *kobj, struct kobj_attribute *attr,
 	char *buf)
 {
@@ -1064,6 +1103,20 @@ static ssize_t catm_p_store(struct kobject *kobj,
 	return -EINVAL;
 }
 
+
+static ssize_t dram_data_rate_show(struct kobject *kobj,
+	struct kobj_attribute *attr, char *buf)
+{
+	int len = 0;
+
+	len = snprintf(buf, PAGE_SIZE, "%d\n",
+		mtk_dramc_get_data_rate());
+	if (len < 0 || len >= sizeof(buf))
+		pr_info("%s: snprintf return negative and buf %s\n", __func__, buf);
+
+	return len;
+}
+
 static struct kobj_attribute ttj_attr = __ATTR_RW(ttj);
 static struct kobj_attribute power_budget_attr = __ATTR_RW(power_budget);
 static struct kobj_attribute cpu_info_attr = __ATTR_RO(cpu_info);
@@ -1076,6 +1129,7 @@ static struct kobj_attribute frs_info_attr = __ATTR_RW(frs_info);
 static struct kobj_attribute cpu_temp_attr = __ATTR_RO(cpu_temp);
 static struct kobj_attribute headroom_info_attr = __ATTR_RO(headroom_info);
 static struct kobj_attribute cpu_atc_attr = __ATTR_RO(cpu_atc);
+static struct kobj_attribute cpu_atc20_attr = __ATTR_RO(cpu_atc20);
 static struct kobj_attribute gpu_atc_attr = __ATTR_RO(gpu_atc);
 static struct kobj_attribute apu_atc_attr = __ATTR_RO(apu_atc);
 static struct kobj_attribute target_tpcb_attr = __ATTR_RW(target_tpcb);
@@ -1091,7 +1145,7 @@ static struct kobj_attribute sports_mode_attr = __ATTR_RW(sports_mode);
 static struct kobj_attribute vtskin_info_attr = __ATTR_RW(vtskin_info);
 static struct kobj_attribute vtskin_temp_attr = __ATTR_RW(vtskin_temp);
 static struct kobj_attribute catm_p_attr = __ATTR_RW(catm_p);
-
+static struct kobj_attribute dram_data_rate_attr = __ATTR_RO(dram_data_rate);
 
 static struct attribute *thermal_attrs[] = {
 	&ttj_attr.attr,
@@ -1106,6 +1160,7 @@ static struct attribute *thermal_attrs[] = {
 	&cpu_temp_attr.attr,
 	&headroom_info_attr.attr,
 	&cpu_atc_attr.attr,
+	&cpu_atc20_attr.attr,
 	&gpu_atc_attr.attr,
 	&apu_atc_attr.attr,
 	&target_tpcb_attr.attr,
@@ -1120,6 +1175,7 @@ static struct attribute *thermal_attrs[] = {
 	&vtskin_info_attr.attr,
 	&vtskin_temp_attr.attr,
 	&catm_p_attr.attr,
+	&dram_data_rate_attr.attr,
 	NULL
 };
 static struct attribute_group thermal_attr_group = {

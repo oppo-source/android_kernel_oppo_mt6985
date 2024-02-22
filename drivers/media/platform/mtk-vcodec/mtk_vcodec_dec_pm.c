@@ -167,7 +167,9 @@ void mtk_vcodec_release_dec_pm(struct mtk_vcodec_dev *dev)
 void mtk_vcodec_dec_pw_on(struct mtk_vcodec_pm *pm)
 {
 	int ret, larb_index;
+	struct mtk_vcodec_dev *dev = container_of(pm, struct mtk_vcodec_dev, pm);
 
+	atomic_inc(&dev->dec_larb_ref_cnt);
 	for (larb_index = 0; larb_index < MTK_VDEC_MAX_LARB_COUNT; larb_index++) {
 		if (pm->larbvdecs[larb_index]) {
 			ret = mtk_smi_larb_get(pm->larbvdecs[larb_index]);
@@ -181,10 +183,61 @@ void mtk_vcodec_dec_pw_on(struct mtk_vcodec_pm *pm)
 void mtk_vcodec_dec_pw_off(struct mtk_vcodec_pm *pm)
 {
 	int larb_index;
+	int hw_lock_cnt = 0, i;
+	struct mtk_vcodec_dev *dev = container_of(pm, struct mtk_vcodec_dev, pm);
 
+	if (atomic_read(&dev->dec_larb_ref_cnt) <= 0) {
+		mtk_v4l2_err("dec_larb_ref_cnt %d invalid !!",
+			atomic_read(&dev->dec_larb_ref_cnt));
+		// BUG();
+		// return;
+	}
+	for (i = 0; i < MTK_VDEC_HW_NUM; i++)
+		hw_lock_cnt += atomic_read(&dev->dec_hw_active[i]);
+	if (atomic_read(&dev->dec_larb_ref_cnt) == 1 && hw_lock_cnt > 0) {
+		mtk_v4l2_err("error off last larb ref cnt (%d) when some hw locked %d (%d %d)",
+			atomic_read(&dev->dec_larb_ref_cnt), hw_lock_cnt,
+			atomic_read(&dev->dec_hw_active[MTK_VDEC_LAT]),
+			atomic_read(&dev->dec_hw_active[MTK_VDEC_CORE]));
+		// BUG();
+		dump_stack();
+		// return;
+	}
+	atomic_dec(&dev->dec_larb_ref_cnt);
 	for (larb_index = 0; larb_index < MTK_VDEC_MAX_LARB_COUNT; larb_index++) {
 		if (pm->larbvdecs[larb_index])
 			mtk_smi_larb_put(pm->larbvdecs[larb_index]);
+	}
+}
+
+static void mtk_vdec_hw_break_dump(
+	void __iomem *reg_addr, char *debug_str, int off_start, int off_end)
+{
+	int idx, cnt, total, remainder, off[4];
+	unsigned long val[4];
+
+	if (reg_addr > 0 && off_start >= 0 && off_end >= 0 && off_end >= off_start) {
+		total = off_end - off_start + 1;
+		remainder = total - ((total >> 2) << 2);
+
+		for (idx = off_start; idx < off_start + remainder; idx++) {
+			off[0] = idx;
+			val[0] = readl(reg_addr + (off[0] << 2));
+			mtk_v4l2_err("[DEBUG][%s] 0x%x(%d) = 0x%lx",
+				debug_str, off[0] << 2, off[0], val[0]);
+		}
+		for (; idx <= off_end; idx += 4) {
+			for (cnt = 0; cnt < 4; cnt++) {
+				off[cnt] = idx + cnt;
+				val[cnt] = readl(reg_addr + (off[cnt] << 2));
+			}
+			mtk_v4l2_err("[DEBUG][%s] 0x%x(%d) = 0x%lx, 0x%x(%d) = 0x%lx, 0x%x(%d) = 0x%lx, 0x%x(%d) = 0x%lx",
+				debug_str,
+				off[0] << 2, off[0], val[0],
+				off[1] << 2, off[1], val[1],
+				off[2] << 2, off[2], val[2],
+				off[3] << 2, off[3], val[3]);
+		}
 	}
 }
 
@@ -192,7 +245,7 @@ static void mtk_vdec_hw_break_vld_top_dump(
 	void __iomem *vld_top_addr, char *debug_str)
 {
 	int vld_top_offset[7] = {33, 41, 50, 51, 64, 65, 94};
-	int idx, off[7], cnt;
+	int idx, off[7];
 	unsigned long val[7];
 
 	if (vld_top_addr > 0) {
@@ -209,19 +262,9 @@ static void mtk_vdec_hw_break_vld_top_dump(
 			off[4] << 2, off[4], val[4],
 			off[5] << 2, off[5], val[5],
 			off[6] << 2, off[6], val[6]);
-		for (idx = 68; idx <= 112; idx += 5) {
-			for (cnt = 0; cnt < 5; cnt++) {
-				off[cnt] = idx + cnt;
-				val[cnt] = readl(vld_top_addr + (off[cnt] << 2));
-			}
-			mtk_v4l2_err("[DEBUG][%s] 0x%x(%d) = 0x%lx, 0x%x(%d) = 0x%lx, 0x%x(%d) = 0x%lx, 0x%x(%d) = 0x%lx, 0x%x(%d) = 0x%lx",
-				debug_str,
-				off[0] << 2, off[0], val[0],
-				off[1] << 2, off[1], val[1],
-				off[2] << 2, off[2], val[2],
-				off[3] << 2, off[3], val[3],
-				off[4] << 2, off[4], val[4]);
-		}
+
+		mtk_vdec_hw_break_dump(
+			vld_top_addr, debug_str, 68, 112);
 	}
 }
 
@@ -234,16 +277,16 @@ static void mtk_vdec_hw_break(struct mtk_vcodec_dev *dev, int hw_id)
 	void __iomem *vdec_gcon_addr = dev->dec_reg_base[VDEC_SYS];
 	void __iomem *vdec_ufo_addr = dev->dec_reg_base[VDEC_BASE] + 0x800;
 	void __iomem *vdec_lat_misc_addr = dev->dec_reg_base[VDEC_LAT_MISC];
+	void __iomem *lat_wdma_addr = dev->dec_reg_base[VDEC_LAT_MISC] + 0x800;
 	void __iomem *vdec_lat_vld_addr = dev->dec_reg_base[VDEC_LAT_VLD];
 	void __iomem *vdec_lat_vld_top_addr = dev->dec_reg_base[VDEC_LAT_VLD] + 0x800;
+	void __iomem *vdec_lat_avc_vld_addr = dev->dec_reg_base[VDEC_LAT_AVC_VLD];
+	void __iomem *vdec_avc_vld_addr = dev->dec_reg_base[VDEC_AVC_VLD];
 	struct mtk_vcodec_ctx *ctx = NULL;
-	int misc_offset[4] = {64, 66, 67, 65};
 
 	struct timespec64 tv_start;
 	struct timespec64 tv_end;
 	s32 usec, timeout = 20000;
-	int offset, idx;
-	unsigned long value;
 	u32 fourcc;
 	u32 is_ufo = 0;
 
@@ -283,34 +326,29 @@ static void mtk_vdec_hw_break(struct mtk_vcodec_dev *dev, int hw_id)
 				mtk_v4l2_err("VDEC HW break timeout. codec:0x%08x(%c%c%c%c) ufo %d",
 					fourcc, fourcc & 0xFF, (fourcc >> 8) & 0xFF,
 					(fourcc >> 16) & 0xFF, (fourcc >> 24) & 0xFF, is_ufo);
-				if (vdec_gcon_addr > 0) {
-					value = readl(vdec_gcon_addr + (0 << 2));
-					mtk_v4l2_err("[DEBUG][GCON] 0x%x(%d) = 0x%lx",
-						0 << 2, 0, value);
-					value = readl(vdec_gcon_addr + (6 << 2));
-					mtk_v4l2_err("[DEBUG][GCON] 0x%x(%d) = 0x%lx",
-						6 << 2, 6, value);
-				}
-				for (offset = 64; offset <= 79; offset++) {
-					value = readl(vdec_misc_addr + (offset << 2));
-					mtk_v4l2_err("[DEBUG][MISC] 0x%x(%d) = 0x%lx",
-						offset << 2, offset, value);
-				}
-				for (idx = 0; idx < 4; idx++) {
-					offset = misc_offset[idx];
-					value = readl(vdec_misc_addr + (offset << 2));
-					mtk_v4l2_err("[DEBUG][MISC] 0x%x(%d) = 0x%lx",
-						offset << 2, offset, value);
-				}
-				if (is_ufo)
-					mtk_v4l2_err("[DEBUG][UFO] 0x%x(%d) = 0x%lx",
-						0x08C, 0x08C >> 2, ufo_cg_status);
 
 				if (timeout == 20000)
 					timeout = 1000000;
 				else if (timeout == 1000000) {
+					mtk_vdec_hw_break_dump(
+						vdec_gcon_addr, "GCON", 0, 0);
+					mtk_vdec_hw_break_dump(
+						vdec_gcon_addr, "GCON", 6, 6);
+					mtk_vdec_hw_break_dump(
+						vdec_misc_addr, "MISC", 64, 79);
+					if (is_ufo)
+						mtk_v4l2_err("[DEBUG][UFO] 0x%x(%d) = 0x%lx",
+							0x08C, 0x08C >> 2, ufo_cg_status);
 					mtk_vdec_hw_break_vld_top_dump(
 						vdec_vld_top_addr, "VLD_TOP");
+					mtk_vdec_hw_break_dump(
+						vdec_vld_addr, "VLD", 33, 255);
+					mtk_vdec_hw_break_dump(
+						vdec_avc_vld_addr, "AVC_VLD", 0, 0);
+					mtk_vdec_hw_break_dump(
+						vdec_avc_vld_addr, "AVC_VLD", 33, 141);
+					mtk_vdec_hw_break_dump(
+						vdec_avc_vld_addr, "AVC_VLD", 145, 511);
 					mtk_smi_dbg_hang_detect("VDEC_CORE");
 					/* v4l2_aee_print(
 					 *    "%s %p codec:0x%08x(%c%c%c%c) hw break timeout\n",
@@ -361,23 +399,24 @@ static void mtk_vdec_hw_break(struct mtk_vcodec_dev *dev, int hw_id)
 				mtk_v4l2_err("VDEC HW %d break timeout. codec:0x%08x(%c%c%c%c)",
 					hw_id, fourcc, fourcc & 0xFF, (fourcc >> 8) & 0xFF,
 					(fourcc >> 16) & 0xFF, (fourcc >> 24) & 0xFF);
-				for (offset = 64; offset <= 79; offset++) {
-					value = readl(vdec_lat_misc_addr + (offset << 2));
-					mtk_v4l2_err("[DEBUG][LAT_MISC] 0x%x(%d) = 0x%lx",
-						offset << 2, offset, value);
-				}
-				for (idx = 0; idx < 4; idx++) {
-					offset = misc_offset[idx];
-					value = readl(vdec_lat_misc_addr + (offset << 2));
-					mtk_v4l2_err("[DEBUG][LAT_MISC] 0x%x(%d) = 0x%lx",
-						offset << 2, offset, value);
-				}
 
 				if (timeout == 20000)
 					timeout = 1000000;
 				else if (timeout == 1000000) {
+					mtk_vdec_hw_break_dump(
+						vdec_lat_misc_addr, "LAT_MISC", 64, 79);
 					mtk_vdec_hw_break_vld_top_dump(
 						vdec_lat_vld_top_addr, "LAT_VLD_TOP");
+					mtk_vdec_hw_break_dump(
+						vdec_lat_vld_addr, "LAT_VLD", 33, 255);
+					mtk_vdec_hw_break_dump(
+						vdec_lat_avc_vld_addr, "LAT_AVC_VLD", 0, 0);
+					mtk_vdec_hw_break_dump(
+						vdec_lat_avc_vld_addr, "LAT_AVC_VLD", 33, 141);
+					mtk_vdec_hw_break_dump(
+						vdec_lat_avc_vld_addr, "LAT_AVC_VLD", 145, 511);
+					mtk_vdec_hw_break_dump(
+						lat_wdma_addr, "LAT_WDMA", 0, 127);
 					mtk_smi_dbg_hang_detect("VDEC_LAT");
 					/* v4l2_aee_print(
 					 *    "%s %p codec:0x%08x(%c%c%c%c) hw %d break timeout\n",
@@ -413,23 +452,22 @@ void mtk_vcodec_dec_clock_on(struct mtk_vcodec_pm *pm, int hw_id)
 	int j, ret;
 	struct mtk_vcodec_dev *dev;
 	void __iomem *vdec_racing_addr;
-	int larb_index;
 	int clk_id;
 	struct mtk_vdec_clks_data *clks_data;
 	unsigned long flags;
 
+	if (hw_id < 0 || hw_id >= MTK_VDEC_HW_NUM) {
+		mtk_v4l2_err("invalid hw_id %d", hw_id);
+		return;
+	}
+
 	time_check_start(MTK_FMT_DEC, hw_id);
 
 	clks_data = &pm->vdec_clks_data;
+	dev = container_of(pm, struct mtk_vcodec_dev, pm);
+	atomic_inc(&dev->dec_clk_ref_cnt[hw_id]);
 
-	for (larb_index = 0; larb_index < MTK_VDEC_MAX_LARB_COUNT; larb_index++) {
-		if (pm->larbvdecs[larb_index]) {
-			ret = mtk_smi_larb_get(pm->larbvdecs[larb_index]);
-			if (ret)
-				mtk_v4l2_err("Failed to get vdec larb. index: %d, hw_id: %d",
-					larb_index, hw_id);
-		}
-	}
+	mtk_vcodec_dec_pw_on(pm);
 
 	// enable main clocks
 	for (j = 0; j < clks_data->main_clks_len; j++) {
@@ -440,15 +478,13 @@ void mtk_vcodec_dec_clock_on(struct mtk_vcodec_pm *pm, int hw_id)
 				clk_id, clks_data->main_clks[j].clk_name, ret);
 	}
 
-	if (hw_id < MTK_VDEC_HW_NUM) {
-		// enable soc clocks
-		for (j = 0; j < clks_data->soc_clks_len; j++) {
-			clk_id = clks_data->soc_clks[j].clk_id;
-			ret = clk_prepare_enable(pm->vdec_clks[clk_id]);
-			if (ret)
-				mtk_v4l2_err("clk_prepare_enable id: %d, name: %s fail %d",
-					clk_id, clks_data->soc_clks[j].clk_name, ret);
-		}
+	// enable soc clocks
+	for (j = 0; j < clks_data->soc_clks_len; j++) {
+		clk_id = clks_data->soc_clks[j].clk_id;
+		ret = clk_prepare_enable(pm->vdec_clks[clk_id]);
+		if (ret)
+			mtk_v4l2_err("clk_prepare_enable id: %d, name: %s fail %d",
+				clk_id, clks_data->soc_clks[j].clk_name, ret);
 	}
 	if (hw_id == MTK_VDEC_CORE || hw_id == MTK_VDEC_CORE1) {
 		// enable core clocks
@@ -468,13 +504,9 @@ void mtk_vcodec_dec_clock_on(struct mtk_vcodec_pm *pm, int hw_id)
 				mtk_v4l2_err("clk_prepare_enable id: %d, name: %s fail %d",
 					clk_id, clks_data->lat_clks[j].clk_name, ret);
 		}
-	} else {
+	} else
 		mtk_v4l2_err("invalid hw_id %d", hw_id);
-		time_check_end(MTK_FMT_DEC, hw_id, 50);
-		return;
-	}
 
-	dev = container_of(pm, struct mtk_vcodec_dev, pm);
 	if (!ret) {
 		spin_lock_irqsave(&dev->dec_power_lock[hw_id], flags);
 		dev->dec_is_power_on[hw_id] = true;
@@ -538,14 +570,25 @@ void mtk_vcodec_dec_clock_off(struct mtk_vcodec_pm *pm, int hw_id)
 	struct mtk_vcodec_dev *dev;
 	void __iomem *vdec_racing_addr;
 	int i;
-	int larb_index;
 	int clk_id;
 	struct mtk_vdec_clks_data *clks_data;
 	unsigned long flags;
 
-	clks_data = &pm->vdec_clks_data;
+	if (hw_id < 0 || hw_id >= MTK_VDEC_HW_NUM) {
+		mtk_v4l2_err("invalid hw_id %d", hw_id);
+		return;
+	}
 
+	clks_data = &pm->vdec_clks_data;
 	dev = container_of(pm, struct mtk_vcodec_dev, pm);
+	if (atomic_read(&dev->dec_clk_ref_cnt[hw_id]) <= 0) {
+		mtk_v4l2_err("dec_clk_ref_cnt[%d] %d invalid !!",
+			hw_id, atomic_read(&dev->dec_larb_ref_cnt));
+		// BUG();
+		// return;
+	}
+	atomic_dec(&dev->dec_clk_ref_cnt[hw_id]);
+
 	if (pm->mtkdev->vdec_hw_ipm == VCODEC_IPM_V2) {
 		mutex_lock(&pm->dec_racing_info_mutex);
 		if (atomic_dec_and_test(&pm->dec_active_cnt)) {
@@ -567,13 +610,11 @@ void mtk_vcodec_dec_clock_off(struct mtk_vcodec_pm *pm, int hw_id)
 	dev->dec_is_power_on[hw_id] = false;
 	spin_unlock_irqrestore(&dev->dec_power_lock[hw_id], flags);
 
-	if (hw_id < MTK_VDEC_HW_NUM) {
-		// disable soc clocks
-		if (clks_data->soc_clks_len > 0) {
-			for (i = clks_data->soc_clks_len - 1; i >= 0; i--) {
-				clk_id = clks_data->soc_clks[i].clk_id;
-				clk_disable_unprepare(pm->vdec_clks[clk_id]);
-			}
+	// disable soc clocks
+	if (clks_data->soc_clks_len > 0) {
+		for (i = clks_data->soc_clks_len - 1; i >= 0; i--) {
+			clk_id = clks_data->soc_clks[i].clk_id;
+			clk_disable_unprepare(pm->vdec_clks[clk_id]);
 		}
 	}
 	if (hw_id == MTK_VDEC_CORE || hw_id == MTK_VDEC_CORE1) {
@@ -602,11 +643,7 @@ void mtk_vcodec_dec_clock_off(struct mtk_vcodec_pm *pm, int hw_id)
 		}
 	}
 
-	for (larb_index = 0; larb_index < MTK_VDEC_MAX_LARB_COUNT; larb_index++) {
-		if (pm->larbvdecs[larb_index])
-			mtk_smi_larb_put(pm->larbvdecs[larb_index]);
-	}
-
+	mtk_vcodec_dec_pw_off(pm);
 #endif
 }
 
@@ -1024,8 +1061,18 @@ int mtk_vdec_m4u_port_name_to_index(const char *name)
 		return VDEC_M4U_PORT_LAT0_UFO;
 	else if (!strcmp(MTK_VDEC_M4U_PORT_NAME_LAT0_UFO_ENC_C, name))
 		return VDEC_M4U_PORT_LAT0_UFO_C;
-	else if (!strcmp(MTK_VDEC_M4U_PORT_NAME_L32_VIDEO_UP, name))
-		return VDEC_M4U_PORT_L32_VIDEO_UP;
+	else if (!strcmp(MTK_VDEC_M4U_PORT_NAME_VIDEO_UP_SEC, name))
+		return VDEC_M4U_PORT_VIDEO_UP_SEC;
+	else if (!strcmp(MTK_VDEC_M4U_PORT_NAME_VIDEO_UP_NOR, name))
+		return VDEC_M4U_PORT_VIDEO_UP_NOR;
+	else if (!strcmp(MTK_VDEC_M4U_PORT_NAME_UP_1, name))
+		return VDEC_M4U_PORT_UP_1;
+	else if (!strcmp(MTK_VDEC_M4U_PORT_NAME_UP_2, name))
+		return VDEC_M4U_PORT_UP_2;
+	else if (!strcmp(MTK_VDEC_M4U_PORT_NAME_UP_3, name))
+		return VDEC_M4U_PORT_UP_3;
+	else if (!strcmp(MTK_VDEC_M4U_PORT_NAME_UP_4, name))
+		return VDEC_M4U_PORT_UP_4;
 	else
 		return -1;
 }
@@ -1037,10 +1084,10 @@ void mtk_vdec_translation_fault_callback_setting(
 	int i;
 
 	for (i = 0; i < NUM_MAX_VDEC_M4U_PORT; i++) {
-		if (dev->dec_m4u_ports[i] != 0 && i < VDEC_M4U_PORT_L32_VIDEO_UP)
+		if (dev->dec_m4u_ports[i] != 0 && i < VDEC_M4U_PORT_VIDEO_UP_SEC)
 			mtk_iommu_register_fault_callback(dev->dec_m4u_ports[i],
 				mtk_vdec_translation_fault_callback, (void *)dev, false);
-		if (i == VDEC_M4U_PORT_L32_VIDEO_UP)
+		if (dev->dec_m4u_ports[i] != 0 && i >= VDEC_M4U_PORT_VIDEO_UP_SEC)
 			mtk_iommu_register_fault_callback(dev->dec_m4u_ports[i],
 				mtk_vdec_uP_translation_fault_callback, (void *)dev, false);
 	}

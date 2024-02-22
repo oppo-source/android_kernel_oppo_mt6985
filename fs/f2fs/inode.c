@@ -276,8 +276,7 @@ static bool sanity_check_inode(struct inode *inode, struct page *node_page)
 		}
 	}
 
-	if (f2fs_has_inline_data(inode) &&
-			(!S_ISREG(inode->i_mode) && !S_ISLNK(inode->i_mode))) {
+	if (f2fs_sanity_check_inline_data(inode)) {
 		set_sbi_flag(sbi, SBI_NEED_FSCK);
 		f2fs_warn(sbi, "%s: inode (ino=%lx, mode=%u) should not have inline_data, run fsck to fix",
 			  __func__, inode->i_ino, inode->i_mode);
@@ -700,7 +699,8 @@ retry:
 			cond_resched();
 			goto retry;
 		} else if (err != -ENOENT) {
-			f2fs_stop_checkpoint(sbi, false);
+			f2fs_stop_checkpoint(sbi, false,
+					STOP_CP_REASON_UPDATE_INODE);
 		}
 		return;
 	}
@@ -796,10 +796,6 @@ retry:
 		f2fs_lock_op(sbi);
 		err = f2fs_remove_inode_page(inode);
 		f2fs_unlock_op(sbi);
-#if !IS_ENABLED(CONFIG_MTK_F2FS_DEBUG)
-		if (err == -ENOENT)
-			err = 0;
-#else
 		if (err == -ENOENT) {
 			err = 0;
 
@@ -810,13 +806,12 @@ retry:
 			 */
 			if (is_inode_flag_set(inode, FI_DIRTY_INODE)) {
 				f2fs_warn(F2FS_I_SB(inode),
-					"%s: inconsistent node id, ino:%lu",
-					__func__, inode->i_ino);
+					"f2fs_evict_inode: inconsistent node id, ino:%lu",
+					inode->i_ino);
 				f2fs_inode_synced(inode);
 				set_sbi_flag(sbi, SBI_NEED_FSCK);
 			}
 		}
-#endif
 	}
 
 	/* give more chances, if ENOMEM case */

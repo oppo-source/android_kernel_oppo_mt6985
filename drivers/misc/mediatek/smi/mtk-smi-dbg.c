@@ -418,15 +418,20 @@ static void mtk_smi_dbg_print(struct mtk_smi_dbg *smi, const bool larb,
 			if (ret)
 				dev_info(node.dev, "===== %s%u rpm:%d =====\n"
 					, name, id, ret);
-		} else
-			dev_info(node.dev, "===== %s%u =====\n", name, id);
+		}
 		if (ret <= 0 || rsi) {
 			if (of_property_read_u32(node.dev->of_node,
 				"mediatek,dump-with-comm", &comm_id))
 				return;
 			if (pm_runtime_get_if_in_use(smi->comm[comm_id].dev) <= 0)
 				return;
+
 			dump_with = true;
+			if (rsi)
+				dev_info(node.dev, "===== %s%u =====\n", name, id);
+			else
+				dev_info(node.dev, "===== %s%u rpm:%d =====\n"
+					, name, id, ret);
 		}
 	} else {
 		dev_info(node.dev, "===== %s%u rpm:skip =====\n"
@@ -1258,6 +1263,7 @@ MODULE_PARM_DESC(smi_ut_dump, "dump smi current setting");
 
 int smi_get_larb_dump(const char *val, const struct kernel_param *kp)
 {
+#if IS_ENABLED(CONFIG_MTK_SMI_DEBUG)
 	struct mtk_smi_dbg	*smi = gsmi;
 	s32		result, larb_id, ret;
 
@@ -1271,6 +1277,7 @@ int smi_get_larb_dump(const char *val, const struct kernel_param *kp)
 		dev_notice(smi->larb[larb_id].dev, "smi_larb%d get fail:%d\n", larb_id, ret);
 
 	mtk_smi_dbg_hang_detect("SMI larb get and dump");
+#endif
 
 	return 0;
 }
@@ -1283,6 +1290,7 @@ MODULE_PARM_DESC(smi_larb_enable_dump, "enable smi larb and dump current setting
 
 int smi_put_larb(const char *val, const struct kernel_param *kp)
 {
+#if IS_ENABLED(CONFIG_MTK_SMI_DEBUG)
 	struct mtk_smi_dbg	*smi = gsmi;
 	s32		result, larb_id;
 
@@ -1292,6 +1300,7 @@ int smi_put_larb(const char *val, const struct kernel_param *kp)
 		return result;
 	}
 	mtk_smi_larb_put(smi->larb[larb_id].dev);
+#endif
 
 	return 0;
 }

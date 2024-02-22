@@ -5,17 +5,100 @@
 #include "mtk_camera-v4l2-controls.h"
 #include "adaptor.h"
 #include "adaptor-fsync-ctrls.h"
+#include "adaptor-common-ctrl.h"
 
 #include "adaptor-command.h"
-
-
+#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+#include "oplus_cam_olc_exception.h"
+#endif
 #define sd_to_ctx(__sd) container_of(__sd, struct adaptor_ctx, sd)
 
+static int get_sensor_mode_info(struct adaptor_ctx *ctx, u32 mode_id,
+				struct mtk_sensor_mode_info *info)
+{
+	int ret = 0;
+
+	/* Test arguments */
+	if (unlikely(info == NULL)) {
+		ret = -EINVAL;
+		adaptor_logi(ctx, "ERROR: invalid argumet info is nullptr\n");
+		return ret;
+	}
+	if (unlikely(mode_id >= SENSOR_SCENARIO_ID_MAX)) {
+		ret = -EINVAL;
+		adaptor_logi(ctx, "ERROR: invalid argumet scenario %u\n", mode_id);
+		return ret;
+	}
+
+	info->scenario_id = mode_id;
+	info->mode_exposure_num = g_scenario_exposure_cnt(ctx, mode_id);
+
+	return 0;
+}
 
 /*---------------------------------------------------------------------------*/
 // functions that called by in-kernel drivers.
 /*---------------------------------------------------------------------------*/
 /* GET */
+static int g_cmd_sensor_mode_config_info(struct adaptor_ctx *ctx, void *arg)
+{
+	int i;
+	int ret = 0;
+	int mode_cnt = 0;
+	struct mtk_sensor_mode_config_info *p_info = NULL;
+
+	/* error handling (unexpected case) */
+	if (unlikely(arg == NULL)) {
+		ret = -ENOIOCTLCMD;
+		adaptor_logi(ctx,
+			"ERROR: V4L2_CMD_GET_SENSOR_MODE_CONFIG_INFO, idx:%d, input arg is nullptr, return:%d\n",
+			ctx->idx);
+		return ret;
+	}
+
+	p_info = arg;
+
+	memset(p_info, 0, sizeof(struct mtk_sensor_mode_config_info));
+
+	p_info->current_scenario_id = ctx->cur_mode->id;
+	if (!get_sensor_mode_info(ctx, ctx->cur_mode->id, p_info->seamless_scenario_infos))
+		++mode_cnt;
+
+	for (i = 0; i < SENSOR_SCENARIO_ID_MAX; i++) {
+		if (ctx->seamless_scenarios[i] == SENSOR_SCENARIO_ID_NONE)
+			break;
+		else if (ctx->seamless_scenarios[i] == ctx->cur_mode->id)
+			continue;
+		else if (!get_sensor_mode_info(ctx, ctx->seamless_scenarios[i],
+					       p_info->seamless_scenario_infos + mode_cnt))
+			++mode_cnt;
+	}
+
+	p_info->count = mode_cnt;
+
+	return ret;
+}
+
+static int g_cmd_sensor_in_reset(struct adaptor_ctx *ctx, void *arg)
+{
+	int ret = 0;
+	bool *in_reset = NULL;
+
+	/* error handling (unexpected case) */
+	if (unlikely(arg == NULL)) {
+		ret = -ENOIOCTLCMD;
+		adaptor_logi(ctx,
+			"ERROR: V4L2_CMD_GET_SENSOR_MODE_CONFIG_INFO, idx:%d, input arg is nullptr, return:%d\n",
+			ctx->idx);
+		return ret;
+	}
+
+	in_reset = arg;
+
+	*in_reset = !!(ctx->is_sensor_reset_stream_off);
+
+	return ret;
+}
 
 /* SET */
 static int s_cmd_fsync_sync_frame_start_end(struct adaptor_ctx *ctx, void *arg)
@@ -44,7 +127,30 @@ static int s_cmd_fsync_sync_frame_start_end(struct adaptor_ctx *ctx, void *arg)
 	return ret;
 }
 
+#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+static int s_cmd_update_olc_status(struct adaptor_ctx *ctx, void *arg) {
+	struct olc_params *olc_data_ptr = NULL;
+	int ret = 0;
+	unsigned char payload[PAYLOAD_LENGTH] = {0x00};
+	/* error handling (unexpected case) */
+	if (unlikely(arg == NULL)) {
+		ret = -ENOIOCTLCMD;
+		adaptor_logi(ctx,
+			"ERROR: V4L2_CMD_OLC_EVENT, idx:%d, input arg is nullptr, return:%d\n",
+			ctx->idx);
+		return ret;
+	}
+	olc_data_ptr = (struct olc_params*) arg;
 
+	scnprintf(payload, sizeof(payload),
+		"NULL$$EventField@@%s$$FieldData@@0x%x$$detailData@@subdev=%s, time_after_sof=%llu, frame_time=%llu",
+		acquireEventField(EXCEP_SOF_TIMEOUT), (CAM_RESERVED_ID << 20 | CAM_MODULE_ID << 12 | EXCEP_SOF_TIMEOUT),
+		olc_data_ptr->name, olc_data_ptr->time_after_sof, olc_data_ptr->frame_time);
+	ret = cam_olc_raise_exception(EXCEP_SOF_TIMEOUT, payload);
+	adaptor_logd(ctx,"olc raise execption ret:%d\n", ret);
+	return ret;
+}
+#endif
 /*---------------------------------------------------------------------------*/
 // adaptor command framework/entry
 /*---------------------------------------------------------------------------*/
@@ -56,9 +162,14 @@ struct command_entry {
 
 static const struct command_entry command_list[] = {
 	/* GET */
+	{V4L2_CMD_GET_SENSOR_MODE_CONFIG_INFO, g_cmd_sensor_mode_config_info},
+	{V4L2_CMD_SENSOR_IN_RESET, g_cmd_sensor_in_reset},
 
 	/* SET */
 	{V4L2_CMD_FSYNC_SYNC_FRAME_START_END, s_cmd_fsync_sync_frame_start_end},
+#if defined(OPLUS_FEATURE_CAMERA_COMMON) && defined(CONFIG_OPLUS_CAM_EVENT_REPORT_MODULE)
+	{V4L2_CMD_OLC_EVENT, s_cmd_update_olc_status},
+#endif
 };
 
 long adaptor_command(struct v4l2_subdev *sd, unsigned int cmd, void *arg)

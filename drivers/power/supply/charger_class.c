@@ -790,6 +790,18 @@ int charger_dev_enable_hidden_mode(struct charger_device *charger_dev, bool en)
 }
 EXPORT_SYMBOL(charger_dev_enable_hidden_mode);
 
+#ifdef OPLUS_FEATURE_CHG_BASIC
+int charger_dev_enable_ship_mode(struct charger_device *charger_dev)
+{
+	if (charger_dev != NULL && charger_dev->ops != NULL &&
+					   charger_dev->ops->enable_ship_mode)
+		return charger_dev->ops->enable_ship_mode(charger_dev);
+
+	return -EOPNOTSUPP;
+}
+EXPORT_SYMBOL(charger_dev_enable_ship_mode);
+#endif
+
 int charger_dev_set_property(struct charger_device *charger_dev,
 			     enum charger_property prop,
 			     union charger_propval *val)

@@ -991,8 +991,11 @@ static s32 cmdq_sec_session_send(struct cmdq_sec_context *context,
 	u64 cost;
 	struct iwcCmdqMessage_t *iwc_msg = NULL;
 
-	if (!mtee)
-		iwc_msg = (struct iwcCmdqMessage_t *)context->iwc_msg;
+	if (!mtee) {
+		cmdq_err("thread:%u task:%lx mtee:%d",
+			thrd_idx, (unsigned long)task, mtee);
+		return -EFAULT;
+	}
 #ifdef CMDQ_SECURE_MTEE_SUPPORT
 	else
 		iwc_msg = (struct iwcCmdqMessage_t *)context->mtee_iwc_msg;
@@ -1401,25 +1404,38 @@ void cmdq_sec_mbox_stop(struct cmdq_client *cl)
 		(struct cmdq_sec_thread *)cl->chan->con_priv;
 	struct cmdq_sec_task *task;
 
+	mutex_lock(&cmdq->exec_lock);
 	task = list_first_entry_or_null(
 		&thread->task_list, struct cmdq_sec_task, list_entry);
 	if (task) {
 		cmdq_msg("[ IN] %s: cl:%p cmdq:%p thrd:%p idx:%u\n",
 			__func__, cl, cmdq, thread, thread->idx);
 
-		mutex_lock(&cmdq->exec_lock);
+		if (!task->pkt) {
+			cmdq_err("pkt is null");
+			mutex_unlock(&cmdq->exec_lock);
+			return;
+		}
+
+		if (!task->pkt->sec_data) {
+			cmdq_err("pkt sec_data is null");
+			mutex_unlock(&cmdq->exec_lock);
+			return;
+		}
+
 		memset(&cmdq->cancel, 0, sizeof(cmdq->cancel));
 		cmdq->cancel.throwAEE = false;
 		cmdq_sec_task_submit(cmdq, task, CMD_CMDQ_TL_CANCEL_TASK,
 			thread->idx, &cmdq->cancel,
 			((struct cmdq_sec_data *)task->pkt->sec_data)->mtee);
-		mutex_unlock(&cmdq->exec_lock);
+
 
 		thread->stop = true;
 		cmdq_msg("[OUT] %s: cl:%p cmdq:%p thrd:%p idx:%u\n",
 			__func__, cl, cmdq, thread, thread->idx);
 	}
 
+	mutex_unlock(&cmdq->exec_lock);
 	if (!work_pending(&cmdq->irq_notify_work))
 		queue_work(cmdq->notify_wq, &cmdq->irq_notify_work);
 #endif
@@ -1808,7 +1824,7 @@ static int cmdq_sec_probe(struct platform_device *pdev)
 
 	cmdq_msg("%s", __func__);
 
-	gz_node = of_find_compatible_node(NULL, NULL, "android,trusty-virtio-v1");
+	gz_node = of_find_compatible_node(NULL, NULL, "mediatek,trusty-mtee-v1");
 	if (!gz_node) {
 		cmdq_err("failed to get android,trusty-virtio-v1");
 		return -EINVAL;

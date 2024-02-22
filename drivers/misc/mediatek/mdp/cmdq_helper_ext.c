@@ -2811,9 +2811,11 @@ static void cmdq_core_attach_cmdq_error(
 	CMDQ_ERR("============== [CMDQ] Begin of Error %d =============\n",
 		cmdq_ctx.errNum);
 
-	cmdq_core_dump_handle_summary(handle, thread, &nghandle, nginfo_out);
-	cmdq_core_dump_error_handle(handle, thread, pc_out);
-
+	if (!handle->secData.is_secure) {
+		cmdq_core_dump_handle_summary(handle, thread, &nghandle, nginfo_out);
+		cmdq_core_dump_error_handle(handle, thread, pc_out);
+	} else
+		CMDQ_ERR("No dump info for secure path\n");
 
 	CMDQ_ERR("============== [CMDQ] End of Error %d =============\n",
 		 cmdq_ctx.errNum);
@@ -3586,6 +3588,20 @@ void cmdq_core_replace_v3_instr(struct cmdqRecStruct *handle, s32 thread)
 	}
 }
 
+void cmdq_remove_handle_from_handle_active(struct cmdqRecStruct *handle)
+{
+	struct cmdqRecStruct *handle_active_node;
+
+	mutex_lock(&cmdq_handle_list_mutex);
+	list_for_each_entry(handle_active_node, &cmdq_ctx.handle_active, list_entry) {
+		if (handle_active_node == handle) {
+			list_del_init(&handle_active_node->list_entry);
+			break;
+		}
+	}
+	mutex_unlock(&cmdq_handle_list_mutex);
+}
+
 void cmdq_core_release_handle_by_file_node(void *file_node)
 {
 	struct cmdqRecStruct *handle;
@@ -3616,6 +3632,11 @@ void cmdq_core_release_handle_by_file_node(void *file_node)
 		else
 #endif
 			cmdq_mbox_thread_remove_task(client->chan, handle->pkt);
+
+		if (handle->pkt_rb) {
+			client = cmdq_clients[(u32)handle->thread_rb];
+			cmdq_mbox_thread_remove_task(client->chan, handle->pkt_rb);
+		}
 
 		cmdq_pkt_auto_release_task(handle, true);
 	}
@@ -3969,6 +3990,7 @@ static s32 cmdq_pkt_lock_handle(struct cmdqRecStruct *handle,
 
 	mutex_lock(&cmdq_handle_list_mutex);
 	list_add_tail(&handle->list_entry, &cmdq_ctx.handle_active);
+	cmdq_task_use(handle);
 	mutex_unlock(&cmdq_handle_list_mutex);
 
 	return 0;
@@ -4038,6 +4060,11 @@ void cmdq_pkt_release_handle(struct cmdqRecStruct *handle)
 	struct cmdqRecStruct **pmqos_handle_list = NULL;
 	u32 handle_count;
 
+	if (!handle || !handle->pkt) {
+		CMDQ_ERR("handle->pkt is not exist\n");
+		return;
+	}
+
 	CMDQ_MSG("release handle:0x%p pkt:0x%p thread:%d engine:0x%llx\n",
 		handle, handle->pkt, handle->thread,
 		handle->res_flag_release);
@@ -4048,6 +4075,7 @@ void cmdq_pkt_release_handle(struct cmdqRecStruct *handle)
 			handle, ref, handle->thread);
 		mutex_lock(&cmdq_handle_list_mutex);
 		list_del_init(&handle->list_entry);
+		cmdq_task_destroy(handle);
 		mutex_unlock(&cmdq_handle_list_mutex);
 		dump_stack();
 		return;
@@ -4056,8 +4084,7 @@ void cmdq_pkt_release_handle(struct cmdqRecStruct *handle)
 	cmdq_core_track_handle_record(handle, handle->thread);
 
 	/* TODO: remove is_secure check */
-	if (handle->thread != CMDQ_INVALID_THREAD &&
-		!handle->secData.is_secure) {
+	if (handle->thread != CMDQ_INVALID_THREAD) {
 		ctx = cmdq_core_get_context();
 
 		mutex_lock(&ctx->thread[(u32)handle->thread].thread_mutex);
@@ -4102,6 +4129,7 @@ void cmdq_pkt_release_handle(struct cmdqRecStruct *handle)
 
 	mutex_lock(&cmdq_handle_list_mutex);
 	list_del_init(&handle->list_entry);
+	cmdq_task_destroy(handle);
 	mutex_unlock(&cmdq_handle_list_mutex);
 }
 
@@ -4384,6 +4412,12 @@ static void cmdq_pkt_auto_release_destroy_work(struct work_struct *work)
 s32 cmdq_pkt_auto_release_task(struct cmdqRecStruct *handle,
 	bool destroy)
 {
+	if (handle->auto_released) {
+		CMDQ_ERR("Handle: %p pkt:%p already auto released\n",
+			handle, handle->pkt);
+		return 0;
+	}
+
 	if (handle->thread == CMDQ_INVALID_THREAD) {
 		CMDQ_ERR(
 			"handle:0x%p pkt:0x%p invalid thread:%d scenario:%d\n",
@@ -4394,22 +4428,25 @@ s32 cmdq_pkt_auto_release_task(struct cmdqRecStruct *handle,
 	CMDQ_PROF_MMP(mdp_mmp_get_event()->autoRelease_add,
 		MMPROFILE_FLAG_PULSE, ((unsigned long)handle), handle->thread);
 
-	if (destroy) {
-		/* the work item is embedded in pTask already
-		 * but we need to initialized it
-		 */
-		INIT_WORK(&handle->auto_release_work,
-			cmdq_pkt_auto_release_destroy_work);
-	} else {
-		/* use for mdp release by file node case,
-		 * helps destroy task since user space not wait.
-		 */
-		INIT_WORK(&handle->auto_release_work,
-			cmdq_pkt_auto_release_work);
-	}
+	if (!work_pending(&handle->auto_release_work)) {
+		if (destroy) {
+			/* the work item is embedded in pTask already
+			 * but we need to initialized it
+			 */
+			INIT_WORK(&handle->auto_release_work,
+				cmdq_pkt_auto_release_destroy_work);
+		} else {
+			/* use for mdp release by file node case,
+			 * helps destroy task since user space not wait.
+			 */
+			INIT_WORK(&handle->auto_release_work,
+				cmdq_pkt_auto_release_work);
+		}
 
-	queue_work(cmdq_ctx.taskThreadAutoReleaseWQ[handle->thread],
-		&handle->auto_release_work);
+		queue_work(cmdq_ctx.taskThreadAutoReleaseWQ[handle->thread],
+			&handle->auto_release_work);
+		handle->auto_released = true;
+	}
 	return 0;
 }
 
@@ -4450,32 +4487,29 @@ static s32 cmdq_pkt_flush_async_ex_impl(struct cmdqRecStruct *handle,
 	/* protect qos and communite with mbox */
 	mutex_lock(&ctx->thread[(u32)handle->thread].thread_mutex);
 
-	/* TODO: remove pmqos in seure path */
-	if (!handle->secData.is_secure) {
-		/* PMQoS */
-		CMDQ_SYSTRACE_BEGIN("%s_pmqos\n", __func__);
-		mutex_lock(&cmdq_thread_mutex);
-		handle_count = ctx->thread[(u32)handle->thread].handle_count;
+	/* PMQoS */
+	CMDQ_SYSTRACE_BEGIN("%s_pmqos\n", __func__);
+	mutex_lock(&cmdq_thread_mutex);
+	handle_count = ctx->thread[(u32)handle->thread].handle_count;
 
-		pmqos_handle_list = kcalloc(handle_count + 1,
-			sizeof(*pmqos_handle_list), GFP_KERNEL);
+	pmqos_handle_list = kcalloc(handle_count + 1,
+		sizeof(*pmqos_handle_list), GFP_KERNEL);
 
-		if (pmqos_handle_list) {
-			if (handle_count)
-				cmdq_core_get_pmqos_handle_list(handle,
-					pmqos_handle_list, handle_count);
+	if (pmqos_handle_list) {
+		if (handle_count)
+			cmdq_core_get_pmqos_handle_list(handle,
+				pmqos_handle_list, handle_count);
 
-			pmqos_handle_list[handle_count] = handle;
-		}
-
-		cmdq_core_group_begin_task(handle, pmqos_handle_list,
-			handle_count + 1);
-
-		kfree(pmqos_handle_list);
-		ctx->thread[(u32)handle->thread].handle_count++;
-		mutex_unlock(&cmdq_thread_mutex);
-		CMDQ_SYSTRACE_END();
+		pmqos_handle_list[handle_count] = handle;
 	}
+
+	cmdq_core_group_begin_task(handle, pmqos_handle_list,
+		handle_count + 1);
+
+	kfree(pmqos_handle_list);
+	ctx->thread[(u32)handle->thread].handle_count++;
+	mutex_unlock(&cmdq_thread_mutex);
+	CMDQ_SYSTRACE_END();
 
 	CMDQ_SYSTRACE_BEGIN("%s\n", __func__);
 	cmdq_core_replace_v3_instr(handle, handle->thread);
@@ -4828,7 +4862,7 @@ unsigned long cmdq_get_tracing_mark(void)
 
 noinline int tracing_mark_write(char *fmt, ...)
 {
-#if IS_ENABLED(CONFIG_MTK_FTRACER)
+#if IS_ENABLED(CONFIG_TRACING) && IS_ENABLED(CONFIG_MTK_MDP_DEBUG)
 	char buf[TRACE_MSG_LEN];
 	va_list args;
 	int len;

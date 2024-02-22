@@ -4,6 +4,7 @@
  * Author: Tiffany Lin <tiffany.lin@mediatek.com>
  */
 
+#include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
@@ -27,9 +28,12 @@
 //#include <linux/interconnect-provider.h>
 #include "mtk-interconnect.h"
 #include "vcodec_bw.h"
+#include "mtk-smi-dbg.h"
 #endif
 
 //#define VENC_PRINT_DTS_INFO
+int venc_pmqos_monitor = 1;
+module_param(venc_pmqos_monitor, int , 0644);
 
 static bool mtk_enc_tput_init(struct mtk_vcodec_dev *dev)
 {
@@ -229,7 +233,7 @@ static bool mtk_enc_tput_init(struct mtk_vcodec_dev *dev)
 			return false;
 		}
 	}
-
+   mtk_venc_pmqos_monitor_init(dev);
 #ifdef VENC_PRINT_DTS_INFO
 	mtk_v4l2_debug(0, "[VENC] tput_cnt %d, cfg_cnt %d, larb_cnt %d\n",
 		dev->venc_tput_cnt, dev->venc_cfg_cnt, dev->venc_larb_cnt);
@@ -276,6 +280,7 @@ static void mtk_enc_tput_deinit(struct mtk_vcodec_dev *dev)
 		vfree(dev->venc_larb_bw);
 		dev->venc_larb_bw = 0;
 	}
+	mtk_venc_pmqos_monitor_deinit(dev);
 }
 
 void mtk_prepare_venc_dvfs(struct mtk_vcodec_dev *dev)
@@ -397,14 +402,14 @@ void set_venc_opp(struct mtk_vcodec_dev *dev, u32 freq)
 				mtk_v4l2_err("[VENC] Failed to set mmdvfs rate %lu\n",
 						freq_64);
 			}
-			mtk_v4l2_debug(4, "[VENC] freq %lu, find_freq %lu", freq, freq_64);
+			mtk_v4l2_debug(8, "[VENC] freq %lu, find_freq %lu", freq, freq_64);
 		} else if (dev->venc_reg) {
 			ret = regulator_set_voltage(dev->venc_reg, volt, INT_MAX);
 			if (ret) {
 				mtk_v4l2_err("[VENC] Failed to set regulator voltage %d\n",
 						volt);
 			}
-			mtk_v4l2_debug(4, "[VENC] freq %lu, voltage %lu", freq, volt);
+			mtk_v4l2_debug(8, "[VENC] freq %lu, voltage %lu", freq, volt);
 		}
 	}
 }
@@ -480,5 +485,152 @@ void mtk_venc_pmqos_end_inst(struct mtk_vcodec_ctx *ctx)
 					dev->venc_larb_bw[i].larb_type);
 		}
 	}
+}
+
+void mtk_venc_pmqos_monitor_init(struct mtk_vcodec_dev *dev)
+{
+	struct vcodec_dev_qos *dev_qos = &dev->venc_dev_qos;
+
+	mtk_v4l2_debug(4, "[VQOS] init pmqos monitor\n");
+	memset((void *) dev_qos, 0, sizeof(struct vcodec_dev_qos));
+	dev_qos->dev = dev->v4l2_dev.dev;
+	dev_qos->comm_monitor = 2;
+	dev_qos->monitor_ring_frame_cnt = 0;
+
+	dev_qos->commlarb_id[SMI_COMMON_ID_0][0] = 6;
+	dev_qos->commlarb_id[SMI_COMMON_ID_0][1] = 6;
+	dev_qos->commlarb_id[SMI_COMMON_ID_0][2] = 6;
+	dev_qos->commlarb_id[SMI_COMMON_ID_0][3] = 6;
+
+	dev_qos->commlarb_id[SMI_COMMON_ID_17][0] = 1;
+	dev_qos->commlarb_id[SMI_COMMON_ID_17][1] = 1;
+	dev_qos->commlarb_id[SMI_COMMON_ID_17][2] = 2;
+	dev_qos->commlarb_id[SMI_COMMON_ID_17][3] = 2;
+
+	dev_qos->flag[0] = 1;
+	dev_qos->flag[1] = 2;
+	dev_qos->flag[2] = 1;
+	dev_qos->flag[3] = 2;
+}
+
+
+void mtk_venc_pmqos_monitor_deinit(struct mtk_vcodec_dev *dev)
+{
+	struct vcodec_dev_qos *dev_qos = &dev->venc_dev_qos;
+
+	dev_qos->monitor_ring_frame_cnt = 0;
+	mtk_v4l2_debug(4, "[VQOS] deinit pmqos monitor");
+
+}
+
+void mtk_venc_pmqos_monitor_reset(struct mtk_vcodec_dev *dev)
+{
+	struct vcodec_dev_qos *dev_qos = &dev->venc_dev_qos;
+
+	if (venc_pmqos_monitor <= 0) {
+		mtk_v4l2_debug(0, "[VQOS] no pmqos_monitor");
+		return;
+	} else {
+		mtk_v4l2_debug(0, "[VQOS] pmqos_monitor is enable");
+	}
+
+	mtk_v4l2_debug(4, "[VQOS] reset pmqos monitor");
+	dev_qos->monitor_ring_frame_cnt = 0;
+	dev_qos->apply_monitor_config = false;
+}
+
+void mtk_venc_pmqos_monitor(struct mtk_vcodec_dev *dev, u32 state)
+{
+	struct vcodec_dev_qos *dev_qos = &dev->venc_dev_qos;
+
+	u32 data_comm0[MTK_SMI_MAX_MON_REQ];
+	u32 data_comm1[MTK_SMI_MAX_MON_REQ];
+
+	if (venc_pmqos_monitor <= 0)
+		return;
+
+	if (unlikely(!dev_qos->comm_monitor)) {
+		mtk_v4l2_debug(0, "[VQOS] no common port to monitor");
+		return;
+	}
+
+	switch (state) {
+	case VCODEC_SMI_MONITOR_START:
+		mtk_v4l2_debug(8, "[VQOS] start to monitor BW...");
+		smi_monitor_start(dev_qos->dev, 0, dev_qos->commlarb_id[SMI_COMMON_ID_0], dev_qos->flag, 3);
+		smi_monitor_start(dev_qos->dev, 17, dev_qos->commlarb_id[SMI_COMMON_ID_17], dev_qos->flag, 0);
+
+		break;
+	case VCODEC_SMI_MONITOR_STOP:
+		smi_monitor_stop(NULL, 0, data_comm0, 3); // common 0, will update SMI_MONITOR ID
+		smi_monitor_stop(NULL, 17, data_comm1, 0); // common 1, will update SMI_MONITOR ID
+
+		dev_qos->data_total[SMI_COMMON_ID_0][SMI_READ] += data_comm0[0]; // MB
+		dev_qos->data_total[SMI_COMMON_ID_0][SMI_WRITE] += data_comm0[1];
+
+		dev_qos->data_total[SMI_COMMON_ID_17][SMI_READ] += data_comm1[0];
+		dev_qos->data_total[SMI_COMMON_ID_17][SMI_WRITE] += data_comm1[1];
+		dev_qos->data_total[SMI_COMMON_ID_17][SMI_READ] += data_comm1[2];
+		dev_qos->data_total[SMI_COMMON_ID_17][SMI_WRITE] += data_comm1[3];
+
+		mtk_v4l2_debug(8, "[VQOS] frame_cnt %d: Acquire bytes: (%d, %d, %d, %d, %d, %d), Total bytes: (%d, %d, %d, %d)\n",
+		dev_qos->monitor_ring_frame_cnt,
+		data_comm0[0], data_comm0[1],
+		data_comm1[0], data_comm1[1], data_comm1[2], data_comm1[3],
+		dev_qos->data_total[SMI_COMMON_ID_0][SMI_READ],
+		dev_qos->data_total[SMI_COMMON_ID_17][SMI_WRITE],
+		dev_qos->data_total[SMI_COMMON_ID_17][SMI_READ],
+		dev_qos->data_total[SMI_COMMON_ID_0][SMI_WRITE]);
+
+		if(++dev_qos->monitor_ring_frame_cnt >= MTK_SMI_MAX_MON_FRM)
+			dev_qos->apply_monitor_config = true;
+
+		mtk_v4l2_debug(8, "[VQOS] frame_cnt (%d): stop to monitor BW...",
+			dev_qos->monitor_ring_frame_cnt);
+
+		break;
+	default:
+		break;
+	}
+}
+
+
+void mtk_venc_pmqos_frame_req(struct mtk_vcodec_dev *dev)
+{
+	struct vcodec_dev_qos *dev_qos = &dev->venc_dev_qos;
+	int i;
+	u32 common_bw[4] = {0};
+	u32 cur_fps = dev->venc_dvfs_params.oprate_sum;
+
+	if (venc_pmqos_monitor <= 0)
+		return;
+
+	// already req init value in streamOn/Off
+	if (!dev_qos->apply_monitor_config) {
+		mtk_v4l2_debug(8, "[VQOS] not use monitor value: %d",
+			dev_qos->monitor_ring_frame_cnt);
+		return;
+	}
+
+
+	common_bw[0] = (u32)((dev_qos->data_total[SMI_COMMON_ID_0][SMI_READ] * cur_fps / MTK_SMI_MAX_MON_FRM)>>20);
+	common_bw[1] = (u32)((dev_qos->data_total[SMI_COMMON_ID_17][SMI_WRITE] * cur_fps / MTK_SMI_MAX_MON_FRM)>>20);
+	common_bw[2] = (u32)((dev_qos->data_total[SMI_COMMON_ID_17][SMI_READ] * cur_fps / MTK_SMI_MAX_MON_FRM)>>20);
+	common_bw[3] = (u32)((dev_qos->data_total[SMI_COMMON_ID_0][SMI_WRITE] * cur_fps / MTK_SMI_MAX_MON_FRM)>>20);
+
+	mtk_v4l2_debug(8, "[VQOS] AVG BW (%d %d %d %d)",
+		common_bw[0],common_bw[1],common_bw[2],common_bw[3]);
+
+	for (i = 0; i < dev->venc_larb_cnt; i++) {
+		common_bw[i] = (common_bw[i] >> 2) * 5;
+		mtk_icc_set_bw(dev->venc_qos_req[i], MBps_to_icc((u32)common_bw[i]), 0);
+		mtk_v4l2_debug(4, "[VQOS] set larb%d: %dMB/s", dev->venc_larb_bw[i].larb_id, common_bw[i]);
+	}
+	dev_qos->monitor_ring_frame_cnt = 0;
+	dev_qos->apply_monitor_config = false;
+
+	memset(dev_qos->data_total, 0,
+		sizeof(unsigned long long) * MTK_VCODEC_QOS_GROUP * MTK_VCODEC_QOS_TYPE);
+
 }
 

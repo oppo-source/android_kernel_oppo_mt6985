@@ -43,7 +43,7 @@
 
 #define PURE_RAW_WITH_SV 1
 #define PURE_RAW_WITH_SV_DONE_CHECK 1
-#define PURE_RAW_WITH_SV_VHDR 0
+#define PURE_RAW_WITH_SV_VHDR 1
 
 #define MAX_STAGGER_EXP_AMOUNT 3
 
@@ -51,7 +51,11 @@
 #define MAX_SV_PIPES_PER_STREAM (MAX_PIPES_PER_STREAM-1)
 #define MAX_MRAW_PIPES_PER_STREAM (MAX_PIPES_PER_STREAM-1)
 
+#ifdef OPLUS_FEATURE_CAMERA_COMMON
+#define MTK_CAM_CTX_WATCHDOG_INTERVAL	150
+#else
 #define MTK_CAM_CTX_WATCHDOG_INTERVAL	100
+#endif /*OPLUS_FEATURE_CAMERA_COMMON*/
 
 /*stagger sensor stability option for camsys*/
 #define STAGGER_CQ_LAST_SOF 1
@@ -110,6 +114,9 @@ struct mtk_raw_pipeline;
 #define MTK_CAM_REQ_S_DATA_FLAG_QOS_FORCE_DEC	BIT(15)
 
 #define v4l2_subdev_format_request_fd(x) x->reserved[0]
+
+/* minimum stride of camsv UFO */
+#define UFBC_TABLE_STRIDE_ALIGNMENT		16
 
 struct mtk_cam_working_buf {
 	void *va;
@@ -414,6 +421,7 @@ struct mtk_cam_img_working_buf_pool {
 	struct mtk_cam_ctx *ctx;
 	struct dma_buf *working_img_buf_dmabuf;
 	void *working_img_buf_va;
+	int working_img_buf_fd;
 	dma_addr_t working_img_buf_iova;
 	int working_img_buf_size;
 	struct mtk_cam_img_working_buf_entry img_working_buf[CAM_IMG_BUF_NUM];
@@ -432,7 +440,14 @@ struct mtk_cam_watchdog_data {
 	atomic_t watchdog_dumped;
 	atomic_t watchdog_dump_cnt;
 	struct work_struct watchdog_work;
+	struct completion watchdog_complete;
 	u64 watchdog_time_diff_ns;
+};
+
+struct mtk_cam_m2m_watchdog {  /* independent from sensor */
+	struct timer_list timer;
+	struct mtk_cam_watchdog_data data;
+	bool is_running;
 };
 
 struct mtk_cam_dvfs_tbl {
@@ -513,6 +528,7 @@ struct mtk_cam_ctx {
 	atomic_t enqueued_frame_seq_no;
 	atomic_t composed_delay_seq_no;
 	u64 composed_delay_sof_tsns;
+	atomic_t latest_tx_cmd_seq_no;
 	unsigned int composed_frame_seq_no;
 	unsigned int dequeued_frame_seq_no;
 	unsigned int component_dequeued_frame_seq_no;
@@ -542,6 +558,8 @@ struct mtk_cam_ctx {
 	struct timer_list watchdog_timer;
 	struct mtk_cam_watchdog_data watchdog_data[MTKCAM_SUBDEV_MAX];
 
+	struct mtk_cam_m2m_watchdog m2m_watchdog;
+
 	/* To support debug dump */
 	struct mtkcam_ipi_config_param config_params;
 	/* Serialize raw-sensor switch operations */
@@ -562,6 +580,7 @@ struct mtk_cam_device {
 	struct media_device media_dev;
 	void __iomem *base;
 	void __iomem *adl_base;
+	void __iomem *mraw_base;
 	//TODO: for real SCP
 	//struct device *smem_dev;
 	//struct platform_device *scp_pdev; /* only for scp case? */
@@ -1009,7 +1028,7 @@ static inline bool mtk_cam_ctx_support_pure_raw_with_sv(struct mtk_cam_ctx *ctx)
 
 static inline bool mtk_cam_ctx_has_raw(struct mtk_cam_ctx *ctx)
 {
-	return (ctx && ctx->used_raw_num > 0);
+	return (ctx && ctx->used_raw_num > 0 && ctx->pipe);
 }
 
 static inline bool mtk_cam_is_raw_switch_req(struct mtk_cam_request *req,
@@ -1042,6 +1061,38 @@ mtk_cam_is_nonimmediate_switch_req(struct mtk_cam_request *req,
 		return false;
 }
 
+static inline
+void mtk_cam_disable_sv_vf(struct mtk_cam_ctx *ctx)
+{
+	if (ctx && ctx->sv_dev && ctx->sv_dev->is_clk_en)
+		mtk_cam_sv_vf_disable(ctx->sv_dev);
+}
+
+static inline __u32 mtk_cam_get_rawi_stride(const struct v4l2_format *cfg_fmt)
+{
+	if (is_raw_ufo(cfg_fmt->fmt.pix_mp.pixelformat)) {
+		__u32 aligned_width = 0;
+		__u32 stride = 0;
+		const struct mtk_format_info *info = mtk_format_info(
+			cfg_fmt->fmt.pix_mp.pixelformat);
+
+		if (!info) {
+			pr_info("%s: failed to find format_info for 0x%x",
+					__func__, cfg_fmt->fmt.pix_mp.pixelformat);
+
+			goto END;
+		}
+
+		aligned_width = ALIGN(cfg_fmt->fmt.pix_mp.width, 64);
+		stride = aligned_width * info->bit_r_num / info->bit_r_den;
+
+		return stride;
+	}
+
+END:
+	return cfg_fmt->fmt.pix_mp.plane_fmt[0].bytesperline;
+}
+
 //TODO: with spinlock or not? depends on how request works [TBD]
 
 struct mtk_cam_ctx *mtk_cam_start_ctx(struct mtk_cam_device *cam,
@@ -1056,7 +1107,10 @@ int mtk_cam_ctx_stream_off(struct mtk_cam_ctx *ctx);
 bool watchdog_scenario(struct mtk_cam_ctx *ctx);
 void mtk_ctx_watchdog_kick(struct mtk_cam_ctx *ctx, int pipe_id);
 void mtk_ctx_watchdog_start(struct mtk_cam_ctx *ctx, int timeout_cnt, int pipe_id);
-void mtk_ctx_watchdog_stop(struct mtk_cam_ctx *ctx, int pipe_id);
+void mtk_ctx_watchdog_stop(struct mtk_cam_ctx *ctx, int pipe_id, int ctx_streamoff);
+void mtk_ctx_m2m_watchdog_kick(struct mtk_cam_ctx *ctx);
+void mtk_ctx_m2m_watchdog_start(struct mtk_cam_ctx *ctx, int timeout_cnt);
+void mtk_ctx_m2m_watchdog_stop(struct mtk_cam_ctx *ctx);
 
 // FIXME: refine following
 void mtk_cam_dev_req_enqueue(struct mtk_cam_device *cam,

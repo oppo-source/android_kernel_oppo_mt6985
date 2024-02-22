@@ -220,6 +220,10 @@ static void __iomem *g_mfg_ips_base;
 static void __iomem *g_mali_base;
 static void __iomem *g_emi_base;
 static void __iomem *g_sub_emi_base;
+static void __iomem *g_nemi_mi32_smi_sub;
+static void __iomem *g_nemi_mi33_smi_sub;
+static void __iomem *g_semi_mi32_smi_sub;
+static void __iomem *g_semi_mi33_smi_sub;
 static struct gpufreq_pmic_info *g_pmic;
 static struct gpufreq_clk_info *g_clk;
 static struct gpufreq_mtcmos_info *g_mtcmos;
@@ -881,10 +885,10 @@ int __gpufreq_active_idle_control(enum gpufreq_power_state power)
 		if (ret)
 			goto done;
 		/* free DVFS when active */
-		g_dvfs_state &= ~DVFS_IDLE;
+		g_dvfs_state &= ~DVFS_SLEEP;
 	} else if (power == POWER_OFF && g_stack.active_count == 0) {
 		/* freeze DVFS when idle */
-		g_dvfs_state |= DVFS_IDLE;
+		g_dvfs_state |= DVFS_SLEEP;
 		/* switch STACK MUX to REF_SEL */
 		ret = __gpufreq_switch_clksrc(TARGET_STACK, CLOCK_SUB);
 		if (ret)
@@ -950,8 +954,14 @@ int __gpufreq_generic_commit_stack(int target_oppidx, enum gpufreq_dvfs_state ke
 	/* check dvfs state */
 	if (g_dvfs_state & ~key) {
 		GPUFREQ_LOGD("unavailable DVFS state (0x%x)", g_dvfs_state);
-		ret = GPUFREQ_SUCCESS;
-		goto done_unlock;
+		/* still update Volt when DVFS is fixed by fix OPP cmd */
+		if (g_dvfs_state == DVFS_FIX_OPP)
+			target_oppidx = g_stack.cur_oppidx;
+		/* otherwise skip */
+		else {
+			ret = GPUFREQ_SUCCESS;
+			goto done_unlock;
+		}
 	}
 
 	/* prepare OPP setting */
@@ -1031,18 +1041,18 @@ int __gpufreq_fix_target_oppidx_stack(int oppidx)
 		goto done;
 
 	if (oppidx == -1) {
-		__gpufreq_set_dvfs_state(false, DVFS_DEBUG_KEEP);
+		__gpufreq_set_dvfs_state(false, DVFS_FIX_OPP);
 		ret = GPUFREQ_SUCCESS;
 	} else if (oppidx >= 0 && oppidx < opp_num) {
-		__gpufreq_set_dvfs_state(true, DVFS_DEBUG_KEEP);
+		__gpufreq_set_dvfs_state(true, DVFS_FIX_OPP);
 
 #ifdef GPUFREQ_HISTORY_ENABLE
 		gpufreq_set_history_target_opp(TARGET_STACK, oppidx);
 #endif /* GPUFREQ_HISTORY_ENABLE */
 
-		ret = __gpufreq_generic_commit_stack(oppidx, DVFS_DEBUG_KEEP);
+		ret = __gpufreq_generic_commit_stack(oppidx, DVFS_FIX_OPP);
 		if (unlikely(ret))
-			__gpufreq_set_dvfs_state(false, DVFS_DEBUG_KEEP);
+			__gpufreq_set_dvfs_state(false, DVFS_FIX_OPP);
 	} else
 		ret = GPUFREQ_EINVAL;
 
@@ -1081,18 +1091,18 @@ int __gpufreq_fix_custom_freq_volt_stack(unsigned int freq, unsigned int volt)
 	min_volt = VSTACK_MIN_VOLT;
 
 	if (freq == 0 && volt == 0) {
-		__gpufreq_set_dvfs_state(false, DVFS_DEBUG_KEEP);
+		__gpufreq_set_dvfs_state(false, DVFS_FIX_FREQ_VOLT);
 		ret = GPUFREQ_SUCCESS;
 	} else if (freq > max_freq || freq < min_freq) {
 		ret = GPUFREQ_EINVAL;
 	} else if (volt > max_volt || volt < min_volt) {
 		ret = GPUFREQ_EINVAL;
 	} else {
-		__gpufreq_set_dvfs_state(true, DVFS_DEBUG_KEEP);
+		__gpufreq_set_dvfs_state(true, DVFS_FIX_FREQ_VOLT);
 
-		ret = __gpufreq_custom_commit_stack(freq, volt, DVFS_DEBUG_KEEP);
+		ret = __gpufreq_custom_commit_stack(freq, volt, DVFS_FIX_FREQ_VOLT);
 		if (unlikely(ret))
-			__gpufreq_set_dvfs_state(false, DVFS_DEBUG_KEEP);
+			__gpufreq_set_dvfs_state(false, DVFS_FIX_FREQ_VOLT);
 	}
 
 	__gpufreq_power_control(POWER_OFF);
@@ -1110,9 +1120,6 @@ void __gpufreq_dump_infra_status(void)
 		return;
 
 	GPUFREQ_LOGI("== [GPUFREQ INFRA STATUS] ==");
-	GPUFREQ_LOGI("[Regulator] Vgpu: %d, Vstack: %d, Vsram: %d",
-		__gpufreq_get_real_vgpu(), __gpufreq_get_real_vstack(),
-		__gpufreq_get_real_vsram());
 	GPUFREQ_LOGI("[Clk] MFG_PLL: %d, MFG_SEL: 0x%x, MFGSC_PLL: %d, MFGSC_SEL: 0x%x",
 		__gpufreq_get_real_fgpu(), readl(TOPCK_CLK_CFG_30) & MFG_INT0_SEL_MASK,
 		__gpufreq_get_real_fstack(), readl(TOPCK_CLK_CFG_30) & MFGSC_INT1_SEL_MASK);
@@ -1136,6 +1143,17 @@ void __gpufreq_dump_infra_status(void)
 		0x1021C830, readl(NTH_MFG_EMI0_GALS_SLV_DBG),
 		0x1021E82C, readl(STH_MFG_EMI1_GALS_SLV_DBG),
 		0x1021E830, readl(STH_MFG_EMI0_GALS_SLV_DBG));
+
+	/* NTH_APU_EMI1_GALS_SLV_DBG */
+	/* NTH_APU_EMI0_GALS_SLV_DBG */
+	/* STH_APU_EMI1_GALS_SLV_DBG */
+	/* STH_APU_EMI0_GALS_SLV_DBG */
+	GPUFREQ_LOGI("%-11s (0x%x): 0x%08x, (0x%x): 0x%08x, (0x%x): 0x%08x, (0x%x): 0x%08x",
+		"[EMI]",
+		0x1021C824, readl(NTH_APU_EMI1_GALS_SLV_DBG),
+		0x1021C828, readl(NTH_APU_EMI0_GALS_SLV_DBG),
+		0x1021E824, readl(STH_APU_EMI1_GALS_SLV_DBG),
+		0x1021E828, readl(STH_APU_EMI0_GALS_SLV_DBG));
 
 	/* NTH_M6M7_IDLE_BIT_EN_1 */
 	/* NTH_M6M7_IDLE_BIT_EN_0 */
@@ -1198,6 +1216,50 @@ void __gpufreq_dump_infra_status(void)
 		0x1021D9A4, readl(SEMI_MD_WR_LAT_HRT_UGT_CNT),
 		0x1021DCC4, readl(SEMI_MDMCU_HIGH_LAT_UGT_CNT),
 		0x1021DCCC, readl(SEMI_MDMCU_HIGH_WR_LAT_UGT_CNT));
+
+	/* NEMI_MI32_SMI_SUB_DEBUG_S0 */
+	/* NEMI_MI32_SMI_SUB_DEBUG_S1 */
+	/* NEMI_MI32_SMI_SUB_DEBUG_M0 */
+	/* NEMI_MI32_SMI_SUB_DEBUG_MISC */
+	GPUFREQ_LOGI("%-11s (0x%x): 0x%08x, (0x%x): 0x%08x, (0x%x): 0x%08x, (0x%x): 0x%08x",
+		"[EMI_SMI]",
+		0x1025E400, readl(NEMI_MI32_SMI_SUB_DEBUG_S0),
+		0x1025E404, readl(NEMI_MI32_SMI_SUB_DEBUG_S1),
+		0x1025E430, readl(NEMI_MI32_SMI_SUB_DEBUG_M0),
+		0x1025E440, readl(NEMI_MI32_SMI_SUB_DEBUG_MISC));
+
+	/* NEMI_MI33_SMI_SUB_DEBUG_S0 */
+	/* NEMI_MI33_SMI_SUB_DEBUG_S1 */
+	/* NEMI_MI33_SMI_SUB_DEBUG_M0 */
+	/* NEMI_MI33_SMI_SUB_DEBUG_MISC */
+	GPUFREQ_LOGI("%-11s (0x%x): 0x%08x, (0x%x): 0x%08x, (0x%x): 0x%08x, (0x%x): 0x%08x",
+		"[EMI_SMI]",
+		0x1025F400, readl(NEMI_MI33_SMI_SUB_DEBUG_S0),
+		0x1025F404, readl(NEMI_MI33_SMI_SUB_DEBUG_S1),
+		0x1025F430, readl(NEMI_MI33_SMI_SUB_DEBUG_M0),
+		0x1025F440, readl(NEMI_MI33_SMI_SUB_DEBUG_MISC));
+
+	/* SEMI_MI32_SMI_SUB_DEBUG_S0 */
+	/* SEMI_MI32_SMI_SUB_DEBUG_S1 */
+	/* SEMI_MI32_SMI_SUB_DEBUG_M0 */
+	/* SEMI_MI32_SMI_SUB_DEBUG_MISC */
+	GPUFREQ_LOGI("%-11s (0x%x): 0x%08x, (0x%x): 0x%08x, (0x%x): 0x%08x, (0x%x): 0x%08x",
+		"[EMI_SMI]",
+		0x10309400, readl(SEMI_MI32_SMI_SUB_DEBUG_S0),
+		0x10309404, readl(SEMI_MI32_SMI_SUB_DEBUG_S1),
+		0x10309430, readl(SEMI_MI32_SMI_SUB_DEBUG_M0),
+		0x10309440, readl(SEMI_MI32_SMI_SUB_DEBUG_MISC));
+
+	/* SEMI_MI33_SMI_SUB_DEBUG_S0 */
+	/* SEMI_MI33_SMI_SUB_DEBUG_S1 */
+	/* SEMI_MI33_SMI_SUB_DEBUG_M0 */
+	/* SEMI_MI33_SMI_SUB_DEBUG_MISC */
+	GPUFREQ_LOGI("%-11s (0x%x): 0x%08x, (0x%x): 0x%08x, (0x%x): 0x%08x, (0x%x): 0x%08x",
+		"[EMI_SMI]",
+		0x1030A400, readl(SEMI_MI33_SMI_SUB_DEBUG_S0),
+		0x1030A404, readl(SEMI_MI33_SMI_SUB_DEBUG_S1),
+		0x1030A430, readl(SEMI_MI33_SMI_SUB_DEBUG_M0),
+		0x1030A440, readl(SEMI_MI33_SMI_SUB_DEBUG_MISC));
 
 	/* IFR_MFGSYS_PROT_EN_STA_0 */
 	/* IFR_MFGSYS_PROT_RDY_STA_0 */
@@ -5890,6 +5952,54 @@ static int __gpufreq_init_platform_info(struct platform_device *pdev)
 	g_sub_emi_base = devm_ioremap(gpufreq_dev, res->start, resource_size(res));
 	if (unlikely(!g_sub_emi_base)) {
 		GPUFREQ_LOGE("fail to ioremap SUB_EMI_REG: 0x%llx", res->start);
+		goto done;
+	}
+
+	/* 0x1025E000 */
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "nemi_mi32_smi_sub");
+	if (unlikely(!res)) {
+		GPUFREQ_LOGE("fail to get resource NEMI_MI32_SMI_SUB");
+		goto done;
+	}
+	g_nemi_mi32_smi_sub = devm_ioremap(gpufreq_dev, res->start, resource_size(res));
+	if (unlikely(!g_nemi_mi32_smi_sub)) {
+		GPUFREQ_LOGE("fail to ioremap NEMI_MI32_SMI_SUB: 0x%llx", res->start);
+		goto done;
+	}
+
+	/* 0x1025F000 */
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "nemi_mi33_smi_sub");
+	if (unlikely(!res)) {
+		GPUFREQ_LOGE("fail to get resource NEMI_MI33_SMI_SUB");
+		goto done;
+	}
+	g_nemi_mi33_smi_sub = devm_ioremap(gpufreq_dev, res->start, resource_size(res));
+	if (unlikely(!g_nemi_mi33_smi_sub)) {
+		GPUFREQ_LOGE("fail to ioremap NEMI_MI33_SMI_SUB: 0x%llx", res->start);
+		goto done;
+	}
+
+	/* 0x10309000 */
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "semi_mi32_smi_sub");
+	if (unlikely(!res)) {
+		GPUFREQ_LOGE("fail to get resource SEMI_MI32_SMI_SUB");
+		goto done;
+	}
+	g_semi_mi32_smi_sub = devm_ioremap(gpufreq_dev, res->start, resource_size(res));
+	if (unlikely(!g_semi_mi32_smi_sub)) {
+		GPUFREQ_LOGE("fail to ioremap SEMI_MI32_SMI_SUB: 0x%llx", res->start);
+		goto done;
+	}
+
+	/* 0x1030A000 */
+	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "semi_mi33_smi_sub");
+	if (unlikely(!res)) {
+		GPUFREQ_LOGE("fail to get resource SEMI_MI33_SMI_SUB");
+		goto done;
+	}
+	g_semi_mi33_smi_sub = devm_ioremap(gpufreq_dev, res->start, resource_size(res));
+	if (unlikely(!g_semi_mi33_smi_sub)) {
+		GPUFREQ_LOGE("fail to ioremap SEMI_MI33_SMI_SUB: 0x%llx", res->start);
 		goto done;
 	}
 

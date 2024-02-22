@@ -59,18 +59,39 @@ else
 $(KERNEL_ZIMAGE_OUT): PRIVATE_KERNEL_BUILD_SCRIPT := ./build/build.sh
 $(KERNEL_ZIMAGE_OUT): PRIVATE_KERNEL_GKI_CONFIG :=
 endif
+
+PRIVATE_KERNEL_MAKE_OPTION := CHIPSET_COMPANY=$(CHIPSET_COMPANY)
+PRIVATE_KERNEL_MAKE_OPTION += OPLUS_VND_BUILD_PLATFORM=$(OPLUS_VND_BUILD_PLATFORM)
+
+ifeq ($(OPLUS_FEATURE_BSP_DRV_INJECT_TEST),1)
+PRIVATE_KERNEL_MAKE_OPTION += OPLUS_FEATURE_BSP_DRV_VND_INJECT_TEST=1
+endif
+
+#ifdef OPLUS_EDIT
+PRIVATE_KERNEL_MAKE_OPTION += CONFIG_LTO_CLANG_THIN=$(CONFIG_LTO_CLANG_THIN)
+#end
+
+ifeq (user,$(strip $(TARGET_BUILD_VARIANT)))
 $(KERNEL_ZIMAGE_OUT): $(TARGET_KERNEL_CONFIG) $(KERNEL_MAKE_DEPENDENCIES)
 	$(hide) mkdir -p $(dir $@)
-	$(hide) cd kernel && CC_WRAPPER=$(PRIVATE_CC_WRAPPER) SKIP_MRPROPER=1 BUILD_CONFIG=$(PRIVATE_KERNEL_BUILD_CONFIG) OUT_DIR=$(PRIVATE_KERNEL_OUT) DIST_DIR=$(PRIVATE_DIST_DIR) SKIP_DEFCONFIG=1 $(PRIVATE_KERNEL_GKI_CONFIG)  $(PRIVATE_KERNEL_BUILD_SCRIPT) && cd ..
+	$(hide) cd kernel && $(PRIVATE_KERNEL_MAKE_OPTION) CC_WRAPPER=$(PRIVATE_CC_WRAPPER) SKIP_MRPROPER=1 BUILD_CONFIG=$(PRIVATE_KERNEL_BUILD_CONFIG) OUT_DIR=$(PRIVATE_KERNEL_OUT) DIST_DIR=$(PRIVATE_DIST_DIR) SKIP_DEFCONFIG=1 $(PRIVATE_KERNEL_GKI_CONFIG)  $(PRIVATE_KERNEL_BUILD_SCRIPT) && cd ..
 ifneq ($(KERNEL_GKI_CONFIG),)
 ifeq ($(MTK_KERNEL_COMPRESS_FORMAT),gz)
 	$(hide) export PATH=kernel/build/kernel/build-tools/path/linux-x86:$$PATH && lz4 -df $(patsubst %.gz,%.lz4,$@) $(patsubst %.gz,%.uncompress,$@) && gzip -nc $(patsubst %.gz,%.uncompress,$@) > $@
 endif
 endif
 	$(hide) $(call fixup-kernel-cmd-file,$(KERNEL_OUT)/arch/$(KERNEL_TARGET_ARCH)/boot/compressed/.piggy.xzkern.cmd)
-
-$(BUILT_KERNEL_TARGET): $(KERNEL_ZIMAGE_OUT) $(TARGET_KERNEL_CONFIG) $(LOCAL_PATH)/Android.mk | $(ACP)
-	$(copy-file-to-target)
+else
+$(KERNEL_ZIMAGE_OUT): $(TARGET_KERNEL_CONFIG) $(KERNEL_MAKE_DEPENDENCIES)
+	$(hide) mkdir -p $(dir $@)
+	$(hide) cd kernel && $(PRIVATE_KERNEL_MAKE_OPTION) CC_WRAPPER=$(PRIVATE_CC_WRAPPER) SKIP_MRPROPER=1 BUILD_CONFIG=$(PRIVATE_KERNEL_BUILD_CONFIG) OUT_DIR=$(PRIVATE_KERNEL_OUT) DIST_DIR=$(PRIVATE_DIST_DIR) SKIP_DEFCONFIG=1 LTO=thin $(PRIVATE_KERNEL_GKI_CONFIG)  $(PRIVATE_KERNEL_BUILD_SCRIPT) && cd ..
+ifneq ($(KERNEL_GKI_CONFIG),)
+ifeq ($(MTK_KERNEL_COMPRESS_FORMAT),gz)
+	$(hide) export PATH=kernel/build/kernel/build-tools/path/linux-x86:$$PATH && lz4 -df $(patsubst %.gz,%.lz4,$@) $(patsubst %.gz,%.uncompress,$@) && gzip -nc $(patsubst %.gz,%.uncompress,$@) > $@
+endif
+endif
+	$(hide) $(call fixup-kernel-cmd-file,$(KERNEL_OUT)/arch/$(KERNEL_TARGET_ARCH)/boot/compressed/.piggy.xzkern.cmd)
+endif
 
 $(TARGET_PREBUILT_KERNEL): $(BUILT_KERNEL_TARGET) $(LOCAL_PATH)/Android.mk | $(ACP)
 	$(copy-file-to-new-target)

@@ -115,9 +115,6 @@ struct connect_api_info *fpsgo_com_search_and_add_connect_api_info(int pid,
 	tmp->buffer_id = buffer_id;
 	tmp->buffer_key = buffer_key;
 
-	mtk_composer_dprintk_always("Connect API! pid=%d, tgid=%d, buffer_id=%llu",
-		pid, tgid, buffer_id);
-
 	rb_link_node(&tmp->rb_node, parent, p);
 	rb_insert_color(&tmp->rb_node, &connect_api_tree);
 
@@ -360,9 +357,10 @@ void fpsgo_ctrl2comp_enqueue_end(int pid,
 		f_render->sbe_control_flag = 0;
 
 	f_info = fpsgo_search_and_add_fps_control_pid(f_render->tgid, 0);
-	if (f_info)
+	if (f_info) {
 		f_render->control_pid_flag = 1;
-	else
+		f_info->ts = enqueue_end_time;
+	} else
 		f_render->control_pid_flag = 0;
 
 	f_render->frame_type = fpsgo_com_check_frame_type(pid,
@@ -758,12 +756,10 @@ void fpsgo_ctrl2comp_disconnect_api(
 		fpsgo_render_tree_unlock(__func__);
 		return;
 	}
-	mtk_composer_dprintk_always("[Disconnect] Success %d: %llu, %llu\n",
-		pid, buffer_id, identifier);
+
 	fpsgo_com_clear_connect_api_render_list(connect_api);
 	rb_erase(&connect_api->rb_node, &connect_api_tree);
 	kfree(connect_api);
-
 
 	fpsgo_render_tree_unlock(__func__);
 }
@@ -863,10 +859,10 @@ static ssize_t connect_api_info_show
 	posi += length;
 
 	fpsgo_render_tree_lock(__func__);
-	rcu_read_lock();
 
 	for (n = rb_first(&connect_api_tree); n != NULL; n = rb_next(n)) {
 		iter = rb_entry(n, struct connect_api_info, rb_node);
+		rcu_read_lock();
 		tsk = find_task_by_vpid(iter->tgid);
 		if (tsk) {
 			get_task_struct(tsk);
@@ -882,6 +878,7 @@ static ssize_t connect_api_info_show
 			posi += length;
 			put_task_struct(tsk);
 		}
+		rcu_read_unlock();
 
 		length = scnprintf(temp + posi,
 			FPSGO_SYSFS_MAX_BUFF_SIZE - posi,
@@ -916,8 +913,6 @@ static ssize_t connect_api_info_show
 				"=================================\n");
 		posi += length;
 	}
-
-	rcu_read_unlock();
 	fpsgo_render_tree_unlock(__func__);
 
 	length = scnprintf(buf, PAGE_SIZE, "%s", temp);
@@ -1100,7 +1095,39 @@ static ssize_t fpsgo_control_pid_show(struct kobject *kobj,
 		struct kobj_attribute *attr,
 		char *buf)
 {
-	return 0;
+	char *temp = NULL;
+	int i = 0;
+	int total = 0;
+	int pos = 0;
+	int length = 0;
+	struct fps_control_pid_info *arr = NULL;
+
+	temp = kcalloc(FPSGO_SYSFS_MAX_BUFF_SIZE, sizeof(char), GFP_KERNEL);
+	if (!temp)
+		goto out;
+
+	arr = kcalloc(FPSGO_MAX_TREE_SIZE, sizeof(struct fps_control_pid_info), GFP_KERNEL);
+	if (!arr)
+		goto out;
+
+	fpsgo_render_tree_lock(__func__);
+
+	total = fpsgo_get_all_fps_control_pid_info(arr);
+
+	fpsgo_render_tree_unlock(__func__);
+
+	for (i = 0; i < total; i++) {
+		length = scnprintf(temp + pos, FPSGO_SYSFS_MAX_BUFF_SIZE - pos,
+			"%dth\ttgid:%d\tts:%llu\n", i+1, arr[i].pid, arr[i].ts);
+		pos += length;
+	}
+
+	length = scnprintf(buf, PAGE_SIZE, "%s", temp);
+
+out:
+	kfree(arr);
+	kfree(temp);
+	return length;
 }
 
 static ssize_t  fpsgo_control_pid_store(struct kobject *kobj,

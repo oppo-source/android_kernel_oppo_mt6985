@@ -32,6 +32,9 @@
 #include <linux/kmemleak.h>
 #include <asm/cacheflush.h>
 #include "ssmr_internal.h"
+//#ifdef OPLUS_FEATURE_SECURITY_COMMON
+#include <soc/oplus/system/oplus_project.h>
+//#endif
 
 #define SSMR_FEATURES_DT_UNAME "memory-ssmr-features"
 #define FFA_ENABLED_DT_UNAME "memory-ffa-enabled"
@@ -43,6 +46,24 @@
 static struct device *sec_ssmr_dev;
 static struct device *apmd_ssmr_dev;
 static struct device *apscp_ssmr_dev;
+
+//#ifdef OPLUS_FEATURE_SECURITY_COMMON
+static bool is_svp_nosupported(void)
+{
+    unsigned int prj_id = 0;
+    bool status = false;
+    prj_id =  get_project();
+    switch(prj_id) {
+        case 21135:
+        status = true;
+        break;
+    default:
+        status = false;
+        break;
+    }
+    return status;
+}
+//#endif /*OPLUS_FEATURE_SECURITY_COMMON*/
 
 static struct SSMR_HEAP_INFO _ssmr_heap_info[__MAX_NR_SSMR_FEATURES];
 
@@ -596,6 +617,12 @@ bool is_svp_enabled(void)
 {
 	struct device_node *dt_node;
 
+//#ifdef OPLUS_FEATURE_SECURITY_COMMON
+    if (is_svp_nosupported()){
+        pr_info("svp not support\n");
+        return false;
+    }
+//#endif /*OPLUS_FEATURE_SECURITY_COMMON*/
 	dt_node = of_find_node_by_name(NULL, SVP_FEATURES_DT_UNAME);
 	if (!dt_node)
 		return false;

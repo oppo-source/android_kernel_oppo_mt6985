@@ -102,6 +102,7 @@ obj-$(CONFIG_REGULATOR_MT6363) += mt6363-regulator.o
 obj-$(CONFIG_REGULATOR_MT6368) += mt6368-regulator.o
 obj-$(CONFIG_REGULATOR_MT6369) += mt6369-regulator.o
 obj-$(CONFIG_REGULATOR_MT6373) += mt6373-regulator.o
+obj-$(CONFIG_REGULATOR_MT6377) += mt6377-regulator.o
 obj-$(CONFIG_REGULATOR_MT6380)	+= mt6380-regulator.o
 obj-$(CONFIG_REGULATOR_MT6397)	+= mt6397-regulator.o
 obj-$(CONFIG_REGULATOR_MTK_DVFSRC) += mtk-dvfsrc-regulator.o
@@ -179,5 +180,7 @@ obj-$(CONFIG_REGULATOR_WM831X) += wm831x-ldo.o
 obj-$(CONFIG_REGULATOR_WM8350) += wm8350-regulator.o
 obj-$(CONFIG_REGULATOR_WM8400) += wm8400-regulator.o
 obj-$(CONFIG_REGULATOR_WM8994) += wm8994-regulator.o
+obj-$(CONFIG_PMIC_FAN53870) += fan53870-regulator.o
+obj-m += wl2868c-regulator.o
 
 ccflags-$(CONFIG_REGULATOR_DEBUG) += -DDEBUG
